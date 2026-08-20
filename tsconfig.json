@@ -15,7 +15,9 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+
+    "types": ["node", "bun"]
   },
   "include": ["convex/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "convex/_generated"]

@@ -1,0 +1,697 @@
+import { internalAction } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
+import { v } from "convex/values";
+import { runTask } from "./ai/registry";
+import { sendMessage, downloadFile } from "./channels/telegram";
+import { resolveProviderChain } from "./lib/ai/resolve";
+import { modelEnvVar } from "./lib/ai/tiers";
+import { parseToolPlan } from "./lib/tools/plan";
+import { executeToolCall, type ToolOutcome } from "./tools/router";
+import {
+  planningSystemPrompt,
+  skillComposeSystemPrompt,
+  tldrOnlySystemPrompt,
+  renderConversation,
+} from "./lib/prompts/assistant";
+import { renderOutcomes } from "./lib/tools/outcomes";
+import { guardReply, wantsFullEmail } from "./lib/scope";
+import { relevantSkillNames } from "./lib/skills";
+import { AllProvidersFailed } from "./ai/types";
+import { formatInstant } from "./lib/time";
+
+const CONVERSATION_TURNS = 10;
+
+/**
+ * The one place that decides what happens to a message. An internalAction
+ * because it calls the AI provider and Telegram — both network calls. Every
+ * database write goes through a mutation.
+ *
+ * The ordering is the shape every later phase repeats:
+ *   persist → think → act → respond → persist.
+ */
+export const handleMessage = internalAction({
+  args: {
+    telegramId: v.string(),
+    chatId: v.string(),
+    displayName: v.string(),
+    channelMessageId: v.string(),
+    text: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const startedAt = Date.now();
+
+    // 1. Resolve the user and persist what arrived.
+    const userId = await ctx.runMutation(internal.model.users.ensureByTelegramId, {
+      telegramId: args.telegramId,
+      displayName: args.displayName,
+    });
+
+    await ctx.runMutation(internal.model.messages.record, {
+      userId,
+      channel: "telegram",
+      direction: "in",
+      channelMessageId: args.channelMessageId,
+      kind: "text",
+      text: args.text,
+    });
+
+    // 2. Decide. Commands are deterministic and never reach a model.
+    let reply: string;
+    try {
+      reply = args.text.startsWith("/")
+        ? await handleCommand(ctx, userId, args.text)
+        : await converse(ctx, userId, args.displayName, args.text);
+    } catch (error) {
+      // A failure here must still reach the phone. Silence is the one
+      // outcome that makes the assistant untrustworthy.
+      const detail = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "assistant.handle_message",
+        args: { channelMessageId: args.channelMessageId },
+        result: "error",
+        errorMessage: detail.slice(0, 500),
+        latencyMs: Date.now() - startedAt,
+      });
+      reply = userFacingError(error, detail);
+    }
+
+    // 3. Respond, then persist what we said.
+    const outboundId = await sendMessage(args.chatId, reply);
+
+    await ctx.runMutation(internal.model.messages.record, {
+      userId,
+      channel: "telegram",
+      direction: "out",
+      channelMessageId: outboundId,
+      kind: "text",
+      text: reply,
+    });
+  },
+});
+
+/**
+ * Two passes, because the model has to see what its own tool calls returned
+ * before it can tell the user what happened.
+ *
+ *   pass 1  message + context  → { reply, tools }   (a PROPOSAL)
+ *   router  validate, execute, audit                (the DISPOSAL)
+ *   pass 2  tool results as data → final prose
+ *
+ * When the plan calls no tools, pass 2 is skipped — chat costs one model call,
+ * not two.
+ */
+export async function converse(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  displayName: string,
+  text: string,
+): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  const [history, projects, openTasks, pending, accounts, instructions] = await Promise.all([
+    ctx.runQuery(internal.model.messages.recentForUser, {
+      userId,
+      limit: CONVERSATION_TURNS,
+    }),
+    ctx.runQuery(internal.model.projects.listActive, { userId, limit: 15 }),
+    ctx.runQuery(internal.model.tasks.list, { userId, limit: 15 }),
+    ctx.runQuery(internal.model.reminders.listPending, { userId }),
+    ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
+    ctx.runQuery(internal.model.instructions.list, { userId }),
+  ]);
+
+  // Deterministic keyword match, no model call spent deciding — a turn with
+  // no email/brief/draft language pays nothing for skills existing at all.
+  const skillNames = relevantSkillNames(text);
+  const activeSkills = [];
+  for (const name of skillNames) {
+    const found = await ctx.runQuery(internal.model.skills.getEffective, { userId, name });
+    if (found) activeSkills.push(found);
+  }
+
+  const system = planningSystemPrompt({
+    displayName,
+    timezone,
+    nowMs: Date.now(),
+    projects: projects.map((p) => ({ name: p.name, status: p.status })),
+    openTasks: openTasks
+      .filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED")
+      .map((t) => ({
+        taskId: t._id,
+        title: t.title,
+        status: t.status,
+        dueAt: t.dueAt === undefined ? undefined : formatInstant(t.dueAt, timezone),
+      })),
+    reminders: pending.map((r) => ({
+      reminderId: r._id,
+      message: r.message,
+      scheduledFor: formatInstant(r.scheduledAt, timezone),
+    })),
+    connectedAccounts: accounts.map((a) => ({
+      label: a.label,
+      email: a.accountEmail,
+      status: a.status,
+    })),
+    customInstructions: instructions.map((i) => i.text),
+    activeSkills,
+  });
+
+  const transcript = renderConversation(
+    history.map((m) => ({ direction: m.direction, text: m.text ?? "" })),
+  );
+
+  const proposal = await runTask("PLAN_TOOLS", {
+    system,
+    input: `Conversation so far:\n${transcript}\n\nRespond to the last user message.`,
+    maxOutputTokens: 1500,
+  });
+
+  const plan = { ...parseToolPlan(proposal.text) };
+  plan.reply = guardReply(plan.reply);
+
+  // A rejection is the guard working, but it is ALSO an action the user asked
+  // for that did not happen. It is audited here and reported below.
+  for (const rejection of plan.rejected) {
+    console.warn(`tool_rejected: ${rejection.name} — ${rejection.reason}`);
+    await ctx.runMutation(internal.model.audit.record, {
+      actor: "llm_proposed",
+      action: `rejected:${rejection.name}`,
+      args: { reason: rejection.reason },
+      result: "denied",
+    });
+  }
+
+  if (plan.calls.length === 0 && plan.rejected.length === 0) {
+    return plan.reply || "I didn't follow that. Say it another way?";
+  }
+
+  const outcomes: ToolOutcome[] = [];
+  for (const call of plan.calls) {
+    outcomes.push(await executeToolCall(ctx, { userId, timezone }, call));
+  }
+
+  const deterministic = renderOutcomes(plan.reply, outcomes, plan.rejected);
+
+  // ONE model call per message by default — the deterministic render is free
+  // and cannot soften a failure or invent a due date the way a model
+  // retelling results can. That default stands for every ordinary turn.
+  //
+  // The exception, and the ONLY one: a skill matched this message and tools
+  // actually ran. A skill is a procedure for how to PRESENT something ("give
+  // a TL;DR", "summarize rather than dumping the body", "always carry the
+  // date through") and the planning pass writes its reply before any tool
+  // executes — so without this second pass those rules are unimplementable,
+  // not merely unfollowed. Bounded on purpose: email/brief/draft turns pay
+  // two calls, everything else still pays one.
+  if (activeSkills.length === 0) return deterministic;
+
+  // Did the user ask for an email's FULL content? Then the body must reach
+  // them byte-for-byte, so it is emitted by the deterministic renderer and
+  // the model only appends a TL;DR beneath it. Handing a long body to a
+  // model to "reproduce verbatim" does not work — measured, it summarizes
+  // instead — so this is enforced structurally, not by asking nicely.
+  const fetchedAnEmail = outcomes.some((o) => o.name === "email.get_message" && o.ok);
+  const modelSaidFull = outcomes.some(
+    (o) =>
+      o.name === "email.get_message" &&
+      o.ok &&
+      typeof o.result === "object" &&
+      o.result !== null &&
+      (o.result as { mode?: string }).mode === "full",
+  );
+  // The model's `mode` is a hint; the user's own words are authoritative.
+  // wantsFullEmail() exists because flash-lite sets mode inconsistently, and
+  // "show me the full email" answered with a summary is the exact failure
+  // this whole pass is meant to eliminate.
+  const wantsFullBody = fetchedAnEmail && (modelSaidFull || wantsFullEmail(text));
+
+  if (wantsFullBody) {
+    const tldr = await runTask("COMPOSE_REPLY", {
+      system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone),
+      input: "Write the TL;DR for the email below.",
+      untrusted: [{ label: "email", content: deterministic }],
+      maxOutputTokens: 600,
+    });
+    const summary = tldr.text.trim();
+    return summary ? `${deterministic}\n\n---\nTL;DR:\n${summary}` : deterministic;
+  }
+
+  // A list/search result carries Gmail's ~200-character SNIPPET, not the
+  // message. Measured on a real FairMoney webinar mail: the snippet ended
+  // before "Date: Friday, 31st July / Time: 1:00 PM / Platform: X Spaces"
+  // and the Schedule Live link, so the summary said "no action required"
+  // about an email that plainly required one. The skill already said "never
+  // answer from a snippet alone" — the model simply had nothing else.
+  //
+  // So hydrate: for a SMALL result set, fetch the real bodies and give them
+  // to the compose model. Bounded to HYDRATE_LIMIT because this costs one
+  // database read per message and exists to make a handful of emails
+  // answerable, not to bulk-load an inbox.
+  const bodies = await hydrateBodies(ctx, userId, outcomes);
+
+  const composed = await runTask("COMPOSE_REPLY", {
+    system: skillComposeSystemPrompt(displayName, activeSkills, Date.now(), timezone),
+    input: `The user said: ${text}`,
+    // The rendered facts include email bodies — attacker-controlled content,
+    // so it enters through the untrusted channel, never the instruction.
+    untrusted: [
+      { label: "tool_results", content: deterministic },
+      ...(bodies ? [{ label: "full_email_bodies", content: bodies }] : []),
+    ],
+    maxOutputTokens: 2000,
+  });
+
+  return composed.text.trim() || deterministic;
+}
+
+/** How many listed emails are worth fetching in full for one reply. */
+const HYDRATE_LIMIT = 5;
+
+/**
+ * Pull the real bodies for emails a list/search returned, so the compose
+ * model summarizes from the message rather than Gmail's truncated preview.
+ * Returns null when there is nothing to hydrate.
+ */
+async function hydrateBodies(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  outcomes: ToolOutcome[],
+): Promise<string | null> {
+  const ids = new Set<string>();
+
+  for (const outcome of outcomes) {
+    if (outcome.name !== "email.list_recent" && outcome.name !== "email.search") continue;
+    if (!outcome.ok || typeof outcome.result !== "object" || outcome.result === null) continue;
+
+    const messages = (outcome.result as { messages?: unknown }).messages;
+    if (!Array.isArray(messages) || messages.length > HYDRATE_LIMIT) continue;
+
+    for (const m of messages) {
+      const id = (m as { emailMessageId?: unknown }).emailMessageId;
+      if (typeof id === "string") ids.add(id);
+    }
+  }
+
+  if (ids.size === 0) return null;
+
+  const blocks: string[] = [];
+  for (const id of ids) {
+    const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+      emailMessageId: id as Id<"emailMessages">,
+    });
+    if (!message) continue;
+
+    // Ownership check, same as email.get_message — an id is never proof of
+    // access, even one this process just produced.
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: message.accountId,
+    });
+    if (!account || account.userId !== userId) continue;
+
+    blocks.push(
+      [
+        `From: ${message.fromName ? `${message.fromName} <${message.fromAddress}>` : message.fromAddress}`,
+        `Subject: ${message.subject ?? "(no subject)"}`,
+        `Received: ${new Date(message.receivedAt).toISOString()}`,
+        "",
+        message.bodyText ?? message.snippet ?? "(no body)",
+      ].join("\n"),
+    );
+  }
+
+  return blocks.length > 0 ? blocks.join("\n\n=====\n\n") : null;
+}
+
+async function handleCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  text: string,
+): Promise<string> {
+  const command = text.split(/\s+/)[0]?.toLowerCase();
+
+  switch (command) {
+    case "/start":
+      return "Ready. Tell me about your work, your tasks, or ask me to remind you of something.";
+    case "/help":
+      return [
+        "/connect <label> — connect a Gmail mailbox (read-only)",
+        "/accounts — connected mailboxes and their state",
+        "/sync — sync the mailboxes now",
+        "/reconnect <label> — re-authorize after Google expires the token",
+        "/skills — list every skill",
+        "/skill <name> — show one skill's full content",
+        "/status — providers, models, timezone",
+        "/tasks — open tasks",
+        "/blocked — what I'm waiting on, and on whom",
+        "/reminders — what's scheduled",
+        "/whoami — who I think you are",
+        "/help — this",
+      ].join("\n");
+    case "/whoami":
+      return `You are the configured owner: ${process.env.TELEGRAM_OWNER_ID}`;
+    case "/status":
+      return status();
+    case "/tasks":
+      return await tasksCommand(ctx, userId);
+    case "/blocked":
+      return await blockedCommand(ctx, userId);
+    case "/reminders":
+      return await remindersCommand(ctx, userId);
+    case "/connect":
+      return await connectCommand(ctx, userId, text);
+    case "/reconnect":
+      return await connectCommand(ctx, userId, text);
+    case "/accounts":
+      return await accountsCommand(ctx, userId);
+    case "/sync":
+      return await syncCommand(ctx, userId);
+    case "/skills":
+      return await skillsCommand(ctx, userId);
+    case "/skill":
+      return await skillCommand(ctx, userId, text);
+    default:
+      return `Unknown command: ${command}`;
+  }
+}
+
+function status(): string {
+  const chain = resolveProviderChain(process.env, "REASON", "CHAT_REPLY");
+  const models = chain.map(
+    (id) => `  ${id}: ${process.env[modelEnvVar(id, "REASON")] ?? "(no model set)"}`,
+  );
+  return [
+    `Providers for REASON: ${chain.join(" → ")}`,
+    ...models,
+    `Timezone: ${process.env.USER_TIMEZONE ?? "(unset)"}`,
+  ].join("\n");
+}
+
+async function tasksCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  const tasks = await ctx.runQuery(internal.model.tasks.list, { userId, limit: 25 });
+  const open = tasks.filter(
+    (t) => t.status !== "COMPLETED" && t.status !== "CANCELLED",
+  );
+
+  if (open.length === 0) return "Nothing open.";
+
+  return open
+    .map(
+      (t) =>
+        `• ${t.title} — ${t.status}${
+          t.dueAt === undefined ? "" : `, due ${formatInstant(t.dueAt, timezone)}`
+        }`,
+    )
+    .join("\n");
+}
+
+async function blockedCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const blocked = await ctx.runQuery(internal.model.tasks.openBlockers, { userId });
+  if (blocked.length === 0) return "Nothing blocked.";
+
+  return blocked
+    .map(({ task, blockers }) =>
+      [`• ${task.title}`, ...blockers.map((b) => `    ↳ ${b.description}`)].join("\n"),
+    )
+    .join("\n");
+}
+
+async function remindersCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  const pending = await ctx.runQuery(internal.model.reminders.listPending, { userId });
+
+  if (pending.length === 0) return "Nothing scheduled.";
+
+  return pending
+    .sort((a, b) => a.scheduledAt - b.scheduledAt)
+    .map((r) => `• ${formatInstant(r.scheduledAt, timezone)} — ${r.message}`)
+    .join("\n");
+}
+
+/**
+ * Replies to a message kind this build cannot process yet.
+ *
+ * Silence is the worst possible answer here: it is indistinguishable from a
+ * crash. One sentence naming the limitation costs nothing and tells you
+ * exactly where you are in the build.
+ */
+export const handleUnsupported = internalAction({
+  args: { chatId: v.string(), kind: v.string() },
+  handler: async (_ctx, args) => {
+    const replies: Record<string, string> = {
+      photo: "I can't look at images yet.",
+      document: "I can't read attachments yet — Drive support lands in Phase 11.",
+      video: "I can't process video.",
+      video_note: "I can't process video notes.",
+      sticker: "Nice sticker. I can't do anything with it though.",
+    };
+    await sendMessage(
+      args.chatId,
+      replies[args.kind] ?? `I can't handle ${args.kind} messages yet.`,
+    );
+  },
+});
+
+/**
+ * Running out of free-tier quota is not a crash, and should not read like one.
+ * Before this the user got a raw aggregate of every provider failure, truncated
+ * mid-JSON by Telegram's 4096-character limit. The detail stays in the logs and
+ * in auditLogs; Telegram gets a sentence.
+ */
+function userFacingError(error: unknown, detail: string): string {
+  if (error instanceof AllProvidersFailed && error.quotaExhausted) {
+    return "I'm out of AI quota for the moment. Try again in a few minutes — nothing was lost.";
+  }
+  return `Something broke handling that: ${detail.slice(0, 300)}`;
+}
+
+const TRANSCRIBE_SYSTEM = `You transcribe audio. Output ONLY the verbatim
+transcript of what is spoken — no commentary, no summary, no quotation marks,
+no speaker labels. If the audio contains no intelligible speech, output exactly:
+(no speech detected)`;
+
+/**
+ * A voice note, end to end.
+ *
+ * Telegram will NOT transcribe this for us. The Bot API delivers a `voice`
+ * object carrying a file_id and no text; Telegram's own transcription is a
+ * Premium *client* feature over MTProto and never reaches a bot. So the audio
+ * is downloaded and sent to a multimodal model inline.
+ *
+ * Once transcribed it joins the ordinary pipeline — a voice note is an input
+ * modality, not a separate assistant.
+ */
+export const handleVoice = internalAction({
+  args: {
+    telegramId: v.string(),
+    chatId: v.string(),
+    displayName: v.string(),
+    channelMessageId: v.string(),
+    fileId: v.string(),
+    mimeType: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const startedAt = Date.now();
+
+    const userId = await ctx.runMutation(internal.model.users.ensureByTelegramId, {
+      telegramId: args.telegramId,
+      displayName: args.displayName,
+    });
+
+    let reply: string;
+    let transcript = "";
+
+    try {
+      const audio = await downloadFile(args.fileId);
+
+      const result = await runTask("TRANSCRIBE_VOICE", {
+        system: TRANSCRIBE_SYSTEM,
+        input: "Transcribe the following audio.",
+        audio: { mimeType: args.mimeType, dataBase64: audio.base64 },
+        maxOutputTokens: 1024,
+      });
+
+      transcript = result.text.trim();
+
+      if (!transcript || transcript === "(no speech detected)") {
+        await sendMessage(args.chatId, "I couldn't make out any speech in that.");
+        return;
+      }
+
+      // Persist as a normal inbound message so the conversation window and
+      // every downstream phase see it exactly like typed text.
+      await ctx.runMutation(internal.model.messages.record, {
+        userId,
+        channel: "telegram",
+        direction: "in",
+        channelMessageId: args.channelMessageId,
+        kind: "voice",
+        text: transcript,
+        transcript,
+      });
+
+      // The transcript is persisted on the message row and visible in the
+      // dashboard, but it is NOT echoed back — the user knows what they said.
+      reply = await converse(ctx, userId, args.displayName, transcript);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "assistant.handle_voice",
+        args: { channelMessageId: args.channelMessageId, transcribed: transcript !== "" },
+        result: "error",
+        errorMessage: detail.slice(0, 500),
+        latencyMs: Date.now() - startedAt,
+      });
+      reply = userFacingError(error, detail);
+    }
+
+    const outboundId = await sendMessage(args.chatId, reply);
+    await ctx.runMutation(internal.model.messages.record, {
+      userId,
+      channel: "telegram",
+      direction: "out",
+      channelMessageId: outboundId,
+      kind: "text",
+      text: reply,
+    });
+  },
+});
+
+/**
+ * Mint a one-time authorization link.
+ *
+ * The link is what carries authority: /oauth/google/start will not redirect
+ * without a live nonce, and the nonce is bound to this user, single-use, and
+ * expires in ten minutes. Nothing about the endpoint itself is protected,
+ * because on .convex.site nothing can be.
+ */
+async function connectCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  text: string,
+): Promise<string> {
+  const label = (text.split(/\s+/)[1] ?? "personal").toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  if (!label) return "Give the mailbox a label, e.g. /connect recruiting";
+
+  const siteUrl = process.env.CONVEX_SITE_URL;
+  if (!siteUrl) return "CONVEX_SITE_URL is not set on this deployment.";
+
+  const { nonce } = await ctx.runMutation(internal.model.oauthStates.issue, {
+    userId,
+    label,
+  });
+
+  return [
+    `Connect a Gmail mailbox as "${label}":`,
+    `${siteUrl}/oauth/google/start?state=${nonce}`,
+    "",
+    "Read-only access — this build cannot send, delete or modify anything.",
+    "The link works once and expires in 10 minutes.",
+  ].join("\n");
+}
+
+async function accountsCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
+    userId,
+  });
+
+  if (accounts.length === 0) return "No mailboxes connected. Send /connect <label> to add one.";
+
+  const lines: string[] = [];
+  for (const account of accounts) {
+    const { count, capped } = await ctx.runQuery(
+      internal.model.emailMessages.countForAccount,
+      { accountId: account._id },
+    );
+    const icon = account.status === "ACTIVE" ? "✅" : "⚠️";
+    lines.push(
+      `${icon} ${account.accountEmail} (${account.label}) — ${account.status}`,
+      `    ${count}${capped ? "+" : ""} messages · last sync ${
+        account.lastSyncedAt ? formatInstant(account.lastSyncedAt, timezone) : "never"
+      }`,
+      `    scopes: ${account.scopesGranted.map((s) => s.split("/").pop()).join(", ")}`,
+    );
+  }
+  return lines.join("\n");
+}
+
+async function syncCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
+    userId,
+  });
+  const active = accounts.filter((a) => a.status === "ACTIVE");
+  if (active.length === 0) return "Nothing to sync — no active mailboxes.";
+
+  for (const account of active) {
+    await ctx.scheduler.runAfter(0, internal.gmail.syncAccount, { accountId: account._id });
+  }
+  return `Syncing ${active.length} mailbox${active.length === 1 ? "" : "es"}. /accounts to see the result.`;
+}
+
+async function skillsCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const rows = await ctx.runQuery(internal.model.skills.list, { userId });
+  return renderOutcomes("", [{ name: "skill.list", ok: true, result: rows }]);
+}
+
+async function skillCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const name = text.split(/\s+/)[1];
+  if (!name) return "Give a skill name, e.g. /skill check_email. See /skills for the list.";
+  const found = await ctx.runQuery(internal.model.skills.getEffective, { userId, name });
+  return renderOutcomes(
+    "",
+    [{ name: "skill.get", ok: true, result: found ? { found: true, name, ...found } : { found: false, name } }],
+  );
+}
+
+/**
+ * A .md/.txt document captioned "skill: <name>" updates that skill's
+ * content. Downloads via the same Telegram file API `handleVoice` already
+ * uses; text-decodes it (UTF-8, matching how the rest of the pipeline treats
+ * anything from Telegram); overwrites the named skill outright — a skill
+ * update is a replace, not an append, same as skill.update the tool.
+ */
+export const handleSkillDocument = internalAction({
+  args: {
+    telegramId: v.string(),
+    chatId: v.string(),
+    skillName: v.string(),
+    fileId: v.string(),
+    mimeType: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ctx.runMutation(internal.model.users.ensureByTelegramId, {
+      telegramId: args.telegramId,
+      displayName: args.telegramId,
+    });
+
+    let reply: string;
+    try {
+      const file = await downloadFile(args.fileId);
+      const bytes = Uint8Array.from(atob(file.base64), (c) => c.charCodeAt(0));
+      const content = new TextDecoder("utf-8").decode(bytes).trim();
+
+      if (!content) throw new Error("that file was empty");
+
+      const result = await ctx.runMutation(internal.model.skills.upsert, {
+        userId,
+        name: args.skillName,
+        title: args.skillName,
+        content,
+      });
+
+      reply = result.created
+        ? `🧩 Skill "${args.skillName}" saved (${content.length} characters).`
+        : `🧩 Skill "${args.skillName}" updated (${content.length} characters).`;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      reply = `Couldn't update that skill: ${detail.slice(0, 300)}`;
+    }
+
+    await sendMessage(args.chatId, reply);
+  },
+});

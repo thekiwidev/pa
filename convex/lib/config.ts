@@ -19,13 +19,24 @@ export function requireEnv(name: string): string {
  * Grow this list as each phase starts consuming a variable — it is
  * what makes /health meaningful instead of decorative.
  *
- * Phase 1 adds: TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET,
- *               TELEGRAM_OWNER_ID, GEMINI_API_KEY, AI_PROVIDER_PRIORITY
- * Phase 3 adds: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
  * Phase 8 adds: GOOGLE_PUBSUB_TOPIC, GOOGLE_PUBSUB_AUDIENCE,
  *               GOOGLE_PUBSUB_SA_EMAIL
  */
-export const REQUIRED_NOW: readonly string[] = ["ENCRYPTION_KEY"];
+export const REQUIRED_NOW: readonly string[] = [
+  "ENCRYPTION_KEY",          // Phase 0
+  "TELEGRAM_BOT_TOKEN",      // Phase 1
+  "TELEGRAM_WEBHOOK_SECRET",
+  "TELEGRAM_OWNER_ID",
+  "AI_PROVIDER_PRIORITY",
+  "GEMINI_API_KEY",
+  "GEMINI_MODEL_REASON",           // chat + compose
+  "GEMINI_MODEL_CHEAP_STRUCTURED", // PLAN_TOOLS — every inbound message
+  "USER_TIMEZONE",           // Phase 2
+  "GEMINI_MODEL_TRANSCRIBE", // Phase 9 — voice notes
+  "GOOGLE_CLIENT_ID",        // Phase 3 — Gmail OAuth
+  "GOOGLE_CLIENT_SECRET",
+  "GOOGLE_REDIRECT_URI",
+];
 
 export function checkConfig(): { ok: boolean; missingCount: number } {
   const missing = REQUIRED_NOW.filter((name) => !process.env[name]);
