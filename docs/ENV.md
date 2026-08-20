@@ -46,6 +46,23 @@ all `*_API_KEY` · all `*_MODEL_*` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRE
 | 17 | an `EMBED`-tier model name — not defined by the source plan (gap #5) |
 | 18 | `AUTONOMOUS_SEND_ENABLED` — **must not exist before this phase** |
 
+## Model variables hold a FALLBACK LADDER
+
+Every `*_MODEL_<TIER>` variable is a **comma-separated list, tried left to
+right**, not a single name:
+
+```
+GEMINI_MODEL_REASON=gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
+```
+
+A single name still works — it is a ladder of one. Gemini free-tier quota is
+per-model, so a rung that 429s costs one wasted call and the next rung serves.
+End every ladder with a floating alias (`gemini-flash-latest`): pinned model
+names get retired without notice.
+
+Re-probe a ladder before trusting it — `bunx convex run debug:pingAI
+'{"model":"gemini-3.5-flash"}'` hits one model directly.
+
 ## Never an environment variable
 
 Per-mailbox OAuth **refresh tokens** (Gmail, Zoho, Outlook). They are encrypted

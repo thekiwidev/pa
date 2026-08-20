@@ -2,9 +2,13 @@
 
 Telegram-first personal AI secretary on Convex.
 
-- **Architecture / source of truth:** `docs/Personal AI Assistant — Build Plan v3 (Convex).md`
-- **What to do next:** `docs/Personal AI Assistant — Developer Implementation Guide.md`
+- **Architecture / source of truth:** `docs/personal-ai-assistant-build-plan-v3-convex.md`
+- **Current phase build doc:** `docs/build/`
 - **Env variable names:** `docs/ENV.md`
+- **What changed:** `CHANGELOG.md` · **Why, and what bit us:** `MEMORY.md`
+- **Rules for agents (and humans):** `CLAUDE.md` / `AGENTS.md`
+
+**Status:** Phases 0–3 complete. Next: Phase 4 — importance classification.
 
 ## Stack
 
@@ -14,13 +18,16 @@ file storage, vector search) · Zod for LLM structured output · Telegram Bot AP
 ## Commands
 
 ```bash
-bun install              # after `bun add convex zod`
+bun install
 bun run dev              # convex dev — leave running in its own terminal
-bun run deploy           # convex deploy (production)
+bunx convex codegen      # after adding or renaming a convex function file
 bun run typecheck        # tsc --noEmit
-bun test                 # unit tests against convex/lib/
+bun test                 # unit tests against convex/lib/ — no Convex runtime
 bun run logs             # convex logs
 bun run dashboard        # convex dashboard
+bun run deploy           # convex deploy (PRODUCTION — deliberate act only)
+
+bunx convex run debug:pingAI '{}'   # prove the AI provider chain from the CLI
 ```
 
 ## Layout
@@ -30,11 +37,19 @@ convex/
   schema.ts        one file, the whole data model (Appendix F of the plan)
   http.ts          httpRouter — /health now; webhooks + OAuth later
   crons.ts         recurring jobs. EXPRESSIONS ARE UTC (Lagos = UTC+1)
+  assistant.ts     the orchestrator. the only file that decides what happens.
+  reminders.ts     scheduled delivery + the hourly reconcile sweep
+  debug.ts         internal operator tools (pingAI)
   lib/             PURE functions. no ctx, no I/O. the brain. unit-tested.
+    ai/            tiers, provider resolution, error classification
+    tools/         tool catalog (Zod) + proposal parser
+    prompts/       prompt construction
+    time.ts        ms-epoch <-> wall clock in USER_TIMEZONE
   model/           queries + mutations, grouped by entity
-  ai/              provider registry (tier -> provider -> model)
+  ai/              provider registry (tier -> provider -> model) + providers
+  tools/           the router: validate, authorize, execute, audit
   channels/        telegram adapter
-  connectors/      gmail, later zoho + outlook
+  connectors/      gmail, later zoho
   security/        AES-256-GCM via Web Crypto
 tests/
   unit/            runs with no Convex runtime
