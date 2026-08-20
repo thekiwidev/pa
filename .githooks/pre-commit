@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Required by the build plan from Phase 0 onward (IV-1).
+# Enable once with:  git config core.hooksPath .githooks
+set -e
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks not installed. Install it, or commit with --no-verify at your own risk."
+  echo "  macOS: brew install gitleaks"
+  exit 1
+fi
+
+gitleaks protect --staged --no-banner --redact

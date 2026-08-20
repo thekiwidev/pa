@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Secrets. Every .env variant stays out, no exceptions.
+.env
+.env.*
+!.env.example
+
+# Convex
+.convex/
+
+# NOTE: convex/_generated/ is deliberately NOT ignored.
+# Convex docs say to commit it so the project type-checks
+# without running `convex dev` first (e.g. in CI).
+
+# Agent skills — installed plugin content, regenerable, not project source.
+# NOTE: adding these here does NOT untrack files already in the index.
+# Run once:  git rm -r --cached .claude/skills .agents/skills
+.claude/skills/
+.agents/skills/

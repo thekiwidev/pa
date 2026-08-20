@@ -1,0 +1,68 @@
+# personal-ai-assistant
+
+Telegram-first personal AI secretary on Convex.
+
+- **Architecture / source of truth:** `docs/Personal AI Assistant — Build Plan v3 (Convex).md`
+- **What to do next:** `docs/Personal AI Assistant — Developer Implementation Guide.md`
+- **Env variable names:** `docs/ENV.md`
+
+## Stack
+
+TypeScript (strict) · Bun · Convex (database, functions, HTTP, cron, scheduler,
+file storage, vector search) · Zod for LLM structured output · Telegram Bot API.
+
+## Commands
+
+```bash
+bun install              # after `bun add convex zod`
+bun run dev              # convex dev — leave running in its own terminal
+bun run deploy           # convex deploy (production)
+bun run typecheck        # tsc --noEmit
+bun test                 # unit tests against convex/lib/
+bun run logs             # convex logs
+bun run dashboard        # convex dashboard
+```
+
+## Layout
+
+```
+convex/
+  schema.ts        one file, the whole data model (Appendix F of the plan)
+  http.ts          httpRouter — /health now; webhooks + OAuth later
+  crons.ts         recurring jobs. EXPRESSIONS ARE UTC (Lagos = UTC+1)
+  lib/             PURE functions. no ctx, no I/O. the brain. unit-tested.
+  model/           queries + mutations, grouped by entity
+  ai/              provider registry (tier -> provider -> model)
+  channels/        telegram adapter
+  connectors/      gmail, later zoho + outlook
+  security/        AES-256-GCM via Web Crypto
+tests/
+  unit/            runs with no Convex runtime
+  integration/
+  adversarial/     25 cases from Appendix C of the plan
+```
+
+## Rules that do not bend
+
+1. **The model proposes; the application disposes.** Convex enforces this:
+   queries/mutations cannot `fetch`; actions cannot write to the database.
+2. **Email content is data, never instruction.** External text enters prompts
+   only inside a labelled untrusted block, and the classifier's output schema
+   cannot express an action.
+3. **The sending account is resolved in code, never inferred by a model.**
+4. **Consequential actions need a hash-bound, expiring, single-use approval.**
+5. **`auditLogs` is append-only.** No delete function exists. Do not write one.
+6. **No hard-delete tool for email.** Trash only.
+7. **Never fetch a URL found inside an email.**
+
+## Convex specifics that bite
+
+- HTTP actions serve from `<deployment>.convex.site`, not `.convex.cloud`.
+- No `Date` type — store ms-epoch numbers, format at the edge.
+- No `UNIQUE` constraint — index + check-then-insert in one mutation.
+- Never `.filter()` on a growing table; always `.withIndex()`.
+  Limits are 32,000 documents scanned and 16 MiB read per transaction.
+- Stay in the default V8 runtime. `"use node"` costs 512 MB against a
+  20 GB-hour monthly budget vs 64 MB in V8 — 8x less headroom.
+- `convex/_generated/` **is committed**, per Convex docs, so the project
+  type-checks without running `convex dev` first.

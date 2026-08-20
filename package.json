@@ -1,0 +1,17 @@
+{
+  "name": "personal-ai-assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "convex dev",
+    "deploy": "convex deploy",
+    "logs": "convex logs",
+    "dashboard": "convex dashboard",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "convex": "1.44.0",
+    "zod": "4.4.3"
+  }
+}
