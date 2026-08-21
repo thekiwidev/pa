@@ -11,6 +11,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@convex-dev/rate-limiter": "0.3.2",
     "convex": "1.44.0",
     "zod": "4.4.3"
   },

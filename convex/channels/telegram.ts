@@ -4,10 +4,12 @@ const API = "https://api.telegram.org";
  * Everything that knows Telegram's wire format lives here and nowhere else.
  * Plain `fetch` — no bot framework, per §0.5.
  *
- * Phase 1 deliberately does NOT set parse_mode: without it Telegram treats the
- * body as literal text, so there is nothing to escape and no way for message
- * content to break the layout. Phase 5 introduces formatted cards and, with
- * them, escaping.
+ * Phase 1 deliberately does NOT set parse_mode on sendMessage: without it
+ * Telegram treats the body as literal text, so a chat reply can never break
+ * on stray Markdown. sendCard/editCard below DO set parse_mode, which is
+ * why every field that reaches them must already be escaped by
+ * lib/telegram/markdown.ts (composeCard in convex/notify.ts is the only
+ * caller that does this) -- nothing in this file escapes anything itself.
  */
 
 /** Telegram rejects messages over 4096 UTF-16 code units. */
@@ -64,6 +66,99 @@ export async function downloadFile(
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   return { base64: toBase64(bytes), sizeBytes: bytes.length };
+}
+
+export interface InlineButton {
+  text: string;
+  /** Becomes callback_data. Telegram caps this at 64 bytes total, including
+   *  the prefix -- see CALLBACK_PREFIX in convex/notify.ts. */
+  data: string;
+}
+
+function toInlineKeyboard(buttons: InlineButton[][]) {
+  return buttons.map((row) => row.map((b) => ({ text: b.text, callback_data: b.data })));
+}
+
+/**
+ * Send a MarkdownV2 card with an inline keyboard. Returns the new message's
+ * id, the same way sendMessage does -- notify.ts stores it so a later reply
+ * on the same thread can editCard instead of posting a duplicate.
+ */
+export async function sendCard(
+  chatId: string,
+  text: string,
+  buttons: InlineButton[][],
+): Promise<string> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
+
+  const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
+
+  const res = await fetch(`${API}/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: body,
+      parse_mode: "MarkdownV2",
+      reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
+    }),
+  });
+
+  if (!res.ok) throw new Error(`telegram sendMessage(card) ${res.status}: ${await res.text()}`);
+
+  const json = (await res.json()) as { result?: { message_id?: number } };
+  return String(json.result?.message_id ?? "");
+}
+
+/** Edit an existing card in place. This is what makes three replies on one
+ *  thread inside an hour update one message instead of posting three. */
+export async function editCard(
+  chatId: string,
+  messageId: string,
+  text: string,
+  buttons: InlineButton[][],
+): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
+
+  const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
+
+  const res = await fetch(`${API}/bot${token}/editMessageText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: Number(messageId),
+      text: body,
+      parse_mode: "MarkdownV2",
+      reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
+    }),
+  });
+
+  if (!res.ok) throw new Error(`telegram editMessageText ${res.status}: ${await res.text()}`);
+}
+
+/**
+ * Clears the loading spinner Telegram shows on a tapped inline-keyboard
+ * button. Telegram gives a callback_query roughly 10 seconds before the
+ * client shows it as failed, so http.ts calls this BEFORE scheduling any
+ * real work -- the same "acknowledge now, work later" shape as the message
+ * webhook, just with a different acknowledgement call.
+ */
+export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
+
+  const res = await fetch(`${API}/bot${token}/answerCallbackQuery`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`telegram answerCallbackQuery ${res.status}: ${await res.text()}`);
+  }
 }
 
 /**

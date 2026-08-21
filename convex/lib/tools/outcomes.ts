@@ -166,6 +166,10 @@ function renderOne(outcome: ToolOutcome): string {
     case "email.search":
       return renderEmailList(r);
 
+    case "email.summarize_thread":
+      if (field(r, "found") !== true) return "No email matching that id.";
+      return `📝 ${str(r, "summary") ?? "(no summary)"}`;
+
     case "email.get_message": {
       if (field(r, "found") !== true) {
         return "No email matching that — try naming the sender or a word from the subject.";

@@ -20,7 +20,7 @@ Three replies on one thread inside an hour update one card, not three. A burst p
 Create or edit these, in this order.
 
 | # | File | New/Edit | What it is |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | `package.json` | edit | Add `@convex-dev/rate-limiter` |
 | 2 | `convex/convex.config.ts` | new | Mount the rate limiter component |
 | 3 | `convex/model/notifications.ts` | new | Dedup lookup, record, edit-in-place for the `notifications` table |
@@ -1133,7 +1133,7 @@ git add -A && git commit -m "Phase 5: Telegram alert cards, callback_query webho
 ## What each file does, one line each
 
 | File | Responsibility |
-|---|---|
+| --- | --- |
 | `convex/notify.ts` | Composes cards, dedups by thread, rate-limits, sends or edits. |
 | `convex/lib/telegram/markdown.ts` | The one place that escapes MarkdownV2. |
 | `convex/channels/telegram.ts` | Speaks Telegram's wire format — plain text, cards, and callback acks. |

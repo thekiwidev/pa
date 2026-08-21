@@ -9,6 +9,42 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Phase 5 — Alerts, summaries, cards (built)
+
+An important email now produces a Telegram card with working buttons. New
+webhook surface: `update.callback_query` is a different shape from
+`update.message` (its own id to acknowledge, no `text` field), so it gets its
+own parser, owner check and dispatcher rather than a branch bolted onto the
+text path. `answerCallbackQuery` fires FIRST — Telegram spins the tapped
+button until it does, and times out client-side around 10s, well before a
+model call could finish.
+
+Delivery rules: `CRITICAL` pages immediately; `HIGH` pages only 07:00–22:00
+WAT and otherwise queues for the morning brief; `NORMAL`/`LOW`/`IGNORE` never
+page. Thread dedup edits the existing card in place instead of posting a
+second — verified live. Alert cap uses `@convex-dev/rate-limiter` rather than
+a hand-rolled counter.
+
+Also: `email.summarize_thread`, and `[ Not important ]` writes a `feedback`
+row plus a `noiseSenders` entry, so the Phase 4 pre-filter learns from it.
+
+### Fix — the first card Telegram ever rejected, and why
+
+`composeCard` escaped `fromName` and `fromAddress` separately, then wrapped
+the result in literal `<...>`. `>` is MarkdownV2's blockquote marker, so
+Telegram rejected the entire `sendCard` call with *"Character '>' is reserved
+and must be escaped"*. Escaping the composed string fixes it. Added a test
+that walks every character of a rendered card and asserts each MarkdownV2
+special is backslash-preceded — the original tests passed because none of
+their fixtures contained an unescaped special.
+
+### Fix — Phase 4's classifyMessage now returns its classification
+
+Phase 5's doc assumed a `classified` local in scope from Phase 4's block, but
+`classifyMessage` returned `Promise<void>` — all three of its exit paths
+recorded to the database and returned nothing. It now returns what it
+recorded, so the delivery-rule branch has something real to read.
+
 ### Phase 4 — Importance classification (built)
 
 Every newly-synced email gets `CRITICAL|HIGH|NORMAL|LOW|IGNORE`, a category,

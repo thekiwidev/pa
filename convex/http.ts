@@ -3,6 +3,7 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { checkConfig } from "./lib/config";
 import { authorizeUrl } from "./connectors/gmail/oauth";
+import { answerCallbackQuery } from "./channels/telegram";
 
 const http = httpRouter();
 
@@ -50,6 +51,35 @@ http.route({
       update = await request.json();
     } catch {
       return new Response("bad request", { status: 400 });
+    }
+
+    // A button tap on a card sendCard/editCard produced. Checked before
+    // parseTextMessage because callback_query and message are mutually
+    // exclusive on a Telegram Update -- there is no ambiguity to resolve.
+    const callback = parseCallbackQuery(update);
+    if (callback) {
+      // Acknowledge FIRST. Telegram shows a spinner on the tapped button
+      // until this responds, and times it out client-side around 10s --
+      // well before a model call inside handleCallback could finish.
+      await answerCallbackQuery(callback.id);
+
+      if (callback.fromId !== process.env.TELEGRAM_OWNER_ID) {
+        await ctx.runMutation(internal.model.audit.record, {
+          actor: "system",
+          action: "telegram.reject_unknown_sender",
+          args: { fromId: callback.fromId },
+          result: "denied",
+        });
+        return new Response(null, { status: 200 });
+      }
+
+      await ctx.scheduler.runAfter(0, internal.assistant.handleCallback, {
+        telegramId: callback.fromId,
+        chatId: callback.chatId,
+        channelMessageId: callback.messageId,
+        data: callback.data,
+      });
+      return new Response(null, { status: 200 });
     }
 
     const message = parseTextMessage(update);
@@ -209,6 +239,44 @@ function parseSkillDocument(update: unknown): {
     skillName: match[1]!.toLowerCase(),
     fileId: doc.file_id,
     mimeType: mimeType || "text/plain",
+  };
+}
+
+interface ParsedCallbackQuery {
+  id: string;
+  fromId: string;
+  chatId: string;
+  messageId: string;
+  data: string;
+}
+
+/**
+ * A tap on one of sendCard's inline-keyboard buttons. `callback_query.id` is
+ * what answerCallbackQuery needs; `message.message_id` is the CARD's id
+ * (what editCard would target), not a new inbound message id.
+ */
+function parseCallbackQuery(update: unknown): ParsedCallbackQuery | null {
+  if (typeof update !== "object" || update === null) return null;
+  const cq = (update as { callback_query?: unknown }).callback_query;
+  if (typeof cq !== "object" || cq === null) return null;
+
+  const c = cq as Record<string, unknown>;
+  const from = c.from as { id?: unknown } | null;
+  const message = c.message as { chat?: unknown; message_id?: unknown } | null;
+  const chat = (message?.chat ?? null) as { id?: unknown } | null;
+
+  if (typeof c.id !== "string") return null;
+  if (typeof from?.id !== "number") return null;
+  if (typeof chat?.id !== "number") return null;
+  if (typeof message?.message_id !== "number") return null;
+  if (typeof c.data !== "string") return null;
+
+  return {
+    id: c.id,
+    fromId: String(from.id),
+    chatId: String(chat.id),
+    messageId: String(message.message_id),
+    data: c.data,
   };
 }
 

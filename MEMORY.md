@@ -9,6 +9,21 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — Escape the composed string, not its parts
+
+`composeCard` did `escape(name) + " <" + escape(address) + ">"`. Both parts
+were escaped correctly and the result was still rejected by Telegram, because
+the delimiters added AFTER escaping were themselves MarkdownV2 syntax (`>` is
+blockquote). Fix: escape once, over the finished string.
+
+The test suite passed throughout — every fixture happened to use text with no
+specials in the joining positions. The replacement test walks every character
+of a rendered card and asserts each special is backslash-preceded, which is
+the only version of this test that could have caught it.
+
+Generalizes: when a formatter escapes inputs then adds its own punctuation,
+the punctuation is unescaped by construction. Check the join, not the parts.
+
 ## 2026-08-21 — Convex has no element-wise array index, and schema.ts claimed otherwise for five phases
 
 `people.by_email` was declared on `emails: v.array(v.string())` with the

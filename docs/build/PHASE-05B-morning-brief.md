@@ -40,7 +40,7 @@ If you ever catch yourself about to write `crons.cron("morning brief", "0 6 * * 
 Create or edit these, in this order.
 
 | # | File | New/Edit | What it is |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | `convex/model/briefConfig.ts` | new | Thin typed wrapper over the existing `preferences` table — the schedule's state and the `runAt`/cancel logic |
 | 2 | `convex/lib/tools/catalog.ts` | edit | `brief.configure`, `brief.preview` — the tool contract |
 | 3 | `convex/tools/router.ts` | edit | Wires those two tools to `briefConfig` and `briefs.compose` |
@@ -933,6 +933,7 @@ export const ensureScheduled = internalAction({
 ```
 
 **Verify:**
+
 - `bun test tests/unit/brief-compose.test.ts` — all tests from Step 5 pass.
 - `bun run typecheck` — clean, and this is also what confirms Steps 1 and 3's forward references to `internal.briefs.deliver` and `internal.briefs.compose` resolve now.
 
@@ -1024,7 +1025,7 @@ git add -A && git commit -m "Phase 05B: chat-configurable morning brief, self-sc
 ## What each file does, one line each
 
 | File | Responsibility |
-|---|---|
+| --- | --- |
 | `convex/model/briefConfig.ts` | The schedule's state, and the only code that calls `ctx.scheduler.runAt`/`cancel` for it |
 | `convex/briefs.ts` | Gathers the facts, asks the model to write the prose, delivers it, reschedules itself |
 | `convex/lib/tools/catalog.ts` | `brief.configure`/`brief.preview`'s argument contract |

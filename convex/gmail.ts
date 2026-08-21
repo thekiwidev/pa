@@ -190,6 +190,13 @@ export const deepSearch = internalAction({
   },
 });
 
+/** The subset of Phase 4's ImportanceSchema this phase actually reads. */
+interface ClassificationResult {
+  importance: string;
+  whyItMatters?: string;
+  deadlineMentioned?: string | null;
+}
+
 /** Used when the model call fails outright or its response fails to parse. */
 const FALLBACK_CLASSIFICATION: Importance = {
   importance: "NORMAL",
@@ -212,7 +219,7 @@ async function classifyMessage(
   userId: Id<"users">,
   emailMessageId: Id<"emailMessages">,
   normalized: NormalizedEmail,
-): Promise<void> {
+): Promise<ClassificationResult> {
   try {
     const [isNoise, person, projects] = await Promise.all([
       ctx.runQuery(internal.model.noiseSenders.matches, {
@@ -252,7 +259,7 @@ async function classifyMessage(
         classification: { prefilterReason: verdict.reason },
         classifierVersion: CLASSIFIER_VERSION,
       });
-      return;
+      return { importance: verdict.importance };
     }
 
     const result = await runTask("CLASSIFY_IMPORTANCE", {
@@ -295,6 +302,8 @@ async function classifyMessage(
       classification,
       classifierVersion: CLASSIFIER_VERSION,
     });
+
+    return classification;
   } catch (error) {
     console.warn(
       `classify_failed emailMessageId=${emailMessageId}: ${
@@ -307,6 +316,8 @@ async function classifyMessage(
       classification: FALLBACK_CLASSIFICATION,
       classifierVersion: CLASSIFIER_VERSION,
     });
+
+    return FALLBACK_CLASSIFICATION;
   }
 }
 
@@ -402,7 +413,13 @@ export const syncAccount = internalAction({
         stored++;
         if (result.created) {
           fresh++;
-          await classifyMessage(ctx, account.userId, result.emailMessageId, normalized);
+          const classified = await classifyMessage(
+            ctx,
+            account.userId,
+            result.emailMessageId,
+            normalized,
+          );
+          await deliverIfDue(ctx, account, result.emailMessageId, normalized, classified);
         }
       }
 
@@ -479,4 +496,54 @@ async function notifyNeedsReauth(
       `This happens every 7 days while the app is in Testing mode.\n\n` +
       `Send: /reconnect ${accountEmail}`,
   );
+}
+
+/** 07:00-22:00 WAT is the HIGH-importance immediate-notify window. Outside
+ *  it, HIGH mail queues for the morning brief (Phase 05B) instead of paging
+ *  the phone overnight. CRITICAL bypasses this entirely -- it always pages. */
+function withinImmediateWindow(nowMs: number, timezone: string): boolean {
+  const hour = Number(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: timezone,
+      hour: "2-digit",
+      hour12: false,
+    }).format(new Date(nowMs)),
+  );
+  return hour >= 7 && hour < 22;
+}
+
+async function deliverIfDue(
+  ctx: ActionCtx,
+  account: { userId: Id<"users">; label: string },
+  emailMessageId: Id<"emailMessages">,
+  normalized: ReturnType<typeof normalizeMessage>,
+  classified: ClassificationResult,
+): Promise<void> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  const immediate =
+    classified.importance === "CRITICAL" ||
+    (classified.importance === "HIGH" && withinImmediateWindow(Date.now(), timezone));
+
+  if (!immediate) return;
+
+  const user = await ctx.runQuery(internal.model.users.get, { userId: account.userId });
+  if (!user) return;
+
+  await ctx.runAction(internal.notify.sendAlert, {
+    userId: account.userId,
+    // A private Telegram chat's id equals the user's own id -- the same
+    // fact notifyNeedsReauth above already relies on.
+    chatId: user.telegramId,
+    timezone,
+    emailMessageId,
+    threadKey: normalized.threadId,
+    accountLabel: account.label,
+    fromAddress: normalized.fromAddress,
+    fromName: normalized.fromName,
+    subject: normalized.subject,
+    isSpam: normalized.labelIds.includes("SPAM"),
+    importance: classified.importance,
+    whyItMatters: classified.whyItMatters,
+    deadlineMentioned: classified.deadlineMentioned ?? undefined,
+  });
 }

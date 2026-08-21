@@ -5,6 +5,7 @@ import { TOOL_META } from "../lib/tools/catalog";
 import type { ToolCall } from "../lib/tools/plan";
 import { toEpochMs, formatInstant } from "../lib/time";
 import { normalizeCategory } from "../lib/userContext";
+import { runTask } from "../ai/registry";
 import type { ToolOutcome } from "../lib/tools/outcomes";
 
 /**
@@ -314,6 +315,32 @@ async function dispatch(
         gmailLabel: a.gmailLabel,
         messages: rows.map((r) => summarizeEmail(r)),
       };
+    }
+
+    case "email.summarize_thread": {
+      const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+        emailMessageId: a.emailMessageId as Id<"emailMessages">,
+      });
+      if (!message) return { found: false };
+
+      const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+        accountId: message.accountId,
+      });
+      if (!account || account.userId !== userId) return { found: false };
+
+      const body = message.bodyText ?? message.snippet ?? "";
+      const summary = await runTask("SUMMARIZE_THREAD", {
+        system:
+          "Summarize this email in two or three sentences a busy person can act on. " +
+          "Plain text, no markdown, no preamble.",
+        input: `Subject: ${message.subject ?? "(no subject)"}\nFrom: ${
+          message.fromName ?? message.fromAddress
+        }`,
+        untrusted: [{ label: "email_body", content: body }],
+        maxOutputTokens: 300,
+      });
+
+      return { found: true, summary: summary.text.trim() };
     }
 
     case "email.get_message": {

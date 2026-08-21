@@ -206,6 +206,9 @@ export const TOOL_SCHEMAS = {
           "call just returned empty and they push back",
       ),
   }),
+  "email.summarize_thread": z.object({
+    emailMessageId: z.string().min(1).describe("id from an email.list_recent or email.search result"),
+  }),
   "email.get_message": z
     .object({
       emailMessageId: z.string().optional().describe("id from an email.list_recent or email.search result"),
@@ -380,6 +383,13 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "Search synced emails (last ~2 days) by keyword. Set deep:true to query " +
       "Gmail live with no day limit instead — slower, but not capped by sync. " +
       "Read-only.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "email.summarize_thread": {
+    description:
+      "A short AI summary of one email -- what it's about and what, if anything, it asks of " +
+      "you. Read-only.",
     consequential: false,
     requiresAccountId: true,
   },

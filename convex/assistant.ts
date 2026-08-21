@@ -18,6 +18,7 @@ import {
 import { renderOutcomes } from "./lib/tools/outcomes";
 import { guardReply, wantsFullEmail } from "./lib/scope";
 import { relevantSkillNames } from "./lib/skills";
+import { CALLBACK_PREFIX } from "./notify";
 import { AllProvidersFailed } from "./ai/types";
 import { formatInstant } from "./lib/time";
 
@@ -711,4 +712,142 @@ async function contextCommand(ctx: ActionCtx, userId: Id<"users">): Promise<stri
       result: rows.map((r) => ({ contextId: r._id, category: r.category, text: r.text })),
     },
   ]);
+}
+
+/**
+ * A tap on a notification card's button. Unlike handleMessage, there is no
+ * "in" message to persist here -- a callback_query is metadata about an
+ * earlier card, not a new conversational turn -- so this goes straight from
+ * dispatch to a reply.
+ */
+export const handleCallback = internalAction({
+  args: {
+    telegramId: v.string(),
+    chatId: v.string(),
+    channelMessageId: v.string(),
+    data: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await ctx.runMutation(internal.model.users.ensureByTelegramId, {
+      telegramId: args.telegramId,
+      displayName: "owner",
+    });
+
+    const separator = args.data.indexOf(":");
+    const prefix = separator === -1 ? args.data : args.data.slice(0, separator);
+    const emailMessageId = separator === -1 ? "" : args.data.slice(separator + 1);
+
+    try {
+      switch (prefix) {
+        case CALLBACK_PREFIX.TLDR:
+          await replyWithSummary(ctx, args.chatId, emailMessageId);
+          return;
+        case CALLBACK_PREFIX.FULL:
+          await replyWithFullMessage(ctx, args.chatId, emailMessageId);
+          return;
+        case CALLBACK_PREFIX.DRAFT:
+          await sendMessage(
+            args.chatId,
+            "Drafting replies isn't built yet -- Phase 6 adds it. This button is here " +
+              "so the card is complete; it does nothing until then.",
+          );
+          return;
+        case CALLBACK_PREFIX.NOT_IMPORTANT:
+          await markNotImportant(ctx, userId, args.chatId, emailMessageId);
+          return;
+        default:
+          await sendMessage(args.chatId, `Unrecognized button: ${args.data}`);
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "assistant.handle_callback",
+        args: { data: args.data },
+        result: "error",
+        errorMessage: detail.slice(0, 500),
+      });
+      await sendMessage(args.chatId, userFacingError(error, detail));
+    }
+  },
+});
+
+async function replyWithSummary(
+  ctx: ActionCtx,
+  chatId: string,
+  emailMessageId: string,
+): Promise<void> {
+  const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+    emailMessageId: emailMessageId as Id<"emailMessages">,
+  });
+  if (!message) {
+    await sendMessage(chatId, "That email is no longer available.");
+    return;
+  }
+
+  const body = message.bodyText ?? message.snippet ?? "";
+  const summary = await runTask("SUMMARIZE_THREAD", {
+    system:
+      "Summarize this email in two or three sentences a busy person can act on. " +
+      "Plain text, no markdown, no preamble.",
+    input: `Subject: ${message.subject ?? "(no subject)"}\nFrom: ${
+      message.fromName ?? message.fromAddress
+    }`,
+    untrusted: [{ label: "email_body", content: body }],
+    maxOutputTokens: 300,
+  });
+
+  await sendMessage(chatId, summary.text.trim());
+}
+
+async function replyWithFullMessage(
+  ctx: ActionCtx,
+  chatId: string,
+  emailMessageId: string,
+): Promise<void> {
+  const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+    emailMessageId: emailMessageId as Id<"emailMessages">,
+  });
+  if (!message) {
+    await sendMessage(chatId, "That email is no longer available.");
+    return;
+  }
+
+  const from = message.fromName
+    ? `${message.fromName} <${message.fromAddress}>`
+    : message.fromAddress;
+  const body = message.bodyText ?? message.snippet ?? "(no body)";
+
+  await sendMessage(
+    chatId,
+    `From: ${from}\nSubject: ${message.subject ?? "(no subject)"}\n\n${body}`,
+  );
+}
+
+async function markNotImportant(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  chatId: string,
+  emailMessageId: string,
+): Promise<void> {
+  const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+    emailMessageId: emailMessageId as Id<"emailMessages">,
+  });
+  if (!message) {
+    await sendMessage(chatId, "That email is no longer available.");
+    return;
+  }
+
+  await ctx.runMutation(internal.model.feedback.record, {
+    userId,
+    emailMessageId: message._id,
+    predicted: message.importance ?? "UNKNOWN",
+    corrected: "LOW",
+  });
+  await ctx.runMutation(internal.model.noiseSenders.add, {
+    userId,
+    pattern: message.fromAddress,
+  });
+
+  await sendMessage(chatId, `Got it -- I won't flag ${message.fromAddress} as important again.`);
 }

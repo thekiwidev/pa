@@ -33,6 +33,7 @@ import type * as lib_email_prefilter from "../lib/email/prefilter.js";
 import type * as lib_prompts_assistant from "../lib/prompts/assistant.js";
 import type * as lib_scope from "../lib/scope.js";
 import type * as lib_skills from "../lib/skills.js";
+import type * as lib_telegram_markdown from "../lib/telegram/markdown.js";
 import type * as lib_time from "../lib/time.js";
 import type * as lib_tools_catalog from "../lib/tools/catalog.js";
 import type * as lib_tools_outcomes from "../lib/tools/outcomes.js";
@@ -42,9 +43,11 @@ import type * as lib_userContext from "../lib/userContext.js";
 import type * as model_audit from "../model/audit.js";
 import type * as model_connectedAccounts from "../model/connectedAccounts.js";
 import type * as model_emailMessages from "../model/emailMessages.js";
+import type * as model_feedback from "../model/feedback.js";
 import type * as model_instructions from "../model/instructions.js";
 import type * as model_messages from "../model/messages.js";
 import type * as model_noiseSenders from "../model/noiseSenders.js";
+import type * as model_notifications from "../model/notifications.js";
 import type * as model_oauthStates from "../model/oauthStates.js";
 import type * as model_people from "../model/people.js";
 import type * as model_preferences from "../model/preferences.js";
@@ -54,6 +57,7 @@ import type * as model_skills from "../model/skills.js";
 import type * as model_tasks from "../model/tasks.js";
 import type * as model_userContext from "../model/userContext.js";
 import type * as model_users from "../model/users.js";
+import type * as notify from "../notify.js";
 import type * as reminders from "../reminders.js";
 import type * as security_crypto from "../security/crypto.js";
 import type * as tools_router from "../tools/router.js";
@@ -90,6 +94,7 @@ declare const fullApi: ApiFromModules<{
   "lib/prompts/assistant": typeof lib_prompts_assistant;
   "lib/scope": typeof lib_scope;
   "lib/skills": typeof lib_skills;
+  "lib/telegram/markdown": typeof lib_telegram_markdown;
   "lib/time": typeof lib_time;
   "lib/tools/catalog": typeof lib_tools_catalog;
   "lib/tools/outcomes": typeof lib_tools_outcomes;
@@ -99,9 +104,11 @@ declare const fullApi: ApiFromModules<{
   "model/audit": typeof model_audit;
   "model/connectedAccounts": typeof model_connectedAccounts;
   "model/emailMessages": typeof model_emailMessages;
+  "model/feedback": typeof model_feedback;
   "model/instructions": typeof model_instructions;
   "model/messages": typeof model_messages;
   "model/noiseSenders": typeof model_noiseSenders;
+  "model/notifications": typeof model_notifications;
   "model/oauthStates": typeof model_oauthStates;
   "model/people": typeof model_people;
   "model/preferences": typeof model_preferences;
@@ -111,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   "model/tasks": typeof model_tasks;
   "model/userContext": typeof model_userContext;
   "model/users": typeof model_users;
+  notify: typeof notify;
   reminders: typeof reminders;
   "security/crypto": typeof security_crypto;
   "tools/router": typeof tools_router;
@@ -142,4 +150,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+};
