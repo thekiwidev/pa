@@ -2,13 +2,15 @@
 
 Telegram-first personal AI secretary on Convex.
 
+- **What's built, what's next:** `docs/ROADMAP.md`
 - **Architecture / source of truth:** `docs/personal-ai-assistant-build-plan-v3-convex.md`
 - **Current phase build doc:** `docs/build/`
 - **Env variable names:** `docs/ENV.md`
 - **What changed:** `CHANGELOG.md` · **Why, and what bit us:** `MEMORY.md`
 - **Rules for agents (and humans):** `CLAUDE.md` / `AGENTS.md`
 
-**Status:** Phases 0–3 complete. Next: Phase 4 — importance classification.
+**Status:** Phases 0–3 complete (plus voice, skills, deep search). Eleven
+phases documented and unbuilt — see `docs/ROADMAP.md` for order and blockers.
 
 ## Stack
 

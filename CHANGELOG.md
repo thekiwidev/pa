@@ -9,6 +9,26 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Docs — two new phases added to the roadmap (not built)
+
+- **`docs/build/PHASE-02B-user-context.md`** — persistent facts about the
+  owner (role, qualifications, preferences, vocabulary) that tailor every
+  reply. A third kind of user-taught knowledge alongside `customInstructions`
+  (rules) and `skills` (procedures); the doc leads with why conflating the
+  three is the mistake to avoid. Buildable immediately, no dependencies.
+- **`docs/build/PHASE-21-meeting-transcripts.md`** — hand it a transcript,
+  get owner-attributed commitments turned into tasks/blockers/people plus a
+  TL;DR written for you rather than a neutral recap. Deliberately the
+  transcript-intake half of the source plan's Phase 21 — nothing joins or
+  records a call, so the consent/recording-law question the source plan
+  raises does not arise.
+
+2B is a hard prerequisite for 21: "a TL;DR for me" is undefined until the
+system knows who "me" is. `EXTRACT_COMMITMENTS` (registered back in Phase 1,
+never used) is retiered from CHEAP_STRUCTURED to REASON there — attribution
+across a long conversation is where a cheap model silently invents or loses
+someone's task.
+
 ### Fix — summaries were written from a 199-character preview, not the email
 
 Reported: a FairMoney webinar mail summarized as "no action required" when it

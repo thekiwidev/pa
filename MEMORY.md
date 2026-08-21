@@ -9,6 +9,24 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — Three kinds of user-taught knowledge, deliberately not merged
+
+The bot now has, or will have, three stores that all look like "stuff the
+user told it" and are not interchangeable:
+
+| Store | Holds | Injected |
+|---|---|---|
+| `customInstructions` | rules for behaviour | every message |
+| `skills` | procedures for one capability | keyword-matched |
+| `userContext` (Phase 2B, doc only) | **facts about the person** | every message |
+
+The distinction that matters: a fact is not an instruction. "I'm a frontend
+engineer" tells the model nothing to DO — it changes what counts as important
+mail and what tone a draft takes. Filed as an instruction it gets read as a
+command and the bot starts announcing your job at you. If a future feature
+wants to store something user-taught, decide which of the three it is first;
+adding a fourth store should need a reason as clear as this one.
+
 ## 2026-08-21 — Gmail's `snippet` is ~200 chars and truncates the part that matters
 
 The single highest-value email in testing — a webinar invite — had its date,
