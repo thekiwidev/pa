@@ -259,6 +259,28 @@ export const TOOL_SCHEMAS = {
   "skill.get": z.object({
     name: z.string().min(1).describe("the skill's slug"),
   }),
+
+  "context.set": z.object({
+    category: z
+      .string()
+      .optional()
+      .describe(
+        "profile | preferences | working_style | domain | relationships | other — anything unrecognised files as other",
+      ),
+    text: z
+      .string()
+      .min(1)
+      .describe("one fact about the user, stated plainly, e.g. 'Frontend engineer, mostly React'"),
+  }),
+  "context.list": z.object({}),
+  "context.remove": z
+    .object({
+      contextId: z.string().optional().describe("id from a context.list result"),
+      textFragment: z.string().optional().describe("a snippet of the fact, if you have no id"),
+    })
+    .refine((v) => Boolean(v.contextId || v.textFragment), {
+      message: "give either contextId or textFragment",
+    }),
 } as const;
 
 export type ToolName = keyof typeof TOOL_SCHEMAS;
@@ -402,6 +424,26 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "skill.get": {
     description: "Show one skill's full current content.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "context.set": {
+    description:
+      "Record a lasting FACT about the user — their role, qualifications, " +
+      "preferences, vocabulary, or who matters to them. Use when they say " +
+      "things like \"I'm a...\", \"I work at...\", \"I prefer...\", " +
+      "\"remember that I...\". This is a fact, not an instruction: use " +
+      "instruction.add for a rule about how you should behave.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "context.list": {
+    description: "Show everything you know about the user.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "context.remove": {
+    description: "Forget one recorded fact about the user.",
     consequential: false,
     requiresAccountId: false,
   },

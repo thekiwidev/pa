@@ -132,6 +132,20 @@ export default defineSchema({
   }).index("by_user", ["userId"]),
 
   /**
+   * Not in the build plan — added on direct request. Facts ABOUT the owner
+   * that tailor every reply: role, qualifications, preferences, vocabulary.
+   *
+   * Distinct from customInstructions (rules for how to behave) and skills
+   * (procedures for one capability). Rendered into every planning prompt, so
+   * bounded by MAX_CONTEXT_ENTRIES in convex/lib/userContext.ts.
+   */
+  userContext: defineTable({
+    userId: v.id("users"),
+    category: v.string(), // see CONTEXT_CATEGORIES
+    text: v.string(),
+  }).index("by_user_category", ["userId", "category"]),
+
+  /**
    * Not in the build plan — added on direct request. A named, full-authority
    * procedure for one capability ("morning_brief", "check_email",
    * "draft_reply") — unlike customInstructions, which are small tone/workflow

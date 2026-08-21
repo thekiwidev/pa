@@ -1,6 +1,7 @@
 // Pure. Prompt construction with no ctx and no I/O, so the exact string the
 // model receives is unit-testable.
 import { describeCatalog } from "../tools/catalog";
+import { renderUserContext, type ContextEntry } from "../userContext";
 import { formatInstant } from "../time";
 
 export interface ConversationTurn {
@@ -30,6 +31,13 @@ export interface PlanningContext {
    * to call Paul" turn pays nothing for skills existing at all.
    */
   activeSkills: { title: string; content: string }[];
+  /**
+   * Facts about the owner — role, qualifications, preferences, vocabulary.
+   * Rendered on EVERY message, unlike skills: identity is always relevant,
+   * a procedure usually is not. Bounded by MAX_CONTEXT_ENTRIES because of
+   * exactly that.
+   */
+  userContext: { category: string; text: string }[];
 }
 
 const SCOPE = `SCOPE — what you actually are:
@@ -68,6 +76,15 @@ updating / looking into" anything outside the tools above — you cannot act on
 your own between messages, and claiming otherwise is worse than saying nothing.
 If the user needs to change something (Google Cloud Console, a redirect URI),
 say plainly that this is theirs to do, not yours.
+
+Use what you know about the user to tailor every reply — their role, their
+vocabulary, how they like to be written to. Do not recite it back at them; it
+is background, not content. If they state a new lasting fact about themselves,
+record it with context.set. A FACT about them ("I'm a frontend engineer") is
+context.set; a RULE for you ("keep replies short") is instruction.add.
+Only record something NEW. If it already appears in what you know above, do
+not call context.set for it again — re-confirming a fact you already hold is
+noise in every reply that follows.
 
 The user can teach you standing rules with instruction.add ("from now on...",
 "always...", "don't..."). Follow every rule listed below under "Your standing
@@ -176,6 +193,9 @@ ${instructions}
 
 Active skills for this message:
 ${skills}
+
+What you know about ${ctx.displayName}:
+${renderUserContext(ctx.userContext as ContextEntry[])}
 
 Tools available:
 ${describeCatalog()}

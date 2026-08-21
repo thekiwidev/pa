@@ -316,3 +316,55 @@ describe("catalog — skill tools", () => {
     expect(TOOL_META["skill.get"].consequential).toBe(false);
   });
 });
+
+describe("catalog — user context tools", () => {
+  test("context.set requires text", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({ reply: "", tools: [{ name: "context.set", args: {} }] }),
+    );
+    expect(plan.calls).toEqual([]);
+    expect(plan.rejected[0]?.name).toBe("context.set");
+  });
+
+  test("context.set accepts a bare fact with no category", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [{ name: "context.set", args: { text: "Frontend engineer" } }],
+      }),
+    );
+    expect(plan.rejected).toEqual([]);
+  });
+
+  test("context.remove needs an id or a fragment", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({ reply: "", tools: [{ name: "context.remove", args: {} }] }),
+    );
+    expect(plan.calls).toEqual([]);
+    expect(plan.rejected[0]?.reason).toContain("contextId or textFragment");
+  });
+
+  test("none of the context tools are consequential", () => {
+    expect(TOOL_META["context.set"].consequential).toBe(false);
+    expect(TOOL_META["context.list"].consequential).toBe(false);
+    expect(TOOL_META["context.remove"].consequential).toBe(false);
+  });
+});
+
+describe("parseToolPlan — malformed JSON recovery", () => {
+  test("recovers a doubled-brace object instead of printing it as prose", () => {
+    // Observed live: the model emitted {{ "reply": ..., "tools": [...] }},
+    // so the removal it proposed never ran and the raw JSON was shown to the
+    // user as the answer.
+    const plan = parseToolPlan(
+      '{{ "reply": "Done.", "tools": [ { "name": "context.remove", "args": { "textFragment": "computer science" } } ] }}',
+    );
+    expect(plan.reply).toBe("Done.");
+    expect(plan.calls[0]?.name).toBe("context.remove");
+  });
+
+  test("genuinely broken JSON still falls back to prose", () => {
+    const plan = parseToolPlan("{ this is not json at all");
+    expect(plan.calls).toEqual([]);
+  });
+});

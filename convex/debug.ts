@@ -142,6 +142,9 @@ export const planOnly = internalAction({
         await ctx.runQuery(internal.model.instructions.list, { userId: user._id })
       ).map((i) => i.text),
       activeSkills: [],
+      userContext: (
+        await ctx.runQuery(internal.model.userContext.list, { userId: user._id })
+      ).map((c) => ({ category: c.category, text: c.text })),
     });
 
     // execute:true runs the REAL converse() and nothing else. It must not
@@ -149,6 +152,19 @@ export const planOnly = internalAction({
     // plans per invocation, and the args this tool printed were from the
     // throwaway one, not the plan that actually produced the reply.
     if (args.execute === true) {
+      // Persist the inbound message BEFORE composing, exactly as
+      // assistant.handleMessage does. converse() builds its transcript from
+      // the messages table, so skipping this meant the model never saw the
+      // message under test — it answered from the last 10 real Telegram
+      // turns instead, which made working features look broken.
+      await ctx.runMutation(internal.model.messages.record, {
+        userId: user._id,
+        channel: "debug",
+        direction: "in",
+        kind: "text",
+        text: args.text,
+      });
+
       const reply = await converse(ctx, user._id, user.displayName, args.text);
       return { executed: true, rendered: reply };
     }

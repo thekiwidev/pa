@@ -4,6 +4,7 @@ import type { Id } from "../_generated/dataModel";
 import { TOOL_META } from "../lib/tools/catalog";
 import type { ToolCall } from "../lib/tools/plan";
 import { toEpochMs, formatInstant } from "../lib/time";
+import { normalizeCategory } from "../lib/userContext";
 import type { ToolOutcome } from "../lib/tools/outcomes";
 
 /**
@@ -407,6 +408,41 @@ async function dispatch(
       });
       if (!found) return { found: false, name: a.name };
       return { found: true, name: a.name, ...found };
+    }
+
+    case "context.set": {
+      const category = normalizeCategory((a.category as string | undefined) ?? "other");
+      // The mutation echoes `text` back — outcomes.ts confirms WHAT was
+      // saved, not merely that something was. Omitting this echo produced an
+      // empty confirmation twice before (instruction.add, skill.update).
+      return await ctx.runMutation(internal.model.userContext.add, {
+        userId,
+        category,
+        text: a.text as string,
+      });
+    }
+
+    case "context.list": {
+      const rows = await ctx.runQuery(internal.model.userContext.list, { userId });
+      return rows.map((r) => ({ contextId: r._id, category: r.category, text: r.text }));
+    }
+
+    case "context.remove": {
+      let contextId = a.contextId as string | undefined;
+      if (!contextId && typeof a.textFragment === "string") {
+        const found = await ctx.runQuery(internal.model.userContext.findByFragment, {
+          userId,
+          fragment: a.textFragment,
+        });
+        if (!found) return { removed: false };
+        contextId = found._id;
+      }
+      if (!contextId) throw new Error("no contextId or textFragment given");
+
+      return await ctx.runMutation(internal.model.userContext.remove, {
+        userId,
+        contextId: contextId as Id<"userContext">,
+      });
     }
   }
 }

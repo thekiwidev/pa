@@ -258,3 +258,37 @@ describe("renderOutcomes — skills", () => {
     expect(out).toContain("Step 1");
   });
 });
+
+describe("renderOutcomes — user context", () => {
+  test("confirms WHAT was noted, not just that something was", () => {
+    const out = renderOutcomes("", [
+      ok("context.set", { created: true, text: "Frontend engineer, React" }),
+    ]);
+    expect(out).toBe("🧠 Noted: Frontend engineer, React");
+  });
+
+  test("a repeated fact says so instead of claiming a new one", () => {
+    expect(renderOutcomes("", [ok("context.set", { created: false, text: "x" })])).toBe(
+      "🧠 Already knew that.",
+    );
+  });
+
+  test("lists facts with their category", () => {
+    const out = renderOutcomes("", [
+      ok("context.list", [{ category: "profile", text: "Frontend engineer" }]),
+    ]);
+    expect(out).toBe("• [profile] Frontend engineer");
+  });
+
+  test("says so plainly when nothing is known", () => {
+    expect(renderOutcomes("", [ok("context.list", [])])).toBe(
+      "I don't know anything about you yet.",
+    );
+  });
+
+  test("a failed removal does not claim success", () => {
+    expect(renderOutcomes("", [ok("context.remove", { removed: false })])).toContain(
+      "Couldn't find",
+    );
+  });
+});

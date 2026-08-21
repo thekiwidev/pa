@@ -9,6 +9,31 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — A debug harness that diverges from production invents bugs
+
+`debug:planOnly --execute` called `converse()` without first persisting the
+inbound message. `converse()` reads its transcript from the `messages` table,
+so the message under test was invisible to the model — it answered from the
+last ten real Telegram turns instead. Three separate features looked broken
+while being fine, and I nearly went looking for a fault in the wrong layer.
+
+Rule: a harness that skips a production step is not a harness, it is a
+different code path. When verification output looks nonsensical rather than
+merely wrong, suspect the harness before the feature.
+
+## 2026-08-21 — The planner sometimes emits `{{ ... }}` and it silently ate tool calls
+
+Live output: `{{ "reply": "Done.", "tools": [...] }}`. `extractJsonObject`'s
+balanced scan returns the whole doubled-brace string, `JSON.parse` rejects
+it, and the fallback treats it as prose — so the user is shown a raw tool
+call as their answer and nothing executes. Affected every tool, not one
+feature; found only because a removal silently did nothing.
+
+`parseToolPlan` now strips one symmetric layer and retries. Worth
+remembering that the prose fallback is a **failure** path that looks like a
+success path — a malformed plan reaches the user as a confident-sounding
+reply, not as an error.
+
 ## 2026-08-21 — Three kinds of user-taught knowledge, deliberately not merged
 
 The bot now has, or will have, three stores that all look like "stuff the

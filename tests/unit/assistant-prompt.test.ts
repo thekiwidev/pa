@@ -16,6 +16,7 @@ const base = {
   connectedAccounts: [],
   customInstructions: [],
   activeSkills: [],
+  userContext: [],
 };
 
 describe("planningSystemPrompt", () => {
@@ -170,5 +171,44 @@ describe("compose prompts — deadlines and snippets", () => {
     const p = skillComposeSystemPrompt("A", skills, NOW, "Africa/Lagos");
     expect(p).toContain("full_email_bodies");
     expect(p.replace(/\s+/g, " ")).toContain("cuts off before the important part");
+  });
+});
+
+describe("planningSystemPrompt — user context", () => {
+  test("says so when nothing is known", () => {
+    expect(planningSystemPrompt(base)).toContain("(nothing recorded yet)");
+  });
+
+  test("renders known facts, grouped", () => {
+    const prompt = planningSystemPrompt({
+      ...base,
+      userContext: [{ category: "profile", text: "Frontend engineer, React" }],
+    });
+    expect(prompt).toContain("PROFILE");
+    expect(prompt).toContain("Frontend engineer, React");
+  });
+
+  test("tells the model the difference between a fact and a rule", () => {
+    const prompt = planningSystemPrompt(base);
+    expect(prompt).toContain("context.set");
+    expect(prompt).toContain("instruction.add");
+  });
+
+  test("context sits ABOVE the tool catalogue so it frames what follows", () => {
+    const prompt = planningSystemPrompt({
+      ...base,
+      userContext: [{ category: "profile", text: "Frontend engineer" }],
+    });
+    expect(prompt.indexOf("What you know about")).toBeLessThan(
+      prompt.indexOf("Tools available:"),
+    );
+  });
+});
+
+describe("planningSystemPrompt — no redundant context writes", () => {
+  test("tells the model not to re-record a fact it already holds", () => {
+    expect(planningSystemPrompt(base).replace(/\s+/g, " ")).toContain(
+      "Only record something NEW",
+    );
   });
 });

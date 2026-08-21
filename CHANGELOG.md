@@ -9,6 +9,37 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Phase 2B — User context (built)
+
+Facts about the owner — role, qualifications, preferences, vocabulary —
+stored per row, rendered into every planning prompt above the tool
+catalogue, and editable entirely by chat. `context.set` / `context.list` /
+`context.remove`, plus `/context`. Bounded at 40 entries x 280 chars because
+it renders on every message; there is a test asserting the product stays
+small.
+
+Verified live: "I'm a frontend engineer" records a fact and creates no task;
+"keep replies short" still routes to `instruction.add` instead, so the
+fact/rule distinction holds; and asking for a side-project stack came back
+"Since you're a React and TypeScript engineer based in Lagos..." — tailoring,
+which is the actual point of the phase. Removal by fragment works with no id.
+
+### Fix — doubled-brace model output silently dropped every tool call
+
+Observed live: the planner emitted `{{ "reply": ..., "tools": [...] }}`. The
+balanced-brace scan returned that whole string, `JSON.parse` rejected it, and
+the prose fallback printed the raw tool call at the user while executing
+nothing. `parseToolPlan` now strips one symmetric brace layer and retries.
+This affected every tool, not just this phase's.
+
+### Fix — `debug:planOnly --execute` never showed the model the message
+
+`converse()` builds its transcript from the `messages` table, and
+`handleMessage` persists the inbound message before calling it. The debug
+harness skipped that step, so the model answered from the last ten real
+Telegram turns and ignored the text under test — which made working features
+look broken. The harness now persists first, as production does.
+
 ### Docs — two new phases added to the roadmap (not built)
 
 - **`docs/build/PHASE-02B-user-context.md`** — persistent facts about the

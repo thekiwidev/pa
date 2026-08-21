@@ -111,7 +111,8 @@ export async function converse(
 ): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
-  const [history, projects, openTasks, pending, accounts, instructions] = await Promise.all([
+  const [history, projects, openTasks, pending, accounts, instructions, userContext] =
+    await Promise.all([
     ctx.runQuery(internal.model.messages.recentForUser, {
       userId,
       limit: CONVERSATION_TURNS,
@@ -121,6 +122,7 @@ export async function converse(
     ctx.runQuery(internal.model.reminders.listPending, { userId }),
     ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
     ctx.runQuery(internal.model.instructions.list, { userId }),
+    ctx.runQuery(internal.model.userContext.list, { userId }),
   ]);
 
   // Deterministic keyword match, no model call spent deciding — a turn with
@@ -157,6 +159,7 @@ export async function converse(
     })),
     customInstructions: instructions.map((i) => i.text),
     activeSkills,
+    userContext: userContext.map((c) => ({ category: c.category, text: c.text })),
   });
 
   const transcript = renderConversation(
@@ -341,6 +344,7 @@ async function handleCommand(
         "/accounts — connected mailboxes and their state",
         "/sync — sync the mailboxes now",
         "/reconnect <label> — re-authorize after Google expires the token",
+        "/context — what I know about you",
         "/skills — list every skill",
         "/skill <name> — show one skill's full content",
         "/status — providers, models, timezone",
@@ -368,6 +372,8 @@ async function handleCommand(
       return await accountsCommand(ctx, userId);
     case "/sync":
       return await syncCommand(ctx, userId);
+    case "/context":
+      return await contextCommand(ctx, userId);
     case "/skills":
       return await skillsCommand(ctx, userId);
     case "/skill":
@@ -695,3 +701,14 @@ export const handleSkillDocument = internalAction({
     await sendMessage(args.chatId, reply);
   },
 });
+
+async function contextCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const rows = await ctx.runQuery(internal.model.userContext.list, { userId });
+  return renderOutcomes("", [
+    {
+      name: "context.list",
+      ok: true,
+      result: rows.map((r) => ({ contextId: r._id, category: r.category, text: r.text })),
+    },
+  ]);
+}

@@ -62,6 +62,14 @@ function extractJsonObject(raw: string): string | null {
   return null;
 }
 
+/** `{{ ... }}` -> `{ ... }`, once. Returns null when there is nothing to
+ *  unwrap, so the caller can fall through to treating the output as prose. */
+function unwrapDoubledBraces(json: string): string | null {
+  const trimmed = json.trim();
+  if (!trimmed.startsWith("{{") || !trimmed.endsWith("}}")) return null;
+  return trimmed.slice(1, -1);
+}
+
 export function parseToolPlan(raw: string): ToolPlan {
   const json = extractJsonObject(raw);
   if (json === null) return { reply: raw.trim(), calls: [], rejected: [] };
@@ -70,7 +78,18 @@ export function parseToolPlan(raw: string): ToolPlan {
   try {
     parsed = JSON.parse(json);
   } catch {
-    return { reply: raw.trim(), calls: [], rejected: [] };
+    // Observed live: the model sometimes emits {{ "reply": ... }} — doubled
+    // braces, probably template-syntax bleed. The balanced scan above happily
+    // returns that whole string, JSON.parse rejects it, and the fallback
+    // treats the raw JSON as prose — so the user sees the tool call printed
+    // at them and NOTHING executes. Strip one symmetric layer and retry.
+    const unwrapped = unwrapDoubledBraces(json);
+    if (unwrapped === null) return { reply: raw.trim(), calls: [], rejected: [] };
+    try {
+      parsed = JSON.parse(unwrapped);
+    } catch {
+      return { reply: raw.trim(), calls: [], rejected: [] };
+    }
   }
 
   if (typeof parsed !== "object" || parsed === null) {

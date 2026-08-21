@@ -223,6 +223,24 @@ function renderOne(outcome: ToolOutcome): string {
       return `${str(r, "title") ?? str(r, "name")}\n\n${str(r, "content") ?? ""}`;
     }
 
+    case "context.set":
+      return field(r, "created") === false
+        ? "🧠 Already knew that."
+        : `🧠 Noted: ${str(r, "text") ?? ""}`;
+
+    case "context.list": {
+      const rows = Array.isArray(r) ? r : [];
+      if (rows.length === 0) return "I don't know anything about you yet.";
+      return rows
+        .map((x) => `• [${str(x, "category") ?? "other"}] ${str(x, "text") ?? ""}`)
+        .join("\n");
+    }
+
+    case "context.remove":
+      return field(r, "removed") === true
+        ? `🗑️ Forgotten: ${str(r, "text") ?? ""}`
+        : "Couldn't find anything matching that.";
+
     default:
       return `✅ ${outcome.name}`;
   }
