@@ -80,8 +80,21 @@ describe("catalog", () => {
     for (const name of TOOL_NAMES) expect(TOOL_META[name]).toBeDefined();
   });
 
-  test("no Phase 2 tool is consequential", () => {
-    for (const name of TOOL_NAMES) expect(TOOL_META[name].consequential).toBe(false);
+  test("exactly one tool is consequential, and it is email.send_reply", () => {
+    // Phase 2 asserted NOTHING was consequential. Phase 6 deliberately
+    // breaks that: sending is the first externally-visible action. Pinning
+    // the exact set means a future phase cannot quietly add a second one —
+    // every addition has to come here and be justified.
+    const consequential = TOOL_NAMES.filter((n) => TOOL_META[n].consequential);
+    expect(consequential).toEqual(["email.send_reply"]);
+  });
+
+  test("no tool that permanently destroys anything exists", () => {
+    // Invariant from the source plan: email.delete_permanently NEVER EXISTS.
+    for (const name of TOOL_NAMES) {
+      expect(name).not.toContain("delete_permanently");
+      expect(name).not.toContain("destroy");
+    }
   });
 
   test("the rendered catalog names every tool", () => {
@@ -366,5 +379,33 @@ describe("parseToolPlan — malformed JSON recovery", () => {
   test("genuinely broken JSON still falls back to prose", () => {
     const plan = parseToolPlan("{ this is not json at all");
     expect(plan.calls).toEqual([]);
+  });
+});
+
+describe("catalog — email.create_draft accepts a fragment", () => {
+  test("a fragment with no id is accepted", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [
+          {
+            name: "email.create_draft",
+            args: { senderOrSubject: "FairMoney", talkingPoints: "thanks, noted" },
+          },
+        ],
+      }),
+    );
+    expect(plan.rejected).toEqual([]);
+  });
+
+  test("neither id nor fragment is still rejected", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [{ name: "email.create_draft", args: { talkingPoints: "hi" } }],
+      }),
+    );
+    expect(plan.calls).toEqual([]);
+    expect(plan.rejected[0]?.reason).toContain("emailMessageId or senderOrSubject");
   });
 });

@@ -166,6 +166,35 @@ function renderOne(outcome: ToolOutcome): string {
     case "email.search":
       return renderEmailList(r);
 
+    case "email.create_draft": {
+      const toField = field(r, "to");
+      const to = Array.isArray(toField) ? toField.join(", ") : "?";
+      const body = str(r, "body") ?? "";
+      const capped = body.length > 1500 ? body.slice(0, 1500) + "…" : body;
+      return [
+        `📝 Draft to ${to} — ${str(r, "subject") ?? "(no subject)"}`,
+        "",
+        capped,
+        "",
+        `Tap Send or Discard on the card above. Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
+      ].join("\n");
+    }
+
+    case "email.discard_draft":
+      return field(r, "discarded") === true ? "🗑️ Draft discarded." : "Nothing to discard.";
+
+    case "email.send_reply": {
+      if (field(r, "awaitingApproval") === true) {
+        const expires = str(r, "expiresAt");
+        return expires
+          ? `⏳ Tap Send on the card to confirm — expires ${expires}.`
+          : "⏳ Tap Send on the card to confirm.";
+      }
+      return field(r, "sent") === true
+        ? "✅ Sent."
+        : `⚠️ Not sent: ${str(r, "error") ?? "unknown reason"}`;
+    }
+
     case "email.summarize_thread":
       if (field(r, "found") !== true) return "No email matching that id.";
       return `📝 ${str(r, "summary") ?? "(no summary)"}`;

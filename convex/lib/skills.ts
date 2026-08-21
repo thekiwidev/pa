@@ -624,16 +624,459 @@ OUTPUT STYLE
   },
   draft_reply: {
     title: "Draft a reply",
-    content: `When drafting a reply to an email:
+    content: `Draft a reply to an email using the user's conversation context,
+the complete source email/thread, relevant user context and memory, and
+available connected resources.
 
-1. Match the tone of the source thread — formal stays formal, casual stays
-   casual.
-2. Keep it concise. Do not pad with filler or restate the whole original
-   message back to its sender.
-3. Never invent a fact, commitment, or date not present in the source
-   thread or explicitly given by the user in this conversation.
-4. Always show the full draft and require explicit approval before
-   anything sends — there is no phrasing of "just send it" that skips this.`,
+1. IDENTIFY THE TARGET EMAIL
+
+   When the user says:
+     - "Draft a reply"
+     - "Draft a response"
+     - "Reply to that"
+     - "Write a response"
+     - "Help me reply"
+     - or an equivalent request,
+
+   first determine which email the user means.
+
+   A. CONTEXT HAS ONE CLEAR EMAIL
+   - If the immediately relevant conversation context contains exactly one
+     clearly identifiable email, use that email as the target.
+   - This remains true even if the user asked unrelated questions after
+     discussing the email, as long as there is still one unambiguous email
+     associated with the active conversation context.
+   - Do not force the user to repeat the sender or subject when the target is
+     unambiguous.
+
+   B. CONTEXT HAS MULTIPLE POSSIBLE EMAILS
+   - If two or more emails could reasonably be the target, DO NOT guess.
+   - Present the user with a concise selection of the candidate emails.
+   - Include enough identifying information for the user to choose:
+       * sender
+       * subject
+       * mailbox/account
+       * date/time when useful
+       * short distinguishing summary
+   - Example:
+
+       I found several emails we could be replying to:
+       1. Efe — "Verification required" — Gmail
+       2. Sarah — "Interview availability" — Outlook
+       3. Paul — "Momentum Logistics testing" — Zoho
+
+       Which one should I reply to?
+
+   - Wait for the user's selection before drafting.
+
+   C. NO CLEAR EMAIL
+   - If no relevant email can be identified from the current context,
+     ask the user which email they want to reply to.
+   - Do not invent or assume a target.
+
+2. FETCH THE COMPLETE SOURCE EMAIL
+
+   Once the target email is identified:
+   - Always retrieve the complete message with email.get_message.
+   - If the message belongs to a thread/conversation, retrieve enough of the
+     relevant thread context to understand what is being replied to.
+   - Do not draft from a snippet.
+   - Do not draft from a partial preview when the full message is available.
+   - Preserve the sender, subject, mailbox/account, thread identity, and any
+     relevant metadata.
+
+3. UNDERSTAND THE PURPOSE OF THE REPLY
+
+   Determine:
+   - What is the sender asking for?
+   - Why did they send the email?
+   - Does the user need to answer a question?
+   - Does the user need to provide a document?
+   - Does the user need to confirm something?
+   - Does the user need to choose from options?
+   - Does the user need to give a deadline/date/time?
+   - Is the sender waiting on the user?
+   - Is the user waiting on the sender?
+   - Is this part of an existing project, application, interview, transaction,
+     school activity, business process, or other known context?
+
+   If the purpose is unclear, explain the uncertainty before drafting rather
+   than inventing an interpretation.
+
+4. USE CONVERSATION CONTEXT
+
+   Consider relevant information from the current conversation.
+
+   This includes:
+   - facts the user previously provided
+   - instructions the user gave
+   - decisions already made
+   - preferences about tone or wording
+   - information the user explicitly asked to include
+   - information the user explicitly asked to exclude
+   - previous discussion about the same email/person/project
+
+   Do not allow unrelated recent conversation to override the target email's
+   actual context.
+
+5. USE USER CONTEXT AND MEMORY
+
+   When user context/memory is available, use relevant information to improve
+   the draft.
+
+   Useful context may include:
+   - user's name
+   - role
+   - organization
+   - projects
+   - relationships
+   - communication preferences
+   - recurring responsibilities
+   - known commitments
+   - known availability
+   - preferred tone
+   - previously stated facts
+   - project-specific terminology
+   - prior interactions with the sender
+
+   Only use information relevant to the reply.
+
+   Never expose private internal memory merely because it was used to improve
+   the draft.
+
+   Never fabricate a fact from memory.
+   If a remembered fact is uncertain, do not present it as certain.
+
+6. USE PROJECT CONTEXT
+
+   If the email is related to a known project:
+   - identify the relevant project
+   - inspect available project context
+   - consider current project status
+   - consider relevant tasks, blockers, deadlines and decisions
+   - use this context when it materially improves the reply
+
+   Example:
+   If the email asks for an update on Momentum Logistics, use the known
+   project state rather than replying with a generic "I'll get back to you."
+
+7. USE CONNECTED DOCUMENTS AND FILES
+
+   If the reply requires a document or attachment:
+   - determine exactly what document is required.
+   - If Google Drive or another file source is connected, search for the
+     relevant document.
+   - Prefer the most relevant current version.
+   - Verify that the document actually matches the request before using it.
+   - If multiple documents are plausible, ask the user which one to use.
+   - If the required document cannot be found, tell the user instead of
+     inventing or attaching a substitute.
+
+   If the user explicitly says:
+     "Attach the latest CV"
+     "Use the Momentum Logistics proposal"
+     "Attach the document we discussed"
+
+   search the connected file source for that resource.
+
+   Do not automatically attach documents merely because they are mentioned.
+   Confirm that the email actually requires or benefits from the attachment.
+
+8. ATTACHMENT PREPARATION
+
+   If the email requires an attachment:
+   - identify the file
+   - verify the file
+   - show the user which file will be attached
+   - include the attachment in the proposed send action
+   - do not send until the user explicitly approves the complete action
+
+   Example:
+
+     Draft:
+     "Hi Sarah, ..."
+
+     Attachment:
+     Adedotun_CV_2026.pdf
+
+   If attachment permissions or file access are unavailable, say so clearly.
+
+9. REPLY TONE
+
+   Match the tone and relationship of the source thread.
+
+   Examples:
+   - formal business email → professional and direct
+   - recruiter → professional, warm and concise
+   - colleague → natural and direct
+   - friend → casual
+   - school/academic → respectful and clear
+   - customer/service interaction → polite and precise
+
+   User-provided style preferences override the source thread when explicitly
+   requested.
+
+10. REPLY CONTENT
+
+   The reply should:
+   - directly answer the sender
+   - address the requested action
+   - include required details
+   - avoid unnecessary repetition
+   - be concise unless the situation requires detail
+   - sound like something the user would realistically send
+
+   Do not blindly repeat the sender's entire email.
+
+11. FACTUAL SAFETY
+
+   Never invent:
+   - dates
+   - deadlines
+   - commitments
+   - availability
+   - prices
+   - project status
+   - people
+   - documents
+   - attachments
+   - approvals
+   - actions already completed
+   - promises on behalf of the user
+
+   Only use:
+   - information contained in the source thread
+   - information explicitly provided by the user
+   - reliable relevant user context/memory
+   - information retrieved from authorized connected tools
+
+   If an important piece of information is missing, either:
+   - ask the user for it, or
+   - draft the response without making the unsupported claim.
+
+12. HANDLE EMAILS THAT REQUIRE AN ACTION
+
+   When the sender requests something:
+   - identify the action clearly
+   - ensure the draft actually addresses that action
+   - identify missing information or attachments
+   - mention any unresolved dependency if relevant
+
+   Example:
+   Sender:
+   "Please send the signed agreement before Friday."
+
+   Draft should not merely say:
+   "Thanks for your email."
+
+   It should address the actual request.
+
+13. HANDLE EMAILS WHERE THE USER MUST PROVIDE A DOCUMENT
+
+   If a requested document exists in a connected file source:
+   - find it
+   - verify it
+   - prepare the draft around that attachment
+
+   Example internal interpretation:
+     Request: "Please send your passport copy."
+     Context: user's passport file exists in approved storage.
+
+   Proposed action:
+     Draft reply + passport attachment.
+
+   Do not send automatically.
+
+14. HANDLE EMAILS THAT REQUIRE MULTIPLE ACTIONS
+
+   If the sender asks for several things:
+   - address each relevant request
+   - preserve the logical order
+   - make it obvious when one requested item is unavailable or pending
+
+15. HANDLE AMBIGUITY
+
+   If the user says:
+     "Reply to this"
+     "Reply to him"
+     "Send a response"
+
+   resolve the target from the active context when possible.
+
+   If more than one sender/email is plausible:
+   ask the user to choose.
+
+   Do not guess based only on the most recent email if multiple candidates
+   remain reasonably possible.
+
+16. DRAFT PRESENTATION
+
+   Always show the complete draft before any send action.
+
+   Format:
+
+     Draft reply
+
+     To: <recipient>
+     Subject: <subject>
+
+     <full draft>
+
+     <attachments, if any>
+
+   If useful, include a short note before the draft such as:
+     "This replies to Sarah's interview scheduling email and confirms that
+      Thursday afternoon works for you."
+
+   Do not add unnecessary analysis after the draft.
+
+17. APPROVAL IS ALWAYS REQUIRED
+
+   Never send the email automatically from this skill.
+
+   The workflow is:
+
+     identify email
+       ↓
+     fetch full email/thread
+       ↓
+     gather relevant context
+       ↓
+     find documents if needed
+       ↓
+     draft reply
+       ↓
+     show draft
+       ↓
+     wait for explicit approval
+       ↓
+     send only after approval
+
+   The user must explicitly approve the send.
+
+   Examples of valid approval:
+     - "Send it."
+     - "Yes, send."
+     - "Looks good, send."
+     - "Go ahead and send it."
+
+   Do not interpret unrelated statements as approval.
+
+18. EDITING AFTER DRAFT
+
+   If the user requests changes:
+     - modify the existing draft
+     - preserve the same target email
+     - preserve the intended purpose
+     - only change what the user asks to change unless necessary for correctness
+
+   Example:
+     User: "Make it more formal."
+     → revise the draft.
+
+   User: "Tell them Friday works instead."
+     → update the relevant commitment.
+
+   User: "Don't attach the CV."
+     → remove the attachment from the proposed send action.
+
+   After every substantive revision, show the complete revised draft again and
+   require approval before sending.
+
+19. SEND ACTION SAFETY
+
+   Approval applies to the final version.
+
+   If anything important changes after approval — such as:
+     - recipient
+     - subject
+     - body
+     - attachment
+     - referenced document
+
+   require approval again.
+
+20. THREAD INTEGRITY
+
+   When sending:
+   - reply within the original email thread when supported
+   - preserve the original recipient/thread relationship
+   - use the correct provider/account
+   - do not accidentally send from a different connected mailbox
+
+   When multiple email accounts are connected, explicitly preserve the
+   originating mailbox/account.
+
+21. MULTI-ACCOUNT SAFETY
+
+   The user may have multiple Gmail, Outlook, or Zoho accounts.
+
+   Always track:
+   - provider
+   - mailbox/account
+   - sender
+   - recipient
+   - thread/message identity
+
+   Never accidentally reply from the wrong account.
+
+   Example:
+     Source:
+       Gmail — personal@example.com
+     Recipient:
+       recruiter@example.com
+
+   The send action must use the same authorized mailbox unless the user
+   explicitly requests otherwise.
+
+22. FUTURE TOOL SUPPORT
+
+   This skill should be designed to support future capabilities such as:
+   - Gmail
+   - Outlook
+   - Zoho Mail
+   - Google Drive
+   - OneDrive
+   - Dropbox
+   - Linear
+   - Notion
+   - project databases
+   - user memory
+   - calendar systems
+   - additional messaging channels
+
+   Do not assume a tool exists when it has not been connected.
+
+23. FALLBACK WHEN REQUIRED INFORMATION IS MISSING
+
+   If the reply requires information that cannot be safely determined:
+   - tell the user exactly what is missing
+   - ask for only the missing information
+   - do not produce a confident but fabricated reply
+
+24. FINAL PRINCIPLE
+
+   The objective is not merely to "write an email."
+
+   The objective is:
+
+     Understand the email
+       +
+     Understand the user's intent
+       +
+     Understand relevant user/project context
+       +
+     Gather required information/documents
+       +
+     Produce a realistic reply
+       +
+     Let the user review it
+       +
+     Send only after explicit approval.
+
+   The assistant should behave like a careful executive assistant:
+   proactive about gathering context, conservative about facts, and never
+   autonomous about sending without approval.`,
   },
 };
 

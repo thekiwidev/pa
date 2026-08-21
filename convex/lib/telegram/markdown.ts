@@ -15,6 +15,30 @@
 
 const SPECIAL = /[_*[\]()~`>#+\-=|{}.!\\]/g;
 
-export function escapeMarkdownV2(text: string): string {
-  return text.replace(SPECIAL, (ch) => `\\${ch}`);
+/**
+ * A string that has been through escapeMarkdownV2, or was assembled by
+ * someone who checked. sendCard/editCard accept ONLY this type.
+ *
+ * The reason it exists: "remember to escape before sending" failed twice —
+ * once in composeCard (escaped the parts, not the punctuation joining them)
+ * and once in the router's approval card (escaped nothing). Both surfaced as
+ * a Telegram 400 at runtime, on the one path where a user was waiting. A
+ * brand turns both into a compile error.
+ */
+export type EscapedMarkdown = string & { readonly __escapedMarkdownV2: unique symbol };
+
+export function escapeMarkdownV2(text: string): EscapedMarkdown {
+  return text.replace(SPECIAL, (ch) => `\\${ch}`) as EscapedMarkdown;
+}
+
+/**
+ * Assert that an assembled string is already safe.
+ *
+ * Use ONLY where every interpolated value was escaped individually AND every
+ * literal character between them is non-special — composeCard is the one
+ * legitimate caller. If you reach for this to silence a type error, escape
+ * the whole composed string instead; that is what the second bug was.
+ */
+export function alreadyEscaped(text: string): EscapedMarkdown {
+  return text as EscapedMarkdown;
 }

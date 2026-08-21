@@ -83,3 +83,69 @@ export async function getMessage(
 ): Promise<GmailMessage> {
   return await gmailFetch(accessToken, `/messages/${id}?format=full`);
 }
+
+export interface OutgoingReply {
+  from: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  bodyText: string;
+  inReplyTo?: string;
+  referencesHeader?: string;
+  /** Gmail rejects a raw message whose headers don't match this thread —
+   *  the correctness check for "did this actually land as a reply" is
+   *  Gmail's own, and gmail.sendReply (Step 10) asserts the response agrees. */
+  threadId: string;
+}
+
+/** RFC 2047 for a non-ASCII subject; an ASCII one is left untouched. */
+function encodeSubject(subject: string): string {
+  if (/^[\x00-\x7F]*$/.test(subject)) return subject;
+  return `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject)))}?=`;
+}
+
+/**
+ * Same chunked-base64 technique as convex/channels/telegram.ts's toBase64 —
+ * String.fromCharCode(...bytes) blows the argument limit north of ~100 KB,
+ * which an email with any real body reaches. base64url per Gmail's `raw`
+ * field: `+`/`/` swapped for `-`/`_`, no padding.
+ */
+function base64UrlEncode(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  const CHUNK = 0x8000;
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function buildRawMessage(msg: OutgoingReply): string {
+  const headers = [
+    `From: ${msg.from}`,
+    `To: ${msg.to.join(", ")}`,
+    msg.cc.length ? `Cc: ${msg.cc.join(", ")}` : undefined,
+    `Subject: ${encodeSubject(msg.subject)}`,
+    msg.inReplyTo ? `In-Reply-To: ${msg.inReplyTo}` : undefined,
+    msg.referencesHeader ? `References: ${msg.referencesHeader}` : undefined,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    `MIME-Version: 1.0`,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\r\n");
+
+  return base64UrlEncode(`${headers}\r\n\r\n${msg.bodyText}`);
+}
+
+export async function sendMessage(
+  accessToken: string,
+  msg: OutgoingReply,
+): Promise<{ id: string; threadId: string }> {
+  const res = await fetch(`${BASE}/messages/send`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: buildRawMessage(msg), threadId: msg.threadId }),
+  });
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+  return (await res.json()) as { id: string; threadId: string };
+}

@@ -7,10 +7,16 @@ import { seal, open } from "./security/crypto";
 import {
   exchangeCode,
   refreshAccessToken,
-  GMAIL_READONLY_SCOPES,
+  GMAIL_SEND_SCOPES,
   TokenRevoked,
 } from "./connectors/gmail/oauth";
-import { getProfile, listMessages, getMessage, GmailApiError } from "./connectors/gmail/client";
+import {
+  getProfile,
+  listMessages,
+  getMessage,
+  sendMessage as sendGmailMessage,
+  GmailApiError,
+} from "./connectors/gmail/client";
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
 import { runTask } from "./ai/registry";
 import { prefilter } from "./lib/email/prefilter";
@@ -71,7 +77,7 @@ export const completeConnect = internalAction({
       encryptedCredentials: sealed.ciphertext,
       credentialIv: sealed.iv,
       credentialAuthTag: sealed.authTag,
-      scopesGranted: tokens.scopes.length ? tokens.scopes : [...GMAIL_READONLY_SCOPES],
+      scopesGranted: tokens.scopes.length ? tokens.scopes : [...GMAIL_SEND_SCOPES],
     });
 
     await ctx.runMutation(internal.model.audit.record, {
@@ -545,5 +551,106 @@ async function deliverIfDue(
     importance: classified.importance,
     whyItMatters: classified.whyItMatters,
     deadlineMentioned: classified.deadlineMentioned ?? undefined,
+  });
+}
+
+const SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+
+/**
+ * Called ONLY from tools/router.ts's dispatch(), once executeToolCall's gate
+ * has confirmed a CONSUMED approval exists for this exact draft. Never called
+ * directly from a tool proposal, and never from anywhere that could run it
+ * twice for the same approval — consume() already guarantees single-use.
+ */
+export const sendReply = internalAction({
+  args: { draftId: v.id("drafts"), approvalId: v.id("approvals") },
+  handler: async (ctx, args) => {
+    const draft = await ctx.runQuery(internal.model.drafts.get, { draftId: args.draftId });
+    if (!draft) throw new Error("draft not found");
+
+    const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+      emailMessageId: draft.emailMessageId,
+    });
+    if (!message) throw new Error("source email not found");
+
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: draft.accountId,
+    });
+    if (!account) throw new Error("account not found");
+
+    // Reconnection reminder, surfaced as a real error rather than a Gmail
+    // 403 the user has to decode themselves — see Step 8.
+    if (!account.scopesGranted.includes(SEND_SCOPE)) {
+      const detail = `${account.accountEmail} was connected before sending existed — reconnect it with /connect ${account.label} to grant send access.`;
+      await failDraft(ctx, args, detail);
+      throw new Error(detail);
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await accessTokenFor(ctx, draft.accountId);
+    } catch (error) {
+      await failDraft(ctx, args, error);
+      throw error;
+    }
+
+    try {
+      const sent = await sendGmailMessage(accessToken, {
+        from: account.accountEmail,
+        to: draft.toAddresses,
+        cc: draft.ccAddresses,
+        subject: draft.subject,
+        bodyText: draft.bodyText,
+        inReplyTo: draft.inReplyTo,
+        referencesHeader: draft.referencesHeader,
+        threadId: message.threadId,
+      });
+
+      if (sent.threadId !== message.threadId) {
+        // Should be unreachable — Gmail refuses a raw message whose headers
+        // don't match the target thread — but this is Step 3's "test it by
+        // checking the sent message's threadId" made literal, not assumed.
+        throw new Error(
+          `sent message landed in thread ${sent.threadId}, expected ${message.threadId}`,
+        );
+      }
+
+      await ctx.runMutation(internal.model.drafts.markSent, { draftId: args.draftId });
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "user",
+        action: "email.send",
+        targetType: "drafts",
+        targetId: args.draftId,
+        accountId: draft.accountId,
+        approvalId: args.approvalId,
+        args: { to: draft.toAddresses, cc: draft.ccAddresses, providerMessageId: sent.id },
+        result: "ok",
+      });
+    } catch (error) {
+      await failDraft(ctx, args, error);
+      throw error;
+    }
+  },
+});
+
+async function failDraft(
+  ctx: ActionCtx,
+  args: { draftId: Id<"drafts">; approvalId: Id<"approvals"> },
+  error: unknown,
+) {
+  const detail = error instanceof Error ? error.message : String(error);
+  await ctx.runMutation(internal.model.drafts.markFailed, {
+    draftId: args.draftId,
+    reason: detail.slice(0, 300),
+  });
+  await ctx.runMutation(internal.model.audit.record, {
+    actor: "system",
+    action: "email.send",
+    targetType: "drafts",
+    targetId: args.draftId,
+    approvalId: args.approvalId,
+    args: {},
+    result: "error",
+    errorMessage: detail.slice(0, 500),
   });
 }

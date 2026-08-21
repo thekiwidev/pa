@@ -11,11 +11,11 @@ describe("escapeMarkdownV2", () => {
   });
 
   test("escapes a literal backslash, the escape character itself", () => {
-    expect(escapeMarkdownV2("C:\\Users\\ade")).toBe("C:\\\\Users\\\\ade");
+    expect(String(escapeMarkdownV2("C:\\Users\\ade"))).toBe("C:\\\\Users\\\\ade");
   });
 
   test("leaves plain alphanumeric text untouched", () => {
-    expect(escapeMarkdownV2("Interview availability Thursday")).toBe(
+    expect(String(escapeMarkdownV2("Interview availability Thursday"))).toBe(
       "Interview availability Thursday",
     );
   });
@@ -37,5 +37,18 @@ describe("escapeMarkdownV2", () => {
     // it just makes it inert.
     const unescaped = escaped.replace(/\\(.)/g, "$1");
     expect(unescaped).toBe(maliciousSubject);
+  });
+});
+
+describe("EscapedMarkdown brand — the compile-time guard", () => {
+  test("escapeMarkdownV2 output is what sendCard accepts", () => {
+    // This test documents intent; the real enforcement is tsc. sendCard and
+    // editCard take EscapedMarkdown, so passing a raw string is a compile
+    // error rather than a Telegram 400 at runtime. Two live bugs — an
+    // unescaped `>` in composeCard and unescaped `.` in the router's
+    // approval card — are what this replaced.
+    const escaped = escapeMarkdownV2("Send to a.b@c.com? Expires 10:00.");
+    expect(String(escaped)).toContain("\\.");
+    expect(String(escaped)).toContain("a\\.b@c\\.com");
   });
 });

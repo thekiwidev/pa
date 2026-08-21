@@ -3,7 +3,8 @@ import { internal, components } from "./_generated/api";
 import { v } from "convex/values";
 import { RateLimiter, HOUR } from "@convex-dev/rate-limiter";
 import { sendCard, editCard, sendMessage, type InlineButton } from "./channels/telegram";
-import { escapeMarkdownV2 } from "./lib/telegram/markdown";
+import { escapeMarkdownV2, alreadyEscaped } from "./lib/telegram/markdown";
+import type { EscapedMarkdown } from "./lib/telegram/markdown";
 import { formatInstant } from "./lib/time";
 import { DEDUP_WINDOW_MS } from "./model/notifications";
 
@@ -47,7 +48,7 @@ export interface CardEmail {
 }
 
 export interface ComposedCard {
-  text: string;
+  text: EscapedMarkdown;
   buttons: InlineButton[][];
 }
 
@@ -104,7 +105,9 @@ export function composeCard(email: CardEmail, timezone: string): ComposedCard {
 
   const id = email.emailMessageId;
   return {
-    text: lines.join("\n"),
+    // Every interpolated value above went through escapeMarkdownV2 and the
+    // literals joining them (newlines, "From:", "·") are non-special.
+    text: alreadyEscaped(lines.join("\n")),
     buttons: [
       [
         { text: "TL;DR", data: `${CALLBACK_PREFIX.TLDR}:${id}` },

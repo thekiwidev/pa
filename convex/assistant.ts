@@ -738,6 +738,24 @@ export const handleCallback = internalAction({
     const emailMessageId = separator === -1 ? "" : args.data.slice(separator + 1);
 
     try {
+      // Phase 6's draft buttons carry their own prefixes and are not
+      // CALLBACK_PREFIX values, so they are matched before the switch.
+      // These helpers return their reply text rather than sending it.
+      if (args.data.startsWith("senddraft:")) {
+        const text = await sendDraftCommand(ctx, userId, args.data.slice("senddraft:".length));
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("discarddraft:")) {
+        const text = await discardDraftCommand(
+          ctx,
+          userId,
+          args.data.slice("discarddraft:".length),
+        );
+        await sendMessage(args.chatId, text);
+        return;
+      }
+
       switch (prefix) {
         case CALLBACK_PREFIX.TLDR:
           await replyWithSummary(ctx, args.chatId, emailMessageId);
@@ -850,4 +868,35 @@ async function markNotImportant(
   });
 
   await sendMessage(chatId, `Got it -- I won't flag ${message.fromAddress} as important again.`);
+}
+
+async function sendDraftCommand(ctx: ActionCtx, userId: Id<"users">, draftId: string): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  const consumed = await ctx.runMutation(internal.model.approvals.consume, {
+    action: "email.send_reply",
+    targetType: "drafts",
+    targetId: draftId,
+  });
+
+  // The seven checks live entirely inside approvals.consume. A tap that
+  // fails one of them — expired, edited, wrong account, a hallucinated
+  // recipient, or an approval an earlier tap already consumed — never
+  // reaches executeToolCall at all; there is nothing left for it to execute.
+  if (!consumed.ok) return `Not sent: ${consumed.reason}`;
+
+  const outcome = await executeToolCall(ctx, { userId, timezone }, {
+    name: "email.send_reply",
+    args: { draftId },
+  });
+  return renderOutcomes("", [outcome]);
+}
+
+async function discardDraftCommand(ctx: ActionCtx, userId: Id<"users">, draftId: string): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  const outcome = await executeToolCall(ctx, { userId, timezone }, {
+    name: "email.discard_draft",
+    args: { draftId },
+  });
+  return renderOutcomes("", [outcome]);
 }

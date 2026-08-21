@@ -15,6 +15,22 @@ export const GMAIL_READONLY_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
 ] as const;
 
+/**
+ * Additive on top of GMAIL_READONLY_SCOPES, never a replacement for it —
+ * Phase 3's own scope test still asserts GMAIL_READONLY_SCOPES contains only
+ * gmail.readonly, and that must keep being true.
+ *
+ * Google does NOT retroactively grant a scope to a token issued without it.
+ * An account connected before this phase must be reconnected once (send
+ * /connect with the SAME label again) for its refresh token to carry these.
+ * Phase 8 adds a third list with gmail.modify.
+ */
+export const GMAIL_SEND_SCOPES = [
+  ...GMAIL_READONLY_SCOPES,
+  "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.send",
+] as const;
+
 export class TokenRevoked extends Error {
   constructor(detail: string) {
     super(`refresh token rejected: ${detail.slice(0, 200)}`);
@@ -40,7 +56,7 @@ export function authorizeUrl(state: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: GMAIL_READONLY_SCOPES.join(" "),
+    scope: GMAIL_SEND_SCOPES.join(" "),
     state,
     // Both are required to be GIVEN a refresh token at all. Without
     // prompt=consent, a second authorization of an already-granted account

@@ -9,6 +9,69 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Rich text in chat replies
+
+The model writes Markdown; Telegram renders none of it without a
+`parse_mode`, and Phase 1's `sendMessage` deliberately set none so nothing
+needed escaping. Result: users saw literal `**asterisks**` and unrendered
+code fences in every reply.
+
+`sendMessage` now converts Markdown to Telegram **HTML** — three characters
+to escape (`& < >`) against MarkdownV2's eighteen, chosen because MarkdownV2
+has already caused two production 400s here. A rejected parse retries once
+as plain text and logs, so a conversion bug costs formatting, never the
+reply. Cards keep using MarkdownV2 via the branded `EscapedMarkdown` type;
+only chat replies changed.
+
+`markdownToTelegramHtml` leaves an unmatched marker literal — "2 * 3 = 6"
+must not open an `<i>`, because Telegram rejects the whole message on an
+unbalanced tag.
+
+### Phase 6 — Draft, approve, send (built)
+
+The first outbound capability. `email.send_reply` is the only
+`consequential: true` tool in the codebase, and a test pins that exact set so
+a later phase cannot quietly add a second.
+
+`tools/router.ts`'s blanket refusal is replaced by a real gate. The send path
+is single-entry and verified by grep: `internal.gmail.sendReply` has exactly
+one caller (the router, only after a CONSUMED approval), and
+`approvals.consume` has exactly one caller (the `[Send]` tap handler). A model
+emitting `email.send_reply` on its own gets an approval card, never a send.
+
+`approvals.consume` runs seven checks in one transaction: PENDING and
+unexpired; hash recomputed from the LIVE draft; `draft.accountId ===
+sourceMessage.accountId` (I-3); every recipient present in the source thread;
+CONSUMED written before Gmail is touched, so a retry sends nothing; an audit
+row carrying `approvalId`; and no code path that reads
+`AUTONOMOUS_SEND_ENABLED`, which still does not exist.
+
+### Fix — EscapedMarkdown is now a type, not a convention
+
+Telegram rejected two different cards at runtime with `can't parse entities`:
+an unescaped `>` in `composeCard` (Phase 5) and unescaped `.` in the router's
+approval card (this phase). Both were "remember to escape before sending",
+and both were remembered wrong.
+
+`escapeMarkdownV2` now returns a branded `EscapedMarkdown`, and
+`sendCard`/`editCard` accept only that type. Passing a raw string is a
+compile error. Introducing the brand immediately flagged the exact router
+line that had 400'd minutes earlier. `alreadyEscaped()` is the documented
+escape hatch, with `composeCard` as its one legitimate caller.
+
+### Fix — a Gmail message id reached a Convex validator
+
+The model proposed `emailMessageId: "18f3a38b556881c1"` — a GMAIL id, from an
+email header — and the raw `ArgumentValidationError` surfaced to the user.
+`email.create_draft` now accepts `senderOrSubject` as an alternative (the
+same id-or-fragment pattern `email.get_message`, `tasks.findByTitle` and
+`instructions.findByFragment` already use), and `emailMessages.normalize`
+rejects a non-Convex id before it can reach a validator.
+
+Related: `email.search` was being handed Gmail query syntax
+(`from:x@y.com "subject"`), which matches nothing against a substring search.
+Its description and SCOPE now say plainly that it takes plain text.
+
 ### Fix — Telegram was silently dropping every button tap
 
 `scripts/register-telegram-webhook.sh` has registered the webhook with

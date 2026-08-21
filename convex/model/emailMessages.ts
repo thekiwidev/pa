@@ -231,3 +231,11 @@ export const unclassified = internalQuery({
     return rows.filter((m) => m.processedAt === undefined).slice(0, Math.min(args.limit, 50));
   },
 });
+
+/** Is this string an id for THIS table? Returns null when not — the check
+ *  that stops a Gmail message id (or an invented one) from reaching a
+ *  validator and surfacing a raw ArgumentValidationError to the user. */
+export const normalize = internalQuery({
+  args: { id: v.string() },
+  handler: async (ctx, args) => ctx.db.normalizeId("emailMessages", args.id),
+});

@@ -193,7 +193,13 @@ export const TOOL_SCHEMAS = {
       ),
   }),
   "email.search": z.object({
-    query: z.string().optional().describe("word or phrase to match in subject, sender or body — omit to only filter by gmailLabel"),
+    query: z
+      .string()
+      .optional()
+      .describe(
+        "a PLAIN word or phrase to match in subject, sender or body — NOT Gmail search syntax; " +
+          '"from:x@y.com subject:foo" matches nothing. Use one distinctive word instead',
+      ),
     accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
     gmailLabel: EMAIL_LABEL.optional(),
     limit: z.number().int().min(1).max(20).optional().describe("default 10"),
@@ -205,6 +211,35 @@ export const TOOL_SCHEMAS = {
           '"all time"/"everything"/"keep looking", or a normal (non-deep) ' +
           "call just returned empty and they push back",
       ),
+  }),
+  "email.create_draft": z
+    .object({
+      emailMessageId: z
+        .string()
+        .optional()
+        .describe("id of the email to reply to, from an email.list_recent/search/get_message result"),
+      senderOrSubject: z
+        .string()
+        .optional()
+        .describe('a name, address, or subject fragment — e.g. "FairMoney" — when you have no id'),
+      accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
+      talkingPoints: z
+        .string()
+        .min(1)
+        .describe("what the reply should say, in your own words — turned into a polished reply"),
+      tone: z.string().optional().describe('e.g. "brief", "formal", "warm" — default: match the thread'),
+    })
+    .refine((v) => Boolean(v.emailMessageId || v.senderOrSubject), {
+      message: "give either emailMessageId or senderOrSubject",
+    }),
+  "email.discard_draft": z.object({
+    draftId: z.string().min(1).describe("id from an email.create_draft result"),
+  }),
+  "email.send_reply": z.object({
+    draftId: z
+      .string()
+      .min(1)
+      .describe("id from an email.create_draft result — sends exactly what that draft currently contains"),
   }),
   "email.summarize_thread": z.object({
     emailMessageId: z.string().min(1).describe("id from an email.list_recent or email.search result"),
@@ -384,6 +419,28 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "Gmail live with no day limit instead — slower, but not capped by sync. " +
       "Read-only.",
     consequential: false,
+    requiresAccountId: true,
+  },
+  "email.create_draft": {
+    description:
+      "Draft a reply to a specific email. Give talkingPoints in your own " +
+      "words — this writes the polished prose and shows it in full before " +
+      "anything can be sent. Creating a draft never sends anything.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "email.discard_draft": {
+    description: "Throw away a draft without sending it.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "email.send_reply": {
+    description:
+      "Send a drafted reply. This is CONSEQUENTIAL — it requires the " +
+      "user's explicit tap on [Send] and cannot be completed by " +
+      "conversation alone. Calling this only ever OFFERS a send for the " +
+      "user to confirm; delivery happens on the tap, never before.",
+    consequential: true,
     requiresAccountId: true,
   },
   "email.summarize_thread": {

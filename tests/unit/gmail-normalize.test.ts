@@ -9,7 +9,10 @@ import {
   BODY_CAP_BYTES,
   cleanSnippet,
 } from "../../convex/connectors/gmail/normalize";
-import { GMAIL_READONLY_SCOPES } from "../../convex/connectors/gmail/oauth";
+import {
+  GMAIL_READONLY_SCOPES,
+  GMAIL_SEND_SCOPES,
+} from "../../convex/connectors/gmail/oauth";
 
 const b64url = (s: string) =>
   btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -188,6 +191,18 @@ describe("scopes — least privilege", () => {
       expect(scope).not.toContain("gmail.send");
       expect(scope).not.toContain("gmail.modify");
       expect(scope).not.toContain("gmail.compose");
+    }
+  });
+
+  test("Phase 6 adds compose + send, and nothing beyond that yet", () => {
+    expect(GMAIL_SEND_SCOPES).toEqual([
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.send",
+    ]);
+    for (const scope of GMAIL_SEND_SCOPES) {
+      expect(scope).not.toBe("https://mail.google.com/");
+      expect(scope).not.toContain("gmail.modify");
     }
   });
 });

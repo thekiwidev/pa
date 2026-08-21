@@ -9,6 +9,37 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — "Remember to escape" failed twice; a branded type fixed it permanently
+
+Two runtime Telegram 400s, three days apart in build order, same root cause:
+a string reached `sendCard` without going through `escapeMarkdownV2`. First
+`composeCard` escaped its parts but not the `<>` joining them; then the
+router's approval card escaped nothing at all.
+
+The fix is not a third reminder. `escapeMarkdownV2` returns a branded
+`EscapedMarkdown` and `sendCard`/`editCard` accept only that — an unescaped
+string no longer compiles. Adding the brand immediately surfaced the exact
+router line that had failed minutes earlier, which is the argument for it.
+
+Generalizable: when the same class of bug recurs, the remaining fix is
+usually to make the mistake unrepresentable rather than to document it
+harder. `alreadyEscaped()` exists as the deliberate escape hatch — if you
+reach for it to silence a type error, escape the composed string instead.
+
+## 2026-08-21 — Ids the model supplies come from wherever it last saw an id
+
+`email.create_draft` received `18f3a38b556881c1` — a GMAIL message id lifted
+from an email header — where a Convex `Id<"emailMessages">` was required. It
+reached the mutation validator and the user saw a raw
+`ArgumentValidationError`.
+
+Two lessons: (1) any tool taking an id needs a fragment fallback, because the
+model frequently has no valid id and will substitute the most id-shaped
+string in its context; (2) `ctx.db.normalizeId` is the cheap guard — it
+returns null for a string that is not an id for that table, which is exactly
+what a foreign id looks like. Every id-accepting tool in this codebase now
+resolves through one of those two paths.
+
 ## 2026-08-21 — `allowed_updates` is an allowlist, and omissions are invisible
 
 Phase 1 registered the Telegram webhook with `allowed_updates: ["message"]`.

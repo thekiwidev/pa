@@ -1,3 +1,6 @@
+import type { EscapedMarkdown } from "../lib/telegram/markdown";
+import { markdownToTelegramHtml } from "../lib/telegram/richtext";
+
 const API = "https://api.telegram.org";
 
 /**
@@ -21,16 +24,36 @@ export async function sendMessage(chatId: string, text: string): Promise<string>
 
   const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
 
-  const res = await fetch(`${API}/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text: body }),
-  });
+  // The model writes Markdown, so render it. HTML parse_mode rather than
+  // MarkdownV2 — three characters to escape instead of eighteen, on the one
+  // path every reply takes.
+  //
+  // A conversion bug must never cost the user their reply, so a rejected
+  // parse retries once as plain text. Delivering unformatted beats
+  // delivering nothing, and the failure is logged rather than swallowed.
+  const html = markdownToTelegramHtml(body);
 
-  if (!res.ok) throw new Error(`telegram sendMessage ${res.status}: ${await res.text()}`);
+  let res = await post(token, { chat_id: chatId, text: html, parse_mode: "HTML" });
+
+  if (!res.ok) {
+    const detail = await res.text();
+    console.warn(`telegram_html_rejected, retrying as plain text: ${detail.slice(0, 200)}`);
+    res = await post(token, { chat_id: chatId, text: body });
+    if (!res.ok) {
+      throw new Error(`telegram sendMessage ${res.status}: ${await res.text()}`);
+    }
+  }
 
   const json = (await res.json()) as { result?: { message_id?: number } };
   return String(json.result?.message_id ?? "");
+}
+
+function post(token: string, payload: Record<string, unknown>): Promise<Response> {
+  return fetch(`${API}/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 }
 
 /**
@@ -86,7 +109,7 @@ function toInlineKeyboard(buttons: InlineButton[][]) {
  */
 export async function sendCard(
   chatId: string,
-  text: string,
+  text: EscapedMarkdown,
   buttons: InlineButton[][],
 ): Promise<string> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -116,7 +139,7 @@ export async function sendCard(
 export async function editCard(
   chatId: string,
   messageId: string,
-  text: string,
+  text: EscapedMarkdown,
   buttons: InlineButton[][],
 ): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
