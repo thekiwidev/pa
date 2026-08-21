@@ -34,11 +34,15 @@ if [[ "${2:-}" == "--info" ]]; then
   exit 0
 fi
 
+# allowed_updates MUST include callback_query, or Telegram silently drops
+# every inline-keyboard button tap — the bot never receives it, the button
+# spins until the client times out, and nothing appears in any log because
+# no request was ever made. Phase 5's cards are unusable without this.
 echo "Registering ${SITE_URL}/webhooks/telegram for the ${ENVIRONMENT} bot..."
 curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setWebhook" \
   -H "Content-Type: application/json" \
   -d "$(jq -nc --arg url "${SITE_URL}/webhooks/telegram" --arg secret "$SECRET" \
-        '{url: $url, secret_token: $secret, allowed_updates: ["message"]}')" | jq
+        '{url: $url, secret_token: $secret, allowed_updates: ["message", "callback_query"]}')" | jq
 
 echo
 echo "Current state:"

@@ -9,6 +9,20 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fix — Telegram was silently dropping every button tap
+
+`scripts/register-telegram-webhook.sh` has registered the webhook with
+`allowed_updates: ["message"]` since Phase 1. That list is an allowlist:
+`callback_query` was never delivered, so a tapped button spun until the
+Telegram client timed out and **no request ever reached the deployment** —
+nothing in the logs, no audit row, no error anywhere, because there was
+nothing to log. The parser, owner check and dispatcher were all correct and
+simply never invoked.
+
+Script now registers `["message", "callback_query"]`, with a comment saying
+why, and the dev webhook has been re-registered. **Any deployment registered
+before this needs re-running** — code alone does not fix it.
+
 ### Phase 5 — Alerts, summaries, cards (built)
 
 An important email now produces a Telegram card with working buttons. New

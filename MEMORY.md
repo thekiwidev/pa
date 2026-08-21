@@ -9,6 +9,24 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — `allowed_updates` is an allowlist, and omissions are invisible
+
+Phase 1 registered the Telegram webhook with `allowed_updates: ["message"]`.
+When Phase 5 added inline-keyboard buttons, every tap was dropped by Telegram
+before it left their servers: button spins, client times out ~10s later,
+nothing appears in `convex logs`, no audit row, no error. The absence of any
+trace is the diagnostic — a handler that ran and failed leaves something; one
+that was never invoked leaves nothing.
+
+Two things worth carrying forward:
+
+1. When adding a NEW Telegram update type (`callback_query`, `edited_message`,
+   `inline_query`, ...), re-register the webhook. Deploying code is not
+   enough, and nothing will tell you.
+2. Registration state lives outside the repo. A correct codebase can be
+   non-functional because of a curl someone ran weeks ago. `getWebhookInfo`
+   is the only source of truth.
+
 ## 2026-08-21 — Escape the composed string, not its parts
 
 `composeCard` did `escape(name) + " <" + escape(address) + ">"`. Both parts

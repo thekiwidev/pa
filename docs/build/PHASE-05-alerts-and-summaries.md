@@ -35,6 +35,13 @@ Create or edit these, in this order.
 | 12 | `convex/gmail.ts` | edit | Wire the delivery-rule branch into `syncAccount` |
 | 13 | `convex/lib/tools/catalog.ts`, `convex/tools/router.ts`, `convex/lib/tools/outcomes.ts` | edit | Add the `email.summarize_thread` tool |
 
+> **Before anything in this phase works, re-register the webhook.** It was
+> registered in Phase 1 with `allowed_updates: ["message"]`, which is an
+> allowlist — Telegram will drop every `callback_query` before it reaches the
+> deployment, and leave no trace anywhere to explain why. Run
+> `./scripts/register-telegram-webhook.sh dev` after the script's
+> `allowed_updates` includes `callback_query`, and confirm with `--info`.
+
 **New webhook surface, not a small addition.** Telegram delivers a button tap as `update.callback_query` — a different shape from `update.message`, with its own `id` to acknowledge, its own `from`/`message` nesting, and no `text` field at all. Steps 10–11 build a parser, an owner check, and a dispatcher for it from scratch, the same care Phase 1 gave `update.message`. Treat it as new surface, not as a branch bolted onto the text-message path.
 
 ---
