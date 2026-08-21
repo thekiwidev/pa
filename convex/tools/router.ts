@@ -713,6 +713,28 @@ async function dispatch(
       return { found: true, name: a.name, ...found };
     }
 
+    case "brief.configure": {
+      const updated = await ctx.runMutation(internal.model.briefConfig.configure, {
+        userId,
+        timezone,
+        enabled: a.enabled as boolean | undefined,
+        timeOfDay: a.timeOfDay as string | undefined,
+        notes: a.notes as string | undefined,
+      });
+      return {
+        enabled: updated.enabled,
+        timeOfDay: updated.timeOfDay,
+        notes: updated.notes,
+        nextAt:
+          updated.nextAt === undefined ? undefined : formatInstant(updated.nextAt, timezone),
+      };
+    }
+
+    case "brief.preview": {
+      const text = await ctx.runAction(internal.briefs.compose, { userId });
+      return { text };
+    }
+
     case "context.set": {
       const category = normalizeCategory((a.category as string | undefined) ?? "other");
       // The mutation echoes `text` back — outcomes.ts confirms WHAT was

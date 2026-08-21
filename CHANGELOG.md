@@ -9,6 +9,33 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Phase 5B — Morning brief (built)
+
+A daily brief the user configures entirely by chat: on/off, what time, and a
+free-text note about what it should cover. No redeploy for any of it.
+
+Scheduled with `ctx.scheduler.runAt` rather than a cron — `deliver()`
+reschedules itself +24h after each send, the same self-perpetuating chain
+`reminders` uses. A cron cannot do this, because the time has to be editable
+at runtime. One daily cron exists purely as a safety net for a broken chain.
+
+The email section covers a real rolling window — midnight yesterday in
+USER_TIMEZONE through send time, recomputed each run — and excludes anything
+already pushed as a Phase 5 alert, so the brief never re-surfaces something
+the user was already told about. That also closes the promise Phase 5 made:
+after-hours HIGH and all NORMAL mail now has somewhere to land.
+
+Verified live end to end: configured at 07:00 by chat, rescheduled to 06:30
+(new `scheduledJobId`, old one cancelled), disabled (job cleared), re-enabled
+— all without a deploy. `/brief` composes on demand.
+
+### Fix — an off-by-one-day assertion in the phase's own test
+
+The doc's `sinceYesterdayMidnight` test asserted Friday 23:00 UTC for a
+Saturday brief. That is Saturday midnight WAT — today's, not yesterday's.
+The implementation was correct (Thursday 23:00 UTC = Friday 00:00 WAT); the
+assertion was wrong and would have locked in a window a day too narrow.
+
 ### Rich text in chat replies
 
 The model writes Markdown; Telegram renders none of it without a

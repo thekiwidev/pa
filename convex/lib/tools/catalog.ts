@@ -64,6 +64,11 @@ const IMPORTANCE = z
   .preprocess(normalizeEnum, z.enum(["CRITICAL", "HIGH", "NORMAL", "LOW"]))
   .describe("CRITICAL|HIGH|NORMAL|LOW");
 
+const TIME_OF_DAY = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use 24-hour HH:MM, e.g. 07:00")
+  .describe('24-hour local time "HH:MM", e.g. "07:00"');
+
 const INSTANT = z
   .string()
   .describe('ISO 8601 local time, e.g. "2026-08-21T10:00"');
@@ -298,6 +303,15 @@ export const TOOL_SCHEMAS = {
     name: z.string().min(1).describe("the skill's slug"),
   }),
 
+  "brief.configure": z.object({
+    enabled: z.boolean().optional().describe("turn the daily morning brief on or off"),
+    timeOfDay: TIME_OF_DAY.optional(),
+    notes: z
+      .string()
+      .optional()
+      .describe("what the brief should focus on or skip, in your own words"),
+  }),
+  "brief.preview": z.object({}),
   "context.set": z.object({
     category: z
       .string()
@@ -491,6 +505,25 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "skill.get": {
     description: "Show one skill's full current content.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "brief.configure": {
+    description:
+      "Turn the daily morning brief on or off, change what time it arrives, " +
+      "or leave a note about what it should cover. Use whenever the user " +
+      "asks to set up, change, or stop a recurring morning summary of " +
+      'tasks, reminders, or important email. Calling this with no ' +
+      'arguments returns the current setup unchanged — use it to answer ' +
+      '"what time is my brief?" too, there is no separate status tool.',
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "brief.preview": {
+    description:
+      "Compose today's morning brief right now and show it, without " +
+      "touching the schedule. Use when the user wants to see it on demand " +
+      "or test what it looks like before turning it on.",
     consequential: false,
     requiresAccountId: false,
   },

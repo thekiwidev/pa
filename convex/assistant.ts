@@ -352,6 +352,7 @@ async function handleCommand(
         "/tasks — open tasks",
         "/blocked — what I'm waiting on, and on whom",
         "/reminders — what's scheduled",
+        "/brief — compose today's morning brief now",
         "/whoami — who I think you are",
         "/help — this",
       ].join("\n");
@@ -365,6 +366,8 @@ async function handleCommand(
       return await blockedCommand(ctx, userId);
     case "/reminders":
       return await remindersCommand(ctx, userId);
+    case "/brief":
+      return await briefCommand(ctx, userId);
     case "/connect":
       return await connectCommand(ctx, userId, text);
     case "/reconnect":
@@ -899,4 +902,8 @@ async function discardDraftCommand(ctx: ActionCtx, userId: Id<"users">, draftId:
     args: { draftId },
   });
   return renderOutcomes("", [outcome]);
+}
+
+async function briefCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  return await ctx.runAction(internal.briefs.compose, { userId });
 }

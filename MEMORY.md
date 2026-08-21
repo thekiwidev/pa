@@ -9,6 +9,21 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — runAt chains beat crons whenever the schedule is user-editable
+
+The morning brief could not be a cron: the whole requirement was that the
+user change its time by chat, and a cron expression only changes on deploy.
+`deliver()` reschedules itself +24h after each send instead — the same shape
+`reminders` already used, generalised. Changing the time cancels the pending
+job and schedules a new one; disabling cancels and clears the id. Verified by
+watching `scheduledJobId` change.
+
+The one cron that remains exists solely to repair a broken chain, and fires
+at 07:00 UTC — after the earliest sane brief time, so it can never race a
+same-day first-time enable.
+
+Worth reaching for whenever a schedule is data rather than configuration.
+
 ## 2026-08-21 — "Remember to escape" failed twice; a branded type fixed it permanently
 
 Two runtime Telegram 400s, three days apart in build order, same root cause:

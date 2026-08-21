@@ -256,6 +256,23 @@ function renderOne(outcome: ToolOutcome): string {
       return `${str(r, "title") ?? str(r, "name")}\n\n${str(r, "content") ?? ""}`;
     }
 
+    case "brief.configure": {
+      if (field(r, "enabled") !== true) return "🌅 Morning brief turned off.";
+      const time = str(r, "timeOfDay") ?? "?";
+      const next = str(r, "nextAt");
+      const notes = str(r, "notes");
+      return [
+        `🌅 Morning brief on, daily at ${time}.`,
+        next ? `Next one: ${next}.` : "",
+        notes ? `Notes: ${notes}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "brief.preview":
+      return str(r, "text") ?? "(nothing to show)";
+
     case "context.set":
       return field(r, "created") === false
         ? "🧠 Already knew that."
