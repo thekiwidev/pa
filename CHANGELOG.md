@@ -9,6 +9,27 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fix — the morning_brief and draft_reply skills were never read
+
+The skills system landed before Phases 5B and 6, and both wrote their own
+hardcoded system prompts instead of loading a skill: `briefs.ts` used
+`COMPOSE_SYSTEM`, `router.ts` used `DRAFT_REPLY_SYSTEM`. Only `check_email`
+was genuinely wired, through `converse()`'s keyword matching. Editing either
+of the other two — in the codebase or by chat — changed nothing, silently.
+
+Both now load their skill via `skills.getEffective` and fall back to the
+former hardcoded text when none exists. The old constants are renamed
+`*_FALLBACK` so their role is unambiguous.
+
+`COMPOSE_INVARIANTS` is appended AFTER the skill: a skill governs format and
+emphasis, never permission to invent a fact or to imply a data source that
+is not connected (there is still no calendar and no web search). Brief output
+cap raised 700 -> 3000 tokens, since a comprehensive brief does not fit in
+700.
+
+Observed before the fix: a five-task backlog rendered as a single line,
+because the hardcoded prompt mandated "TODAY'S ONE THING".
+
 ### Phase 5B — Morning brief (built)
 
 A daily brief the user configures entirely by chat: on/off, what time, and a

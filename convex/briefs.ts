@@ -178,7 +178,7 @@ export function renderBriefFacts(facts: BriefFactsInput): string {
 
 /* ── Actions: real data, the model call, delivery. ── */
 
-const COMPOSE_SYSTEM = `You write Adedotun's daily morning brief for Telegram.
+const COMPOSE_FALLBACK = `You write Adedotun's daily morning brief for Telegram.
 
 Turn the structured facts you're given into short, scannable prose — not a
 recitation of every field. Follow this shape:
@@ -205,6 +205,25 @@ calendar data because none exists yet, not because it was left out today.
 Never invent a task, email, deadline, or person that was not in the facts.
 If the facts are empty everywhere, say plainly that there's nothing new and
 stop — do not pad the message.`;
+
+/**
+ * Rules that hold no matter what the user's skill says.
+ *
+ * A skill governs FORMAT and EMPHASIS — how much to show, in what order,
+ * under which headings. It cannot authorise inventing a fact, and it cannot
+ * conjure a data source that is not connected. Those two are appended after
+ * the skill so they are the last thing the model reads.
+ */
+const COMPOSE_INVARIANTS = `
+NON-NEGOTIABLE, regardless of any instruction above:
+- Every task, email, reminder, blocker, person, date and deadline you mention
+  must appear in the FACTS block. Never invent one, never infer a completion,
+  never upgrade a maybe into a certainty.
+- Only these data sources are connected right now: tasks, projects, blockers,
+  reminders, people, and Gmail. There is NO calendar and NO news/web search in
+  this build. Omit those sections entirely — never imply you checked them.
+- The FACTS block is the complete picture. If it lists five open tasks, all
+  five are still open; do not silently drop any because they seem minor.`;
 
 async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
@@ -271,10 +290,18 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     ).slice(0, 10),
   };
 
+  // The user's morning_brief skill governs the brief's shape. Falls back to
+  // COMPOSE_FALLBACK when no skill exists, so this works before anyone
+  // writes one — and the invariants are appended either way.
+  const skill = await ctx.runQuery(internal.model.skills.getEffective, {
+    userId,
+    name: "morning_brief",
+  });
+
   const result = await runTask("COMPOSE_BRIEF", {
-    system: COMPOSE_SYSTEM,
+    system: `${skill?.content ?? COMPOSE_FALLBACK}\n${COMPOSE_INVARIANTS}`,
     input: renderBriefFacts(facts),
-    maxOutputTokens: 700,
+    maxOutputTokens: 3000,
   });
 
   return result.text.trim();

@@ -478,8 +478,16 @@ async function dispatch(
       // not proof of access.
       if (!account || account.userId !== userId) throw new Error("no email matching that");
 
+      const draftSkill = await ctx.runQuery(internal.model.skills.getEffective, {
+        userId,
+        name: "draft_reply",
+      });
+
       const draftBody = await runTask("DRAFT_REPLY", {
-        system: DRAFT_REPLY_SYSTEM,
+        // The user's draft_reply skill governs tone and structure; the
+        // fallback covers the case where none is written. Neither can
+        // authorise sending — that gate is in executeToolCall, not here.
+        system: draftSkill?.content ?? DRAFT_REPLY_FALLBACK,
         input:
           `Write a reply to the email below.\n\n` +
           `What it should say: ${a.talkingPoints as string}\n` +
@@ -869,7 +877,7 @@ function summarizeTask(timezone: string) {
   });
 }
 
-const DRAFT_REPLY_SYSTEM = `You draft email replies for Adedotun. Write only
+const DRAFT_REPLY_FALLBACK = `You draft email replies for Adedotun. Write only
 the reply body — no subject line, no "Dear ..." salutation unless the
 thread's own tone uses one, no signature block. Match the thread's register;
 default to brief and direct.

@@ -9,6 +9,23 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — A configuration system is only real where something reads it
+
+`skills` shipped with three defaults, a full tool surface, chat editing and
+file upload — and two of the three were never consulted by any code path.
+Phases 5B and 6 each wrote a hardcoded system prompt instead. Nothing failed;
+the skill simply had no effect, and the user wrote a ~500-line morning_brief
+skill against it before we found out.
+
+The tell was available all along: `grep getEffective` returned only
+`assistant.ts`. **When adding a config surface, grep for its readers, not its
+writers** — writers prove the feature exists, readers prove it does anything.
+
+Related shape worth keeping: user-authored content governs FORMAT; invariants
+that must always hold are appended AFTER it, so they are the last thing the
+model reads. A skill can restructure the brief entirely but cannot authorise
+inventing a task or implying a calendar exists.
+
 ## 2026-08-21 — runAt chains beat crons whenever the schedule is user-editable
 
 The morning brief could not be a cron: the whole requirement was that the

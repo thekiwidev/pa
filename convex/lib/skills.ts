@@ -245,382 +245,716 @@ export const DEFAULT_SKILLS: Record<string, SkillContent> = {
   },
   morning_brief: {
     title: "Morning brief",
-    content: `Generate the user's morning brief from current structured data and
-approved external information sources.
+    content: `Generate the user's complete daily command-center brief from current
+structured data and approved external information sources.
 
-The morning brief is both:
-1. An on-demand brief, generated whenever the user asks for "morning brief",
-   "good morning", "what's my day looking like", or an equivalent request.
-2. A scheduled brief, automatically sent at the user's configured morning
-   brief time.
+The morning brief is intentionally comprehensive.
 
-MORNING BRIEF SCHEDULE
-- The user may change the scheduled morning brief time at any time.
+Its purpose is to give the user a complete picture of:
+- everything that is overdue
+- everything that is currently outstanding
+- everything that needs attention today
+- today's priorities
+- today's scheduled commitments
+- active blockers
+- reminders
+- important emails
+- relevant project updates
+- relevant news or external developments
+- tasks that were previously planned but have not yet been confirmed as
+  completed
+- anything else the user reasonably needs to know before deciding how to
+  approach the day
+
+The morning brief is NOT a minimal executive summary.
+It is the user's daily starting dashboard.
+
+The user should be able to read the brief and then respond with updates such
+as:
+  "I completed the first two."
+  "Move the third task to tomorrow."
+  "That one is no longer important."
+  "This is blocked."
+  "I need to prioritize X instead."
+  "Mark this as done."
+  "Remind me about this at 2 PM."
+
+The assistant should then process those updates as normal action requests.
+
+1. MORNING BRIEF SCHEDULE
+
+- The morning brief can be generated:
+    1. on demand
+    2. automatically at a configured time every day
+
 - Recognize requests such as:
     * "Change my morning brief to 7am."
     * "Send my morning brief at 8:30 every morning."
     * "Move my morning brief to 6:45."
+    * "Send it at 9 on weekdays."
     * "Turn off my morning brief."
     * "Turn my morning brief back on."
-- Store the user's preferred time and timezone as an automation setting.
-- If the user changes the schedule, update the automation rather than merely
-  acknowledging the request.
-- Never assume the user's preferred time if it has not been configured.
-- The scheduled brief and an on-demand brief use the same underlying brief
-  generation process.
 
-EMAIL WINDOW
-- Every morning brief email section must use a rolling calendar-day window:
-    START = 00:00:00 of the previous calendar day
-    END   = the current date/time when the brief is generated.
-- Interpret these boundaries in the user's configured local timezone.
+- Store the configured schedule, timezone, enabled/disabled state, and
+  recurrence.
+
+- If the user changes the schedule, actually update the automation.
+
+- The scheduled and on-demand morning brief should use the same underlying
+  generation logic.
+
+2. CURRENT DATE AND TIME
+
+- Always use the user's current local date, time, and timezone.
+- Never assume that "today" means a fixed date from memory.
+- The brief must reflect the state of the user's information at the moment
+  the brief is generated.
+
+3. EMAIL WINDOW
+
+For the email portion of the morning brief:
+
+- START = 00:00:00 of the previous calendar day in the user's local timezone.
+- END = the exact current time when the brief is generated.
+- Use the same rolling calendar-day rule every day.
 - Do NOT use a generic "last 24 hours" window.
-- Do NOT use a fixed "last 2 days" window for the morning brief.
-- Example:
-    If the brief is generated on Saturday morning, inspect emails from
-    Friday 00:00 local time through the exact time Saturday morning.
-- This same rule applies every day, regardless of how late or early the brief
-  is requested.
-- If the user explicitly asks for a different time range, honor that request
-  instead of the standard morning-brief window.
+- Do NOT use a fixed "last 2 days" cache window.
 
-EMAIL SOURCES
-- Search every connected mailbox/account included in the user's active
-  morning-brief email sources.
-- This can include multiple Gmail accounts, Outlook accounts, Zoho accounts,
-  and future providers.
-- Preserve the identity of the mailbox in the internal data and when useful
-  in the output.
-- Never mix accounts together in a way that makes the sender/source ambiguous.
+Example:
+- If today is Saturday and the brief is generated at 08:00 Saturday,
+  inspect emails from Friday 00:00 through Saturday 08:00.
+- If the user asks for the brief at 23:30 Saturday, inspect emails from Friday
+  00:00 through Saturday 23:30.
 
-GMAIL SEARCH
-- Search Gmail Inbox, important/personal mail, and Spam for the morning-brief
-  window.
-- Spam must be explicitly included because important legitimate messages may
-  be incorrectly classified as spam.
-- Do not treat promotional/newsletter mail as important merely because it is
-  new.
-- Gmail's API supports search queries and explicitly supports including
-  SPAM/TRASH in message searches; use the appropriate provider implementation
-  rather than relying only on a cached recent-message list.
-- Paginate until the applicable time window is exhausted.
-- When available, use the provider's message timestamps rather than relying
-  on the display order.
-- Preserve the source mailbox for every message.
+If the user explicitly requests another date/time range, use that range instead.
 
-EMAIL IMPORTANCE FILTER
-Select only emails that reasonably require the user's attention.
+4. EMAIL ACCOUNTS
 
-High-value email signals include:
-- job/interview invitations
-- interview scheduling or interview changes
-- job application responses
-- requests from recruiters
+- Search every connected mailbox configured for the morning brief.
+- This can include:
+    * multiple Gmail accounts
+    * multiple Outlook accounts
+    * multiple Zoho accounts
+    * future email providers
+
+- Always preserve the mailbox/account identity internally.
+- When useful, display the account so the user knows which mailbox produced
+  the message.
+
+- Never merge messages in a way that makes their originating account unclear.
+
+5. EMAIL SEARCH
+
+For each connected mailbox:
+
+- Search the applicable date/time window.
+- Include Inbox and other relevant mail folders.
+- Include Spam/Junk because legitimate high-value messages can be misclassified.
+- Do not automatically include Trash unless the user has configured this.
+- Continue pagination until the complete requested time window has been
+  inspected.
+
+Do not rely only on a short recent-message cache for the morning brief.
+
+6. EMAIL CLASSIFICATION
+
+The goal is not simply to identify "important" emails.
+
+Classify emails into useful attention categories:
+
+A. ACTION REQUIRED
+  The user needs to do something.
+
+B. RESPONSE REQUIRED
+  The user needs to reply.
+
+C. DEADLINE / TIME SENSITIVE
+  There is a date/time/deadline that matters.
+
+D. AWARENESS
+  The user should know about it but does not need to act.
+
+E. WAITING / FOLLOW-UP
+  The user is waiting for somebody else, or somebody else is waiting for
+  the user.
+
+F. BLOCKING / UNBLOCKING
+  The email affects whether a task or project can proceed.
+
+G. LOW PRIORITY
+  Relevant but not urgent.
+
+H. PROMOTIONAL / NEWSLETTER
+  Usually omit from the action sections unless explicitly configured as a
+  newsletter/news source.
+
+Important email signals include:
+- job applications
+- interview invitations
+- interview scheduling
+- recruiter messages
 - document requests
 - verification requests
 - deadlines
-- meetings or appointments
-- requests that require a response
-- requests for work or deliverables
-- messages from important people
-- account/security alerts
+- appointment changes
+- work requests
+- requests from important people
+- school/academic tasks
+- account/security notifications
 - payment/billing issues
-- messages related to active projects
-- messages that unblock or block current work
-- school/academic deadlines
-- travel or appointment changes
-- time-sensitive requests
-- meaningful updates to an existing conversation
-
-Normally exclude:
-- marketing
-- ordinary newsletters
-- generic promotional email
-- routine receipts unless relevant to an active task
-- social notifications
-- low-value automated notifications
+- project-related messages
+- messages that unblock work
+- messages that create a dependency
+- meaningful updates in an existing conversation
+- messages where the user has been waiting for a response
 
 Do not classify by folder alone.
-An email in Spam can still be high priority.
 
-For every selected important email, determine:
-- sender
-- mailbox/account
-- subject
-- why it matters
-- whether action is required
-- required action
-- deadline/date/time
-- whether a reply is required
-- whether an attachment/document is relevant
-- whether it is blocking or unblocking a project
-- whether it is already covered by a previous real-time alert
+An email in Spam can be highly important.
 
-REAL-TIME ALERT DEDUPLICATION
-- The assistant may send immediate notifications when an important email
-  arrives.
-- If an email has already been sent as a real-time alert, do not repeat the
-  entire alert in the morning brief unless there is a meaningful reason to
-  remind the user again.
-- Instead, the morning brief may include a compact reference such as:
-    "Follow-up: Recruiter interview email from yesterday — still awaiting
-     your response."
-- If the user has already acted on the email, omit it unless there is a new
-  relevant development.
-- Do not suppress an email simply because it was previously alerted if the
-  email still requires action and the action remains overdue.
+7. REAL-TIME EMAIL ALERTS
 
-EMAIL OUTPUT
-Use:
+When an important email arrives:
 
-NEEDS YOU
-  <important email>
-  <why it matters>
-  <required action>
-  <deadline/date/time if applicable>
-  <mailbox/source if useful>
-  <[SPAM] if the message was found in spam>
+- The assistant may send an immediate notification to the configured channel.
+- If the user has already received a real-time alert for that email, do not
+  unnecessarily repeat the entire alert in the morning brief.
+- However, if the email remains unresolved, it MUST still appear somewhere in
+  the morning brief as a pending/follow-up item.
+- Never hide an unresolved item merely because it was previously alerted.
 
-Keep each item concise and actionable.
+Example:
+  "Follow-up: Recruiter email from yesterday — still awaiting your response."
 
-If an important email has no required action, say so:
-  "No action required."
+8. TASK COVERAGE
 
-If the email requires a reply, say:
-  "Action: Reply."
+The morning brief MUST show the user's complete relevant task state.
 
-If a document is requested, say:
-  "Action: Send <document>."
+Do NOT hide the backlog merely because some tasks are lower priority.
 
-Do not invent missing details.
+The task portion should be divided into clear sections:
 
-TASKS
-Include open tasks from the user's task system / internal task store.
+BACKLOG
+  Tasks that are still open but do not necessarily require action today.
 
-Prioritize:
-1. overdue tasks
-2. blocked tasks
-3. tasks due today
-4. tasks with meaningful dependencies
-5. high-priority tasks
-6. other relevant open tasks
+OVERDUE
+  Tasks that should already have been completed but remain incomplete.
 
-The brief should identify the user's most important work rather than dump the
-entire task backlog.
+DUE TODAY
+  Tasks due today.
 
-TODAY'S ONE THING
-Select exactly one primary focus when meaningful data exists.
+DUE SOON
+  Tasks coming up within the configured near-term window.
+
+HIGH PRIORITY
+  High-priority open tasks regardless of their due date.
+
+BLOCKED
+  Tasks that cannot proceed because of a dependency, missing information,
+  person, decision, document, access, or other blocker.
+
+WAITING ON OTHERS
+  Tasks where the user's next progress depends on another person or external
+  response.
+
+RECENTLY CHANGED
+  Tasks whose status, priority, due date, or other important property changed
+  recently.
+
+COMPLETED / RECENTLY COMPLETED
+  Include only when useful for understanding progress or recent changes.
+  Do not dump the full completion history.
+
+9. TASK COMPLETENESS
+
+The assistant must NOT assume an old task is completed simply because it has
+not been mentioned recently.
+
+If the task is still open in the task system or internal state:
+- keep it visible in the appropriate section.
+
+If the assistant has contradictory information:
+- surface the uncertainty.
+- Do not silently mark the task complete.
+
+Example:
+  "Momentum Logistics server testing — still marked open; yesterday you said
+   you were waiting for the OTP."
+
+10. BACKLOG BEHAVIOR
+
+Backlog is an intentional part of the morning brief.
+
+The assistant should show the user what remains unfinished so the user can
+review it.
+
+For each backlog section:
+- show the task
+- show project/context when useful
+- show age or due date when useful
+- show priority when available
+
+Do not flood the user with unnecessary technical metadata.
+
+The purpose is:
+  "Here is everything still on your plate."
+
+11. DAILY PRIORITY
+
+After showing the complete task picture, identify:
+
+TODAY'S PRIORITIES
+
+This is NOT a replacement for the full backlog.
+
+It is an additional prioritization layer.
+
+Show:
+- highest priority
+- second priority when meaningful
+- other important items
+
+Do not collapse the backlog into these priorities.
+
+12. PRIMARY FOCUS
+
+Select one primary focus for the day when enough information exists.
 
 The primary focus should generally be:
-- the highest-value overdue item,
-- or the most important blocked item that can be progressed,
-- or the most important task due today,
-- or the most strategically important active project/task.
+- a major overdue task
+- a major blocker that can be resolved
+- an urgent deadline
+- the most important task due today
+- the most strategically important active project
 
-Do not choose a trivial task merely because it is due sooner.
+The primary focus is only a recommendation.
 
-When a task is blocked, express:
-  <task> — blocked on <dependency/person>
+The user still sees every task in the complete task sections.
 
-If there is no meaningful primary focus, omit this section.
+13. SMALL TASKS
 
-REMINDERS
-Include reminders that are:
-- due today
-- overdue
-- time-sensitive
-- related to today's main priority
-- related to important people or unresolved follow-ups
+Include small tasks too.
 
-Do not list every future reminder.
+Do not exclude a task merely because it is small, low priority, or easy.
 
-BLOCKERS
-For every meaningful blocker include:
+The purpose of the morning brief is completeness.
+
+Use priority and sectioning to make important items easy to distinguish rather
+than hiding smaller tasks.
+
+14. REMINDERS
+
+Show:
+- overdue reminders
+- reminders due today
+- reminders due soon
+- reminders associated with important tasks
+- reminders associated with important people/follow-ups
+- reminders connected to deadlines or blockers
+
+Do not show every distant future reminder unless the user has configured that
+behavior.
+
+15. BLOCKERS
+
+For every meaningful blocker show:
 - what is blocked
 - why it is blocked
 - what it is waiting for
-- who it is waiting on, if known
-- the next follow-up/action, if known
+- who it is waiting on
+- next known follow-up
+- related project/task when available
 
 Example:
-  Momentum Logistics testing
-  Waiting for Paul's OTP
-  Follow up with Paul at 10:00
 
-Do not invent a person or dependency.
+  Momentum Logistics
+  Server testing
+  BLOCKED — waiting for Paul's OTP
+  Next action: follow up with Paul at 10:00
 
-CALENDAR
-When calendar integration is available, include:
-- important meetings today
+Do not invent a dependency or person.
+
+16. WAITING ON OTHERS
+
+Create a dedicated section for work that the user cannot complete until
+someone else responds.
+
+Examples:
+- waiting for OTP
+- waiting for approval
+- waiting for document
+- waiting for recruiter response
+- waiting for client feedback
+- waiting for meeting confirmation
+
+This section is distinct from BLOCKED when the distinction is meaningful.
+
+17. CALENDAR
+
+When calendar integration is connected, include the user's scheduled day.
+
+Show:
+- all meaningful meetings/events today
+- important appointments
+- deadlines represented as calendar events
 - meetings requiring preparation
-- meetings with relevant documents/tasks
-- schedule conflicts
-- upcoming time-sensitive events
+- relevant conflicts
+- important events later today
+- important upcoming events when useful
 
-For meetings that need preparation, identify the preparation action when
-known.
+For each meaningful meeting include when useful:
+- time
+- event name
+- attendees
+- location/platform
+- preparation required
+- relevant project
+- relevant documents/tasks
+
+Do not claim to have checked a calendar if no calendar integration exists.
+
+18. PREPARATION
+
+If a meeting or event requires preparation based on known information:
 
 Example:
-  14:00 — Client call
-  Prepare: Review the proposal before 13:00
+  14:00 — Client meeting
+  Prepare: Review proposal and previous discussion before 13:30
 
-If calendar integration is not connected, omit the calendar section entirely.
-Never claim to have checked a calendar that is not connected.
+Only generate preparation requirements from available context.
 
-PROJECTS
-When project context is available, surface only projects with meaningful
-activity today:
-- active deadlines
-- blockers
-- important incoming requests
-- tasks that changed
-- meetings related to the project
+19. PROJECT OVERVIEW
 
-Do not dump the full project database.
+Show the user's active projects that currently matter.
 
-DAILY FOCUS
-When enough information is available, recommend how the user should approach
-the day.
+Do not show projects merely because they exist.
 
-Keep this grounded in existing tasks, reminders, calendar events, and project
+A project should appear when there is:
+- an overdue task
+- a task due today
+- a high-priority task
+- a blocker
+- a waiting dependency
+- an important email
+- a meaningful deadline
+- an upcoming meeting
+- a recent project update
+
+For each project, show only the information needed to understand its current
 state.
 
 Example:
-  FOCUS
-  Finish Momentum Logistics testing first. It is currently the highest-value
-  open item and is only waiting on Paul's OTP.
 
-Do not invent productivity advice that depends on unknown circumstances.
+  MOMENTUM LOGISTICS
+  Status: Blocked
+  Main task: Test server
+  Blocker: Waiting for OTP from Paul
+  Next action: Follow up at 10:00
 
-PERSONAL CONTEXT
-The assistant may eventually use the user's stored personal context,
-preferences, projects, relationships, work, education, and other approved
-context to determine relevance.
+20. PROJECT CHANGES
 
-Use personal context only to improve relevance and prioritization.
-Never expose private context merely to explain why something was selected.
+Highlight meaningful changes since the previous day:
+- task completed
+- task created
+- priority changed
+- task blocked
+- task unblocked
+- deadline changed
+- project status changed
+- important email received
+- important response received
 
-NEWS / EXTERNAL INTELLIGENCE
-News is OPTIONAL and should only appear when an approved news source/tool is
-configured.
+21. PERSONAL / CONTEXTUAL INFORMATION
 
-If a web/news search capability is available:
-- Look for major developments that are relevant to the user's known interests,
-  active projects, work, technology stack, or other explicitly configured
-  areas of relevance.
-- Prefer high-impact developments over generic headlines.
-- Only include news when it could reasonably affect the user's work, plans,
-  tools, deadlines, security, or decisions.
-- Example:
-    "Cloud Code: major service change announced. This is relevant because you
-     actively use Cloud Code."
-- Do not include generic news merely because it is popular.
-- Clearly distinguish factual news from interpretation.
-- Include the source/date internally where supported.
+Use approved user context, preferences, project context, relationships and
+other stored context to determine relevance.
 
-If no news/search capability is configured:
-- Do not pretend to have checked the news.
-- Omit the NEWS section entirely.
+Personal context should improve prioritization and relevance.
 
-NEWSLETTER SOURCES
-The user may designate specific email accounts, senders, folders, or
-newsletters as an approved source for morning-news intelligence.
+Do not expose sensitive internal context just because it influenced a ranking.
+
+22. NEWS / EXTERNAL INTELLIGENCE
+
+News is optional.
+
+If a configured web/news/search tool is available:
+- search for relevant developments that could affect:
+    * the user's work
+    * active projects
+    * technology stack
+    * companies/products the user relies on
+    * deadlines
+    * security
+    * important professional interests
+    * explicitly configured topics
+
+- Do NOT provide a generic news dump.
+- Only show news with a meaningful reason for appearing in this user's brief.
+- When possible, explain relevance briefly.
 
 Example:
-  "Use my TechCrunch newsletter inbox as my news source."
 
-Store that source as a configured newsletter/news source.
+  NEWS / WATCH
+  A major change to <technology> was announced.
+  Why it matters: you actively use this technology in <project/context>.
 
-When generating the morning brief:
-- Include relevant items from the configured newsletter source.
-- Do not automatically promote every newsletter item.
-- Extract only information likely to matter to the user's configured areas of
-  interest.
-- Keep newsletter-derived information clearly distinguishable from general
-  email requiring action.
+- Distinguish factual reporting from interpretation.
+- Do not invent relevance.
 
-MORNING BRIEF STRUCTURE
+If no search/news tool is available:
+- omit NEWS entirely.
+- never imply that the internet was checked.
+
+23. NEWSLETTER SOURCES
+
+The user may explicitly designate a mailbox, folder, sender, or newsletter as
+a trusted source for morning news.
+
+Example:
+  "Use my TechCrunch newsletter as my morning news source."
+
+Store this preference.
+
+When configured:
+- read relevant newsletter messages in the normal morning email window.
+- extract only genuinely relevant developments.
+- include them under NEWS or NEWSLETTER.
+- do not treat the newsletter as an action-required email unless the content
+  genuinely requires action.
+
+24. IMPORTANT EMAIL DETAIL
+
+For each important email surfaced in the morning brief include:
+
+- sender
+- subject
+- mailbox/account when useful
+- why it matters
+- action required
+- deadline/date/time when present
+- reply requirement
+- attachment/document requirement
+- Spam/Junk indicator when applicable
+
+Example:
+
+  RECRUITER — Interview availability
+  Gmail — Work
+  Action: Reply with your availability.
+  Deadline: Thursday 5 PM.
+  Found in: Spam
+
+25. MORNING BRIEF ORGANIZATION
+
+The morning brief should follow this broad structure:
 
 Good morning.
 
-TODAY'S ONE THING
-  <single most important focus>
+OVERVIEW
+  <one or two sentences giving the day's overall state>
 
-NEEDS YOU
-  <important email / action>
-  <important email / action>
+OVERDUE
+  <every relevant overdue task>
 
 TODAY
-  <important meetings, deadlines, or scheduled commitments>
+  <every task due today>
+  <today's important commitments>
 
-REMINDERS
-  <important reminder>
+HIGH PRIORITY
+  <high-priority open tasks>
+
+BACKLOG
+  <remaining open tasks grouped by project/category>
 
 BLOCKED
-  <blocker + dependency + person + next action>
+  <blocked work + dependency>
+
+WAITING ON OTHERS
+  <tasks awaiting another person/system>
+
+REMINDERS
+  <today's and overdue important reminders>
+
+EMAIL — NEEDS ATTENTION
+  <important emails requiring action or awareness>
+
+CALENDAR / SCHEDULE
+  <today's schedule>
 
 PROJECTS
-  <important project updates>
+  <meaningful project states>
 
-FOCUS
-  <recommended focus based strictly on the available facts>
+CHANGES
+  <important changes since the prior day>
+
+TODAY'S PRIORITIES
+  <ordered priorities>
+
+PRIMARY FOCUS
+  <one recommended major focus>
 
 NEWS
-  <only when external news/search is configured and relevant>
+  <relevant external developments, if configured>
 
 NEWSLETTER
-  <only when a newsletter source has been configured and relevant>
+  <relevant designated newsletter developments, if configured>
 
-Rules:
-- Omit any section that has nothing meaningful.
+26. SECTION RULES
+
+- The brief is intentionally comprehensive.
+- Do not omit a section simply because some information is low priority.
+- Instead, organize it by category and priority.
+- Omit only sections for which there is genuinely no relevant information.
 - Never write "(none)".
-- Never produce filler merely to make the brief longer.
-- Never invent tasks, emails, deadlines, meetings, people, news, or actions.
-- Keep the brief skimmable.
-- The most actionable information should appear first.
-- Prefer concrete dates and times.
-- Mention Spam explicitly when an important email was discovered there.
-- Distinguish clearly between "requires action" and "for awareness".
-- Do not automatically create calendar events, tasks, reminders, or replies
-  merely because the morning brief mentions them.
-- If the user asks to take action on something in the brief, process that as a
-  separate action request.
+- Never create filler content.
 
-ON-DEMAND INTERACTION
+27. ORDERING WITHIN SECTIONS
+
+Within each section:
+- urgent/high-impact items first
+- overdue before future
+- deadlines before non-deadline tasks
+- blocked/at-risk before normal tasks
+- highest priority before lower priority
+
+But do not move an item into another section solely because of ranking.
+
+28. DUPLICATION
+
+Avoid pointless duplication.
+
+Example:
+- An overdue blocked task should appear in OVERDUE and BLOCKED if both sections
+  provide useful information.
+- In the second section, keep the item concise.
+- Do not copy the entire description twice.
+
+29. COMPLETENESS VS PRIORITIZATION
+
+The morning brief has TWO goals:
+
+A. COMPLETENESS
+   The user should be able to see everything important and everything still
+   outstanding.
+
+B. PRIORITIZATION
+   The user should immediately understand what deserves attention first.
+
+Never sacrifice completeness merely to make the brief shorter.
+
+Never sacrifice readability merely to make the brief complete.
+
+Use clear sections, bullets, priorities, and concise descriptions to accomplish
+both.
+
+30. USER ACTION AFTER BRIEF
+
+The morning brief is intended to become the user's starting point for the day.
+
+After receiving it, the user may say:
+- "I completed #1 and #3."
+- "Move Momentum Logistics to tomorrow."
+- "That task is no longer important."
+- "Make this the top priority."
+- "Ignore this one."
+- "I'm still waiting for Paul."
+- "Paul sent the OTP."
+- "Add a reminder for this at 2."
+- "Move everything from Project A below Project B."
+
+Interpret these as normal action requests and update the underlying task,
+project, reminder, calendar, or memory state.
+
+31. ON-DEMAND MORNING BRIEF
+
 When the user says:
-  "Good morning"
-  "Morning brief"
-  "What's my morning looking like?"
-  "What's important today?"
-or an equivalent phrase:
-- Generate the current brief immediately.
-- Use the current local time and date.
-- Apply the previous-calendar-day 00:00 → current-time email window.
-- Do not wait for the scheduled morning-brief time.
+- "Good morning"
+- "Morning brief"
+- "Give me my morning brief"
+- "What's my morning looking like?"
+- "What's on my plate today?"
+- "What do I need to deal with today?"
+- or an equivalent request:
 
-SCHEDULED INTERACTION
+Generate the COMPLETE current brief immediately.
+
+Do not wait for the scheduled brief time.
+
+Use:
+- current date/time
+- current task state
+- current reminders
+- current project state
+- current calendar state if connected
+- current email window
+- current approved external information
+
+32. SCHEDULED MORNING BRIEF
+
 When the scheduled automation fires:
-- Generate the same brief using the current date/time.
-- Deliver it to the configured notification channel.
-- Mark the relevant brief/alert state so the same email is not needlessly
-  re-alerted.
+- generate the same complete brief
+- use current state at execution time
+- send it through the configured notification channel
+- preserve alert/notification state for email deduplication
 
-BRIEF SCHEDULE MANAGEMENT
-If the user asks to change, pause, resume, or remove the morning brief:
-- Treat that as an automation-management request.
-- Update the stored schedule.
-- Confirm the new schedule using the user's local timezone.
+33. AUTOMATION MANAGEMENT
 
-OUTPUT STYLE
-- Be concise but useful.
-- Sound like a personal executive assistant.
-- Prioritize actionability.
-- Avoid generic motivational language.
-- Avoid repeating information across sections.
-- Use short bullets rather than long paragraphs.
-- If an item is urgent, say so clearly.
-- If an email was previously alerted but still requires action, label it as a
-  follow-up rather than pretending it is new.`,
+When the user asks to change the morning brief schedule:
+- update the schedule
+- update timezone if explicitly changed
+- enable/disable the automation as requested
+- confirm the resulting schedule
+
+34. DATA FRESHNESS
+
+For the morning brief, prefer live/current data where the underlying service
+supports it.
+
+Do not build the brief entirely from stale cached data if fresh data is
+available.
+
+If a source is unavailable:
+- say which category could not be refreshed when necessary
+- do not silently invent or reuse stale information as if it were current
+
+35. FACTUAL SAFETY
+
+Never invent:
+- tasks
+- deadlines
+- meetings
+- emails
+- people
+- project status
+- news
+- blockers
+- reminders
+- completion status
+
+All claims must originate from available structured data, authorized tools,
+approved context, or explicitly retrieved external sources.
+
+36. OUTPUT STYLE
+
+The morning brief should feel like a complete personal command center.
+
+It should be:
+- comprehensive
+- structured
+- practical
+- easy to scan
+- explicit about unfinished work
+- explicit about priorities
+- explicit about blockers
+- explicit about what needs attention
+- concise at the sentence level
+
+Do not turn the brief into a motivational speech.
+
+Do not hide information merely to keep the response short.
+
+The user's purpose is to begin the day fully informed and then decide what to
+complete, defer, reprioritize, delegate, or mark as done.`,
   },
   draft_reply: {
     title: "Draft a reply",
