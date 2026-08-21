@@ -11,7 +11,18 @@ import {
   TokenRevoked,
 } from "./connectors/gmail/oauth";
 import { getProfile, listMessages, getMessage, GmailApiError } from "./connectors/gmail/client";
-import { normalizeMessage } from "./connectors/gmail/normalize";
+import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
+import { runTask } from "./ai/registry";
+import { prefilter } from "./lib/email/prefilter";
+import {
+  CLASSIFICATION_SYSTEM_PROMPT,
+  CLASSIFIER_VERSION,
+  buildClassificationInput,
+  parseClassifierResponse,
+  applyFloor,
+  applyOverrides,
+  type Importance,
+} from "./lib/email/classification";
 import { sendMessage } from "./channels/telegram";
 
 /** How far back a sync looks. Gmail's `q` syntax. */
@@ -179,6 +190,172 @@ export const deepSearch = internalAction({
   },
 });
 
+/** Used when the model call fails outright or its response fails to parse. */
+const FALLBACK_CLASSIFICATION: Importance = {
+  importance: "NORMAL",
+  confidence: 0,
+  whyItMatters: "Classifier response could not be parsed; defaulted to NORMAL.",
+  category: "OTHER",
+  deadlineMentioned: null,
+  requestedOfYou: null,
+  suggestedAction: "READ",
+  projectHint: null,
+};
+
+/**
+ * Runs once for every NEWLY stored message. Never throws — a classification
+ * failure must not stop the rest of the sync loop or drop the message from
+ * emailMessages; the row keeps its data even if this writes NORMAL onto it.
+ */
+async function classifyMessage(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  emailMessageId: Id<"emailMessages">,
+  normalized: NormalizedEmail,
+): Promise<void> {
+  try {
+    const [isNoise, person, projects] = await Promise.all([
+      ctx.runQuery(internal.model.noiseSenders.matches, {
+        userId,
+        fromAddress: normalized.fromAddress,
+      }),
+      ctx.runQuery(internal.model.people.getByEmail, {
+        userId,
+        email: normalized.fromAddress,
+      }),
+      ctx.runQuery(internal.model.projects.listActive, { userId, limit: 25 }),
+    ]);
+
+    const haystack = `${normalized.subject ?? ""} ${normalized.bodyText ?? ""}`.toLowerCase();
+    const projectNames = projects.map((p) => p.name);
+    const projectKeywordHit = projectNames.some((name) => haystack.includes(name.toLowerCase()));
+
+    const senderImportance = person?.importance as
+      | "CRITICAL"
+      | "HIGH"
+      | "NORMAL"
+      | "LOW"
+      | undefined;
+
+    const verdict = prefilter({
+      isNoiseSender: isNoise,
+      labelIds: normalized.labelIds,
+      hasListUnsubscribe: Boolean(normalized.listUnsubscribe),
+      senderImportance,
+      projectKeywordHit,
+    });
+
+    if (verdict.skip) {
+      await ctx.runMutation(internal.model.emailMessages.recordClassification, {
+        emailMessageId,
+        importance: verdict.importance,
+        classification: { prefilterReason: verdict.reason },
+        classifierVersion: CLASSIFIER_VERSION,
+      });
+      return;
+    }
+
+    const result = await runTask("CLASSIFY_IMPORTANCE", {
+      system: CLASSIFICATION_SYSTEM_PROMPT,
+      input: buildClassificationInput({
+        fromAddress: normalized.fromAddress,
+        fromName: normalized.fromName,
+        subject: normalized.subject,
+        isInSpam: normalized.labelIds.includes("SPAM"),
+        spf: normalized.authResults?.spf,
+        dkim: normalized.authResults?.dkim,
+        dmarc: normalized.authResults?.dmarc,
+        senderImportance: person?.importance,
+        knownProjects: projectNames,
+      }),
+      // The body reaches the model ONLY here — never merged into `input`.
+      untrusted: [{ label: "email_body", content: normalized.bodyText ?? "(no body)" }],
+      maxOutputTokens: 512,
+    });
+
+    const parsed = parseClassifierResponse(result.text);
+    let classification = parsed.ok && parsed.value ? parsed.value : FALLBACK_CLASSIFICATION;
+
+    if (!parsed.ok) {
+      console.warn(`classify_parse_failed emailMessageId=${emailMessageId}: ${parsed.error}`);
+    }
+
+    if (verdict.floor) classification = applyFloor(classification, verdict.floor);
+
+    classification = applyOverrides(classification, {
+      labelIds: normalized.labelIds,
+      dmarc: normalized.authResults?.dmarc,
+      subject: normalized.subject,
+      bodyText: normalized.bodyText,
+    });
+
+    await ctx.runMutation(internal.model.emailMessages.recordClassification, {
+      emailMessageId,
+      importance: classification.importance,
+      classification,
+      classifierVersion: CLASSIFIER_VERSION,
+    });
+  } catch (error) {
+    console.warn(
+      `classify_failed emailMessageId=${emailMessageId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    await ctx.runMutation(internal.model.emailMessages.recordClassification, {
+      emailMessageId,
+      importance: FALLBACK_CLASSIFICATION.importance,
+      classification: FALLBACK_CLASSIFICATION,
+      classifierVersion: CLASSIFIER_VERSION,
+    });
+  }
+}
+
+/**
+ * Classify mail that synced BEFORE this phase existed.
+ *
+ * `classifyMessage` only fires for newly-created rows, so without this the
+ * phase would silently apply to future mail only and the existing corpus
+ * would stay unlabelled forever — invisible, because nothing errors. Step 7's
+ * `unclassified` query exists for exactly this and had no caller.
+ *
+ * Bounded per invocation: this is one model call per message, so it walks a
+ * batch and reports what is left rather than looping until done.
+ */
+export const classifyBacklog = internalAction({
+  args: { accountId: v.id("connectedAccounts"), limit: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ classified: number; remaining: number }> => {
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: args.accountId,
+    });
+    if (!account) throw new Error("account not found");
+
+    const pending = await ctx.runQuery(internal.model.emailMessages.unclassified, {
+      accountId: args.accountId,
+      limit: args.limit ?? 10,
+    });
+
+    for (const message of pending) {
+      await classifyMessage(ctx, account.userId, message._id, {
+        fromAddress: message.fromAddress,
+        fromName: message.fromName,
+        subject: message.subject,
+        bodyText: message.bodyText,
+        snippet: message.snippet,
+        labelIds: message.labelIds,
+        listUnsubscribe: message.listUnsubscribe,
+        authResults: message.authResults,
+      } as NormalizedEmail);
+    }
+
+    const left = await ctx.runQuery(internal.model.emailMessages.unclassified, {
+      accountId: args.accountId,
+      limit: 50,
+    });
+
+    return { classified: pending.length, remaining: left.length };
+  },
+});
+
 export const syncAccount = internalAction({
   args: { accountId: v.id("connectedAccounts") },
   handler: async (ctx, args) => {
@@ -223,7 +400,10 @@ export const syncAccount = internalAction({
           ...row,
         });
         stored++;
-        if (result.created) fresh++;
+        if (result.created) {
+          fresh++;
+          await classifyMessage(ctx, account.userId, result.emailMessageId, normalized);
+        }
       }
 
       await ctx.runMutation(internal.model.connectedAccounts.markSynced, {

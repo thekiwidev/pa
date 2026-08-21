@@ -212,3 +212,9 @@ describe("planningSystemPrompt — no redundant context writes", () => {
     );
   });
 });
+  test("states that email classification is a stored label, not a live judgment call", () => {
+    const prompt = planningSystemPrompt(base);
+    expect(prompt).toContain("(CRITICAL|HIGH|NORMAL|LOW|IGNORE)");
+    expect(prompt).toContain("not a tool you call");
+    expect(prompt).toContain("no ability to send, reply, or delete");
+  });

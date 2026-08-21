@@ -73,7 +73,12 @@ export default defineSchema({
     notes: v.optional(v.any()),
   })
     .index("by_user", ["userId"])
-    .index("by_email", ["emails"]), // array index: matches any element
+    // NOTE: this indexes the whole `emails` ARRAY value, not its elements —
+    // Convex has no element-wise array index. It is therefore not usable for
+    // address -> person lookup; see model/people.ts getByEmail, which scans
+    // by_user instead. Kept because removing an index needs a migration and
+    // it is harmless; do not build on it.
+    .index("by_email", ["emails"]),
 
   tasks: defineTable({
     userId: v.id("users"),

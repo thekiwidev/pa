@@ -196,3 +196,38 @@ export const getById = internalQuery({
   args: { emailMessageId: v.id("emailMessages") },
   handler: async (ctx, args) => await ctx.db.get("emailMessages", args.emailMessageId),
 });
+
+export const recordClassification = internalMutation({
+  args: {
+    emailMessageId: v.id("emailMessages"),
+    importance: v.string(),
+    classification: v.any(),
+    classifierVersion: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch("emailMessages", args.emailMessageId, {
+      importance: args.importance,
+      classification: args.classification,
+      classifiedAt: Date.now(),
+      classifierVersion: args.classifierVersion,
+      processedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Bounded scan of one account's timeline, filtered to unprocessed rows in
+ * code — same style as `search` above. Not a new index: `processedAt` is
+ * absent on far more old rows than new ones would ever justify indexing.
+ */
+export const unclassified = internalQuery({
+  args: { accountId: v.id("connectedAccounts"), limit: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("emailMessages")
+      .withIndex("by_account_received", (q) => q.eq("accountId", args.accountId))
+      .order("desc")
+      .take(200);
+    return rows.filter((m) => m.processedAt === undefined).slice(0, Math.min(args.limit, 50));
+  },
+});

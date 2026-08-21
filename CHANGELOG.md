@@ -9,6 +9,44 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Phase 4 — Importance classification (built)
+
+Every newly-synced email gets `CRITICAL|HIGH|NORMAL|LOW|IGNORE`, a category,
+and a one-line rationale. First phase where a model reads email content, so
+it is the first real exercise of invariant I-2: the body reaches the model
+only through `runTask`'s `untrusted` channel, and `ImportanceSchema` has no
+field capable of expressing an action — injection into the classifier is
+inert by construction, asserted in `tests/adversarial/prompt-injection.test.ts`.
+
+A deterministic pre-filter runs first (`convex/lib/email/prefilter.ts`):
+noise senders, bulk mail from non-HIGH senders, and promotions with no
+project hit never reach the model at all. **Measured on the real mailbox:
+12 of 13 messages skipped the model — 92% elimination against the doc's ≥60%
+target.** A `CRITICAL` sender floors the result to HIGH without skipping.
+
+Deterministic overrides run after the model, not as prompt instructions: a
+message in SPAM that fails DMARC and requests credentials, payment or urgent
+action is forced to `IGNORE`/`PHISHING_SUSPECTED` regardless of what the
+model returned. A parse failure downgrades to `NORMAL` and logs; it never
+drops the message or stops the sync loop.
+
+Also added, not in the doc's manifest: **`gmail.classifyBacklog`**. Step 7
+adds an `unclassified` query with no caller, so without this the phase would
+apply only to mail arriving after it shipped and the existing corpus would
+stay unlabelled — silently, since nothing errors. Backfilled all 13 existing
+messages.
+
+### Fix — `people.by_email` never worked the way schema.ts claimed
+
+`schema.ts` has said since Phase 0 that `by_email` is an "array index:
+matches any element". Convex indexes the whole array VALUE — there is no
+element-wise array index — so `.eq("emails", "a@b.com")` does not even
+typecheck. Phase 4's pre-filter is the first code that needed address ->
+person lookup, which is how it surfaced. `people.getByEmail` now does a
+bounded scan by user and filters in code, matching what `upsert` above it
+already does; the schema comment is corrected rather than left to mislead
+the next reader.
+
 ### Phase 2B — User context (built)
 
 Facts about the owner — role, qualifications, preferences, vocabulary —

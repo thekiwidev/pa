@@ -9,6 +9,37 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-21 — Convex has no element-wise array index, and schema.ts claimed otherwise for five phases
+
+`people.by_email` was declared on `emails: v.array(v.string())` with the
+comment "array index: matches any element". That is not a thing Convex does —
+an index on an array field indexes the whole array value, so the only query
+it supports is "whose email list is EXACTLY this list". `.eq("emails", addr)`
+fails to typecheck, which is how it finally surfaced: Phase 4's pre-filter was
+the first code that ever needed address -> person.
+
+Fixed by scanning `by_user` and filtering in code (same shape as
+`people.upsert`), and by correcting the comment. The index is left in place —
+removing one needs a migration and it is harmless — with a note not to build
+on it.
+
+**Generalizable:** a wrong comment on a schema survives exactly as long as
+nobody writes the query it describes. Five phases, in this case.
+
+## 2026-08-21 — A pre-filter that skips 92% is doing its job, but read what it skips
+
+Measured on the real mailbox: 12 of 13 messages never reached the model
+(target was 60%). Cost-wise excellent. Worth understanding the trade though:
+bulk mail from an unknown sender is classified LOW **without being read**, so
+a phishing message wearing a `List-Unsubscribe` header is filed LOW rather
+than `PHISHING_SUSPECTED` — the SPAM+DMARC override never gets a chance to
+run, because the override runs *after* a model call the pre-filter prevented.
+
+That is defensible (the harm from an unread phishing mail is low; the harm
+the plan cares about is a missed recruiter mail, which has no
+List-Unsubscribe and does reach the model). But if Phase 5's alerts ever feel
+like they are missing something, this ordering is the first place to look.
+
 ## 2026-08-21 — A debug harness that diverges from production invents bugs
 
 `debug:planOnly --execute` called `converse()` without first persisting the
