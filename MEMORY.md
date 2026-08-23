@@ -9,6 +9,94 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-23 — A document's ALTITUDE is part of its contract
+
+`draft_reply` was a good skill used at the wrong height. It describes how to
+present a draft *to the user in chat*; `tools/router.ts` used it as the system
+prompt for writing the *email body*. The model followed it faithfully — and
+its §16 presentation block ("Draft reply / To: / Subject:") plus §17's "Please
+review the draft" were emailed verbatim to a real recipient.
+
+Nothing failed. The approval gate bound a hash of exactly the bytes that were
+sent, which is precisely what it promises. **An integrity mechanism cannot
+tell you the payload is the wrong KIND of thing** — it only tells you nobody
+changed it. Invariant 4 is not a substitute for validating what is in the box.
+
+Three things kept it invisible for two days, and each is a general lesson:
+
+- **The preview echoed the payload.** `renderOne` printed the same string that
+  was stored as `bodyText`, so the corruption arrived formatted to look like a
+  correct draft UI. A review step that renders the artefact THROUGH the same
+  bug it is meant to catch is not a review step. The body now renders on the
+  card from the fields, by code.
+- **The preview was capped at 1500 chars** while the send was not. Never show
+  the user less than what an approval binds.
+- **The dead fallback looked like a safety net.** `DRAFT_REPLY_FALLBACK` was
+  correct and unreachable: `getEffective` returns `own ?? DEFAULT_SKILLS[name]`
+  and the default always exists, so `?? FALLBACK` never fired. A `??` whose
+  left side is itself a `??` chain is usually dead — check.
+
+Generalisable: when one document is read at two altitudes, split it, and make
+each default skill NAME ITS READER in a comment. See also 2026-08-21, where
+the failure was a skill with no reader at all; this is the same class one turn
+further on.
+
+## 2026-08-23 — You get ONE batch of tool calls per message
+
+Discovered while verifying the fix above against the live deployment, and
+invisible to every unit test.
+
+Asked to "draft a reply to the most recent GitHub email", the planner emitted
+`email.search` — sensible in isolation — and then had no second turn in which
+to draft. The compose pass, following `draft_reply`, duly *wrote a draft in
+prose*: correct-looking, with a `[Your Name]` placeholder, no draft row, no
+approval, and no [Send] button. Indistinguishable from the real thing at a
+glance.
+
+Two structural consequences:
+
+- A tool that needs a lookup should do the lookup ITSELF.
+  `email.create_draft` already accepted `senderOrSubject` for this reason; the
+  skill just never said to use it. Now it does, explicitly, with the
+  one-batch constraint spelled out as the reason.
+- Skills are matched by keyword, so "draft a reply to that email" pulls in
+  BOTH `check_email` and `draft_reply`, whose procedures disagree about which
+  tool comes first. Precedence is now stated in both skills and in the
+  planning prompt: follow the skill matching the ACTION requested, not the
+  topic mentioned.
+
+Also worth keeping: three successive prompt edits failed to stop the search;
+what fixed it was stating precedence in the skill that was losing. And the
+planner is `gemini-3.5-flash` on CHEAP_STRUCTURED — it is genuinely
+non-deterministic, so one `planOnly` sample proves nothing. Check `auditLogs`
+for what actually ran.
+
+## 2026-08-23 — Telegram truncation must happen AFTER conversion
+
+The "asterisks everywhere on long messages" report had a precise mechanism.
+`sendMessage` sliced the raw markdown at 4096 and converted to HTML
+afterwards, so a cut landing inside `**` produced an unbalanced tag; Telegram
+rejects the whole message with a 400 on unbalanced tags; the catch block
+retried with no `parse_mode`; and the user got the entire message with every
+marker visible. Short messages were fine, long ones were not — which is
+exactly how it was described and why it looked intermittent.
+
+Conversion also GROWS text (`&` -> `&amp;`, plus tags), so trimming to fit
+before converting cannot be correct even in principle.
+
+Retiring MarkdownV2 was overdue for a separate reason: of its eighteen
+specials only `>` overlaps HTML's three, so switching removed seventeen
+opportunities to forget an escape. The brand survives the move
+(`EscapedMarkdown` -> `TelegramHtml`) because the brand was never about the
+syntax — it is about making "forgot to escape" a compile error.
+
+One more thing the fix revealed: `markdownToTelegramHtml` had NO rule for
+headings, bullets, rules, blockquotes or strikethrough. `***` matched the
+italic rule and became `<i>*</i>`. Absence of a rule is not neutral — another
+rule will claim the syntax.
+
+---
+
 ## 2026-08-21 — A configuration system is only real where something reads it
 
 `skills` shipped with three defaults, a full tool surface, chat editing and

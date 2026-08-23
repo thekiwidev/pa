@@ -3,8 +3,8 @@ import { internal, components } from "./_generated/api";
 import { v } from "convex/values";
 import { RateLimiter, HOUR } from "@convex-dev/rate-limiter";
 import { sendCard, editCard, sendMessage, type InlineButton } from "./channels/telegram";
-import { escapeMarkdownV2, alreadyEscaped } from "./lib/telegram/markdown";
-import type { EscapedMarkdown } from "./lib/telegram/markdown";
+import { escapeTelegramHtml, alreadyHtml } from "./lib/telegram/html";
+import type { TelegramHtml } from "./lib/telegram/html";
 import { formatInstant } from "./lib/time";
 import { DEDUP_WINDOW_MS } from "./model/notifications";
 
@@ -48,7 +48,7 @@ export interface CardEmail {
 }
 
 export interface ComposedCard {
-  text: EscapedMarkdown;
+  text: TelegramHtml;
   buttons: InlineButton[][];
 }
 
@@ -67,47 +67,50 @@ const IMPORTANCE_ICON: Record<CardEmail["importance"], string> = {
  * a glance at Telegram needs to answer "does this need me today".
  *
  * Every untrusted or semi-trusted string -- subject, sender name, the
- * classifier's free-text rationale -- is escaped via escapeMarkdownV2
+ * classifier's free-text rationale -- is escaped via escapeTelegramHtml
  * exactly once, here. channels/telegram.ts never escapes anything; this is
  * the only place that can get it wrong, which is the point.
  */
 export function composeCard(email: CardEmail, timezone: string): ComposedCard {
   const icon = IMPORTANCE_ICON[email.importance];
   // Escape the COMPOSED string, not the parts. Escaping name and address
-  // separately left the literal angle brackets around the address
-  // unescaped, and `>` is MarkdownV2's blockquote marker — Telegram
-  // rejected the whole sendCard call with "Character '>' is reserved".
+  // separately once left the literal angle brackets around the address
+  // unescaped and Telegram rejected the whole call. In HTML mode "<" is
+  // still the one character that must not slip through, so the lesson holds
+  // even though the syntax changed.
   const from = email.fromName
-    ? escapeMarkdownV2(`${email.fromName} <${email.fromAddress}>`)
-    : escapeMarkdownV2(email.fromAddress);
+    ? escapeTelegramHtml(`${email.fromName} <${email.fromAddress}>`)
+    : escapeTelegramHtml(email.fromAddress);
 
-  const header = [`${icon} ${email.importance} · ${escapeMarkdownV2(email.accountLabel)}`];
+  const header = [
+    `<b>${icon} ${email.importance}</b> · ${escapeTelegramHtml(email.accountLabel)}`,
+  ];
   if (email.isSpam) header.push("⚠️ found in SPAM");
 
   const lines = [
     header.join("  ·  "),
     "",
-    `From:     ${from}`,
-    `Subject:  ${escapeMarkdownV2(email.subject ?? "(no subject)")}`,
+    `<b>From:</b>     ${from}`,
+    `<b>Subject:</b>  ${escapeTelegramHtml(email.subject ?? "(no subject)")}`,
   ];
 
   if (email.whyItMatters) {
-    lines.push("", "Why it matters:", escapeMarkdownV2(email.whyItMatters));
+    lines.push("", "<b>Why it matters:</b>", escapeTelegramHtml(email.whyItMatters));
   }
 
   if (email.deadlineMentioned) {
     const ms = Date.parse(email.deadlineMentioned);
     const formatted = Number.isNaN(ms)
-      ? escapeMarkdownV2(email.deadlineMentioned)
-      : escapeMarkdownV2(formatInstant(ms, timezone));
-    lines.push("", `Deadline mentioned: ${formatted}`);
+      ? escapeTelegramHtml(email.deadlineMentioned)
+      : escapeTelegramHtml(formatInstant(ms, timezone));
+    lines.push("", `<b>Deadline mentioned:</b> ${formatted}`);
   }
 
   const id = email.emailMessageId;
   return {
-    // Every interpolated value above went through escapeMarkdownV2 and the
-    // literals joining them (newlines, "From:", "·") are non-special.
-    text: alreadyEscaped(lines.join("\n")),
+    // Every interpolated value above went through escapeTelegramHtml; the
+    // literals joining them (newlines, the <b> tags, "·") are ours.
+    text: alreadyHtml(lines.join("\n")),
     buttons: [
       [
         { text: "TL;DR", data: `${CALLBACK_PREFIX.TLDR}:${id}` },

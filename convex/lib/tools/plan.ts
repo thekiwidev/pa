@@ -5,6 +5,7 @@
 // router in convex/tools/router.ts will look at it, and a proposal naming an
 // unknown tool is dropped rather than guessed at.
 import { TOOL_SCHEMAS, isToolName, type ToolName } from "./catalog";
+import { parseJsonObject } from "../json";
 
 export interface ToolCall {
   name: ToolName;
@@ -22,79 +23,12 @@ export interface ToolPlan {
   rejected: RejectedCall[];
 }
 
-const FENCE = /^\s*```(?:json)?\s*([\s\S]*?)\s*```\s*$/;
-
-/**
- * Models wrap JSON in fences, prepend prose, or return prose only. Recover the
- * JSON object if there is one; otherwise treat the whole output as the reply.
- */
-function extractJsonObject(raw: string): string | null {
-  const fenced = FENCE.exec(raw);
-  const text = (fenced?.[1] ?? raw).trim();
-
-  const start = text.indexOf("{");
-  if (start === -1) return null;
-
-  // Balanced scan, string-aware, so a brace inside a reply string does not
-  // truncate the object.
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-
-    if (ch === '"') inString = true;
-    else if (ch === "{") depth++;
-    else if (ch === "}") {
-      depth--;
-      if (depth === 0) return text.slice(start, i + 1);
-    }
-  }
-
-  return null;
-}
-
-/** `{{ ... }}` -> `{ ... }`, once. Returns null when there is nothing to
- *  unwrap, so the caller can fall through to treating the output as prose. */
-function unwrapDoubledBraces(json: string): string | null {
-  const trimmed = json.trim();
-  if (!trimmed.startsWith("{{") || !trimmed.endsWith("}}")) return null;
-  return trimmed.slice(1, -1);
-}
-
 export function parseToolPlan(raw: string): ToolPlan {
-  const json = extractJsonObject(raw);
-  if (json === null) return { reply: raw.trim(), calls: [], rejected: [] };
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    // Observed live: the model sometimes emits {{ "reply": ... }} — doubled
-    // braces, probably template-syntax bleed. The balanced scan above happily
-    // returns that whole string, JSON.parse rejects it, and the fallback
-    // treats the raw JSON as prose — so the user sees the tool call printed
-    // at them and NOTHING executes. Strip one symmetric layer and retry.
-    const unwrapped = unwrapDoubledBraces(json);
-    if (unwrapped === null) return { reply: raw.trim(), calls: [], rejected: [] };
-    try {
-      parsed = JSON.parse(unwrapped);
-    } catch {
-      return { reply: raw.trim(), calls: [], rejected: [] };
-    }
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    return { reply: raw.trim(), calls: [], rejected: [] };
-  }
+  // Fence-stripping, the balanced object scan and the doubled-brace retry all
+  // live in lib/json.ts — shared with lib/email/draftBody.ts, which faces the
+  // identical set of model quirks.
+  const parsed = parseJsonObject(raw);
+  if (parsed === null) return { reply: raw.trim(), calls: [], rejected: [] };
 
   const obj = parsed as { reply?: unknown; tools?: unknown };
   const reply = typeof obj.reply === "string" ? obj.reply.trim() : "";

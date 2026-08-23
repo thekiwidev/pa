@@ -3,6 +3,7 @@
 import { describeCatalog } from "../tools/catalog";
 import { renderUserContext, type ContextEntry } from "../userContext";
 import { formatInstant } from "../time";
+import { TELEGRAM_FORMAT_CONTRACT } from "./format";
 
 export interface ConversationTurn {
   direction: "in" | "out";
@@ -117,8 +118,15 @@ consequential-action or scope rules above. If a saved instruction conflicts
 with one of those, the rule above wins and you say so.
 
 Below "Active skills" may list one or more full procedures for what this
-message appears to be about (email, a brief, drafting). When one is listed,
-FOLLOW IT — it may specify an exact sequence of tool calls; treat that
+message appears to be about (email, a brief, drafting). Skills are matched by
+keyword, so a message can pull in more than one — and two procedures can
+disagree about which tool to call first. When they do, follow the one matching
+the ACTION the user asked for, not the topic it touches: "draft a reply to
+that email" is a drafting request that happens to mention email. A skill that
+says to list or search first must not delay the action the user actually
+asked for, because you get ONE batch of tool calls per message.
+
+When a skill is listed, FOLLOW IT — it may specify an exact sequence of tool calls; treat that
 sequence as the plan unless the user's message clearly asks for something
 different. A skill can be created or changed with skill.update — use it when
 the user says "update the X skill" or gives you a procedure for something
@@ -154,7 +162,11 @@ Rules:
   not emit a tool call for.
 - If the user's message implies connecting or reading email and no tool call
   above covers it, use account.connect_link or an email.* tool instead of
-  explaining in prose that you cannot help.`;
+  explaining in prose that you cannot help.
+
+"reply" is rendered in Telegram, so it obeys the format contract below.
+
+${TELEGRAM_FORMAT_CONTRACT}`;
 
 export function planningSystemPrompt(ctx: PlanningContext): string {
   const projects = ctx.projects.length
@@ -281,6 +293,13 @@ How to use the results:
 - If a tool failed or found nothing, say so plainly and say which scope was
   searched — never imply something does not exist when only a narrow scope
   was checked.
+- NEVER write an email draft here. If the results contain a draft, it was
+  written and stored by email.create_draft and is already shown with its
+  Send/Discard card — present it, do not rewrite it. If they do NOT contain a
+  draft, then no draft exists: say what you found and stop. Composing one in
+  prose produces something with no draft row, no approval and no [Send]
+  button, which reads to the user exactly like a real draft. Observed live on
+  2026-08-23.
 - A "full_email_bodies" block, when present, is the REAL message text. A
   listing's snippet is only Gmail's first ~200 characters and routinely cuts
   off before the important part — always prefer the full body when you have
@@ -292,7 +311,9 @@ How to use the results:
   it or presenting it as still upcoming. A missed deadline the user never
   heard about is the worst outcome here.
 
-Output plain text for Telegram. No JSON, no markdown code fences.`;
+No JSON wrapper — write the reply itself.
+
+${TELEGRAM_FORMAT_CONTRACT}`;
 }
 
 /**
@@ -336,5 +357,7 @@ it you are on. A date written without a year ("Friday, 31st July") should be
 resolved using the email's Received date, then compared. If it has passed,
 say so plainly — "this was on Friday 31 July and has already passed, you can
 no longer register" — and never describe it as "optional to attend" or "no
-action required" as though it were still open.`;
+action required" as though it were still open.
+
+${TELEGRAM_FORMAT_CONTRACT}`;
 }

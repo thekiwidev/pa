@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { TELEGRAM_FORMAT_CONTRACT } from "../../convex/lib/prompts/format";
 import {
   planningSystemPrompt,
   skillComposeSystemPrompt,
@@ -234,4 +235,33 @@ describe("planningSystemPrompt — Phase 6 send scope", () => {
     // that its own SCOPE is unreliable.
     expect(flat()).not.toContain("no ability to send, reply, or delete");
   });
+});
+
+describe("format contract reaches every user-facing prompt", () => {
+  // A prompt whose output is shown in Telegram must say what Telegram can
+  // render. Until 2026-08-23 none of them did, so the model emitted "###"
+  // headings and "---" rules that arrived literally.
+  //
+  // This is a READER test. The lesson from MEMORY.md 2026-08-21 is that a
+  // shared string proves nothing unless something asserts each site actually
+  // consults it — writers prove the feature exists, readers prove it does
+  // anything. Add the next user-facing prompt builder to this list.
+  const nowMs = Date.parse("2026-08-23T09:00:00Z");
+  const skills = [{ title: "T", content: "do the thing" }];
+
+  const builders: [string, string][] = [
+    ["planningSystemPrompt", planningSystemPrompt(base)],
+    ["skillComposeSystemPrompt", skillComposeSystemPrompt("Ade", skills, nowMs, "Africa/Lagos")],
+    ["tldrOnlySystemPrompt", tldrOnlySystemPrompt(skills, nowMs, "Africa/Lagos")],
+  ];
+
+  for (const [name, prompt] of builders) {
+    test(`${name} states the format contract`, () => {
+      expect(prompt).toContain(TELEGRAM_FORMAT_CONTRACT);
+    });
+
+    test(`${name} forbids headings, which Telegram cannot render`, () => {
+      expect(prompt).toContain("NO headings");
+    });
+  }
 });

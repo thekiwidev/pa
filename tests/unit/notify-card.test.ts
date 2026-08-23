@@ -30,14 +30,15 @@ describe("composeCard", () => {
     expect(card.text).not.toContain("SPAM");
   });
 
-  test("escapes MarkdownV2 special characters in the subject and sender", () => {
+  test("leaves markdown-ish punctuation in a subject exactly as the sender wrote it", () => {
     const card = composeCard(
       { ...base, subject: "Re: [URGENT] *now*!", fromName: "A. Chen (Talent)" },
       "Africa/Lagos",
     );
-    expect(card.text).toContain("\\[URGENT\\]");
-    expect(card.text).toContain("\\*now\\*\\!");
-    expect(card.text).toContain("\\(Talent\\)");
+    // None of these can break an HTML parse, so none is escaped — and the
+    // user reads the real subject rather than a backslash-riddled version.
+    expect(card.text).toContain("Re: [URGENT] *now*!");
+    expect(card.text).toContain("A. Chen (Talent)");
   });
 
   test("formats the deadline in the given timezone using the shared formatter", () => {
@@ -84,32 +85,37 @@ describe("composeCard — every special character is escaped", () => {
       },
       "Africa/Lagos",
     );
-    // Only `>` is a MarkdownV2 special; `<` is not, so it stays literal.
-    // (The address's own hyphens and dots are escaped too.)
-    expect(card.text).toContain("<no");
-    expect(card.text).toContain("\\>");
+    // Both angle brackets around the address are escaped — in HTML mode "<"
+    // is the character that would break the parse, and escaping the name and
+    // the address separately (leaving the brackets bare) is what 400'd live.
+    expect(card.text).toContain("&lt;no-reply@accounts.google.com&gt;");
+    expect(card.text).not.toContain("<no");
   });
 
-  test("no MarkdownV2 special survives unescaped anywhere in the card", () => {
+  test("no raw angle bracket from sender-controlled data survives", () => {
     const card = composeCard(
       {
         emailMessageId: "m1",
         accountLabel: "client-work",
         fromAddress: "a.b+c@x-y.com",
-        fromName: "A [Very] (Tricky) Name!",
-        subject: "Re: budget #2 = 50% + more_stuff",
+        fromName: "A [Very] (Tricky) <b>Name</b>!",
+        subject: "Re: budget #2 = 50% + more_stuff <script>",
         isSpam: true,
         importance: "CRITICAL",
-        whyItMatters: "They need it by Friday - no later.",
+        whyItMatters: "They need it by Friday - no later. 5 > 3 & rising",
       },
       "Africa/Lagos",
     );
-    // Walk the rendered text: every special char must be backslash-preceded.
-    const SPECIAL = "_*[]()~`>#+-=|{}.!";
-    for (let i = 0; i < card.text.length; i++) {
-      const ch = card.text[i]!;
-      if (!SPECIAL.includes(ch)) continue;
-      expect(card.text[i - 1]).toBe("\\");
-    }
+
+    // The card's OWN tags are the only markup. Strip them, and nothing
+    // resembling a tag may remain — that residue would be sender-controlled.
+    const withoutOwnTags = card.text.replaceAll(/<\/?b>/g, "");
+    expect(withoutOwnTags).not.toContain("<");
+    expect(withoutOwnTags).not.toContain(">");
+
+    // MarkdownV2's specials are inert in HTML mode and must NOT be mangled —
+    // the subject should read exactly as the sender wrote it.
+    expect(card.text).toContain("Re: budget #2 = 50% + more_stuff");
+    expect(card.text).not.toContain("\\");
   });
 });

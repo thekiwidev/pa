@@ -5,6 +5,8 @@
 // hours of action time versus 312 in V8 — to call a handful of endpoints with
 // a bearer token and JSON bodies.
 
+import { markdownToEmailHtml } from "../../lib/email/markdownToEmailHtml";
+
 const BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 export class GmailApiError extends Error {
@@ -120,7 +122,29 @@ function base64UrlEncode(text: string): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/**
+ * A boundary no body can contain. Random rather than fixed: a fixed boundary
+ * appearing inside a quoted email would split the message at the wrong place.
+ */
+function mimeBoundary(): string {
+  const rand = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `----pa-${rand}`;
+}
+
+/**
+ * multipart/alternative: the plain body as written, plus an HTML rendering.
+ *
+ * Was single-part text/plain until 2026-08-23, so a reply containing
+ * "**bold**" reached the recipient with the asterisks visible. Order is
+ * load-bearing — RFC 2046 says the LAST part is the preferred one, so
+ * text/plain must come first.
+ */
 function buildRawMessage(msg: OutgoingReply): string {
+  const boundary = mimeBoundary();
+  const html = markdownToEmailHtml(msg.bodyText);
+
   const headers = [
     `From: ${msg.from}`,
     `To: ${msg.to.join(", ")}`,
@@ -128,13 +152,27 @@ function buildRawMessage(msg: OutgoingReply): string {
     `Subject: ${encodeSubject(msg.subject)}`,
     msg.inReplyTo ? `In-Reply-To: ${msg.inReplyTo}` : undefined,
     msg.referencesHeader ? `References: ${msg.referencesHeader}` : undefined,
-    `Content-Type: text/plain; charset="UTF-8"`,
     `MIME-Version: 1.0`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\r\n");
 
-  return base64UrlEncode(`${headers}\r\n\r\n${msg.bodyText}`);
+  const body = [
+    `--${boundary}`,
+    `Content-Type: text/plain; charset="UTF-8"`,
+    ``,
+    msg.bodyText,
+    ``,
+    `--${boundary}`,
+    `Content-Type: text/html; charset="UTF-8"`,
+    ``,
+    html,
+    ``,
+    `--${boundary}--`,
+  ].join("\r\n");
+
+  return base64UrlEncode(`${headers}\r\n\r\n${body}`);
 }
 
 export async function sendMessage(

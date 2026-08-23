@@ -1,5 +1,6 @@
-import type { EscapedMarkdown } from "../lib/telegram/markdown";
+import { capCard, type TelegramHtml } from "../lib/telegram/html";
 import { markdownToTelegramHtml } from "../lib/telegram/richtext";
+import { splitTelegramHtml } from "../lib/telegram/split";
 
 const API = "https://api.telegram.org";
 
@@ -7,38 +8,58 @@ const API = "https://api.telegram.org";
  * Everything that knows Telegram's wire format lives here and nowhere else.
  * Plain `fetch` — no bot framework, per §0.5.
  *
- * Phase 1 deliberately does NOT set parse_mode on sendMessage: without it
- * Telegram treats the body as literal text, so a chat reply can never break
- * on stray Markdown. sendCard/editCard below DO set parse_mode, which is
- * why every field that reaches them must already be escaped by
- * lib/telegram/markdown.ts (composeCard in convex/notify.ts is the only
- * caller that does this) -- nothing in this file escapes anything itself.
+ * ONE formatting system: HTML parse_mode, everywhere, for every send path.
+ * Callers pass Markdown; this file converts it. HTML needs three characters
+ * escaped where MarkdownV2 needs eighteen, and MarkdownV2 escaping caused two
+ * production 400s here before it was retired.
+ *
+ * Nothing outside this file sets a parse_mode or escapes anything.
  */
 
-/** Telegram rejects messages over 4096 UTF-16 code units. */
-const MAX_LEN = 4096;
-
 export async function sendMessage(chatId: string, text: string): Promise<string> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
+  const token = requireToken();
 
-  const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
+  // Convert FIRST, then split. The reverse order was a live bug: slicing raw
+  // markdown at 4096 could cut inside "**", producing unbalanced HTML that
+  // Telegram 400s on — and the retry below then re-sent the whole thing with
+  // no parse_mode, which is why long messages arrived with every asterisk
+  // visible. Conversion also grows the text, so a pre-trimmed body could
+  // exceed the limit again afterwards.
+  const parts = splitTelegramHtml(markdownToTelegramHtml(text));
+  if (parts.length === 0) return "";
 
-  // The model writes Markdown, so render it. HTML parse_mode rather than
-  // MarkdownV2 — three characters to escape instead of eighteen, on the one
-  // path every reply takes.
-  //
-  // A conversion bug must never cost the user their reply, so a rejected
-  // parse retries once as plain text. Delivering unformatted beats
-  // delivering nothing, and the failure is logged rather than swallowed.
-  const html = markdownToTelegramHtml(body);
+  // Plain-text fallbacks are split too, so an over-long message still lands
+  // if conversion is what Telegram objected to.
+  const plainParts = splitTelegramHtml(text);
 
+  let lastMessageId = "";
+  for (let i = 0; i < parts.length; i++) {
+    const html = parts[i] ?? "";
+    lastMessageId = await sendOne(token, chatId, html, plainParts[i] ?? html);
+  }
+  return lastMessageId;
+}
+
+/**
+ * One message, with a single plain-text retry.
+ *
+ * A conversion bug must never cost the user their reply: delivering
+ * unformatted beats delivering nothing. The failure is logged rather than
+ * swallowed, because a silent downgrade is how the formatting problem stayed
+ * invisible for two days.
+ */
+async function sendOne(
+  token: string,
+  chatId: string,
+  html: string,
+  plain: string,
+): Promise<string> {
   let res = await post(token, { chat_id: chatId, text: html, parse_mode: "HTML" });
 
   if (!res.ok) {
     const detail = await res.text();
     console.warn(`telegram_html_rejected, retrying as plain text: ${detail.slice(0, 200)}`);
-    res = await post(token, { chat_id: chatId, text: body });
+    res = await post(token, { chat_id: chatId, text: plain });
     if (!res.ok) {
       throw new Error(`telegram sendMessage ${res.status}: ${await res.text()}`);
     }
@@ -46,6 +67,12 @@ export async function sendMessage(chatId: string, text: string): Promise<string>
 
   const json = (await res.json()) as { result?: { message_id?: number } };
   return String(json.result?.message_id ?? "");
+}
+
+function requireToken(): string {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
+  return token;
 }
 
 function post(token: string, payload: Record<string, unknown>): Promise<Response> {
@@ -103,27 +130,29 @@ function toInlineKeyboard(buttons: InlineButton[][]) {
 }
 
 /**
- * Send a MarkdownV2 card with an inline keyboard. Returns the new message's
- * id, the same way sendMessage does -- notify.ts stores it so a later reply
- * on the same thread can editCard instead of posting a duplicate.
+ * Send a card with an inline keyboard. Returns the new message's id, the same
+ * way sendMessage does -- notify.ts stores it so a later reply on the same
+ * thread can editCard instead of posting a duplicate.
+ *
+ * Takes `TelegramHtml`, not a bare string: the brand is what makes "forgot to
+ * escape" a compile error rather than a runtime 400 (MEMORY.md, 2026-08-21).
+ * A card is a single message by definition -- it carries buttons -- so it
+ * truncates where sendMessage splits.
  */
 export async function sendCard(
   chatId: string,
-  text: EscapedMarkdown,
+  text: TelegramHtml,
   buttons: InlineButton[][],
 ): Promise<string> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
-
-  const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
+  const token = requireToken();
 
   const res = await fetch(`${API}/bot${token}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       chat_id: chatId,
-      text: body,
-      parse_mode: "MarkdownV2",
+      text: capCard(text),
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
     }),
   });
@@ -139,13 +168,10 @@ export async function sendCard(
 export async function editCard(
   chatId: string,
   messageId: string,
-  text: EscapedMarkdown,
+  text: TelegramHtml,
   buttons: InlineButton[][],
 ): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set on this deployment");
-
-  const body = text.length > MAX_LEN ? `${text.slice(0, MAX_LEN - 1)}…` : text;
+  const token = requireToken();
 
   const res = await fetch(`${API}/bot${token}/editMessageText`, {
     method: "POST",
@@ -153,8 +179,8 @@ export async function editCard(
     body: JSON.stringify({
       chat_id: chatId,
       message_id: Number(messageId),
-      text: body,
-      parse_mode: "MarkdownV2",
+      text: capCard(text),
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
     }),
   });

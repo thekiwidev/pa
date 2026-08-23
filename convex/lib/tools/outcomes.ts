@@ -167,16 +167,20 @@ function renderOne(outcome: ToolOutcome): string {
       return renderEmailList(r);
 
     case "email.create_draft": {
+      // Deliberately does NOT include the body.
+      //
+      // The body lives on the CARD, rendered by deterministic code directly
+      // above the [Send] button (see tools/router.ts). It got there because
+      // this render is fed to the skill-compose pass as untrusted input, and
+      // that pass summarised the draft away — leaving the user tapping Send
+      // on text they had never read. Text an approval binds itself to must
+      // reach the user through code, not through a model that may rewrite it.
       const toField = field(r, "to");
       const to = Array.isArray(toField) ? toField.join(", ") : "?";
-      const body = str(r, "body") ?? "";
-      const capped = body.length > 1500 ? body.slice(0, 1500) + "…" : body;
       return [
-        `📝 Draft to ${to} — ${str(r, "subject") ?? "(no subject)"}`,
-        "",
-        capped,
-        "",
-        `Tap Send or Discard on the card above. Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
+        `📝 Draft ready for ${to} — ${str(r, "subject") ?? "(no subject)"}`,
+        `The full text is on the card above. Tap Send or Discard.`,
+        `Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
       ].join("\n");
     }
 

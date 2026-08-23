@@ -9,6 +9,79 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fix — a sent email contained the assistant's chat narration
+
+The most serious defect found so far. Asked to send a drafted reply, the
+assistant emailed the recipient its own chat script: a "Here is a draft reply
+based on your instructions" preamble, a `### Draft reply` heading, a `**To:**`
+envelope, `***` rules, and a closing "Please review the draft. If everything
+looks good, let me know and I will proceed with sending it."
+
+Cause: `tools/router.ts` used `DEFAULT_SKILLS.draft_reply` — a ~470-line
+CHAT-presentation procedure — as the system prompt for body generation, then
+persisted the entire raw completion as `bodyText`. The skill's §16 prescribes
+exactly the leaked layout and §17 supplies the closing sentence.
+
+Fixed structurally rather than by prompt tuning:
+
+- **Split the skill by altitude.** New `DEFAULT_SKILLS.compose_email_body`
+  writes bodies and says nothing about presentation; `draft_reply` stays the
+  chat-facing procedure. Every default skill now names its reader.
+- **The body is a field, not a completion.** New pure
+  `lib/email/draftBody.ts`: `BODY_OUTPUT_CONTRACT` (appended after the skill,
+  so a skill cannot redefine what the output IS), `extractDraftBody` and
+  `looksLikeNarration`. A completion that still reads as narration is
+  REFUSED — no draft row, no approval, a plain error. The real leaked text is
+  the regression fixture.
+- **The preview no longer echoes the payload.** The body now renders on the
+  approval CARD, composed by deterministic code directly above the [Send]
+  button.
+- **Outgoing mail is `multipart/alternative`**, so `**bold**` renders instead
+  of arriving literal. New pure `lib/email/markdownToEmailHtml.ts`.
+
+Two further defects surfaced while verifying this against the live
+deployment, neither reachable by unit tests:
+
+- The planner called `email.search` and then, having spent its single batch
+  of tool calls, let the compose pass *narrate* a draft in prose — no draft
+  row, no approval, no [Send] button, but indistinguishable from a real one.
+  `draft_reply` §2 now directs a single `email.create_draft` call using
+  `senderOrSubject`, `check_email` yields to it, and the compose pass is
+  forbidden from writing a draft at all.
+- The compose pass summarised the draft away, so the user was asked to
+  approve text they had never seen. The body now reaches them through code.
+
+### Fix — Telegram formatting
+
+Headings, bullets, rules, blockquotes and strikethrough had no conversion rule
+at all, so `### X`, `- item` and `---` reached users literally; `***` was worse
+still, matching the italic rule and emitting `<i>*</i>`. Bold could not span a
+newline. Telegram has no heading construct in either parse mode, so headings
+now render as **bold**.
+
+`channels/telegram.ts` also truncated raw markdown at 4096 and converted
+*afterwards*, so a cut inside `**` produced unbalanced HTML, Telegram 400'd the
+whole message, and the retry re-sent it with no `parse_mode` — every asterisk
+visible. That is the "asterisks everywhere on long messages" report. Messages
+are now converted first and **split** (new pure `lib/telegram/split.ts`), never
+truncated, with open tags closed and reopened across the boundary.
+
+Cards moved from MarkdownV2 to HTML, retiring `lib/telegram/markdown.ts` and
+leaving **one** formatting system on every outbound path. The
+`EscapedMarkdown` brand carries over as `TelegramHtml` in
+`lib/telegram/html.ts` — same compile-time guard, three escapes instead of
+eighteen.
+
+New `lib/prompts/format.ts` states an output contract (bold not headings,
+bullets not tables, blank lines not rules) and is appended to every
+user-facing prompt, with a reader test asserting each one includes it.
+
+### Refactor — shared JSON recovery
+
+`extractJsonObject` / `unwrapDoubledBraces` moved from `lib/tools/plan.ts` to
+`lib/json.ts` when `draftBody.ts` needed the same fence-stripping,
+balanced-scan and doubled-brace retry.
+
 ### Fix — the morning_brief and draft_reply skills were never read
 
 The skills system landed before Phases 5B and 6, and both wrote their own

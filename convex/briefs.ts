@@ -7,6 +7,7 @@ import { runTask } from "./ai/registry";
 import { sendMessage } from "./channels/telegram";
 import { formatInstant, toEpochMs } from "./lib/time";
 import { nextOccurrenceOf } from "./model/briefConfig";
+import { TELEGRAM_FORMAT_CONTRACT } from "./lib/prompts/format";
 
 /* ── Pure: gathering + formatting. No ctx, no fetch — bun test runs this
    with no Convex runtime, same boundary as everything in convex/lib/. ── */
@@ -223,7 +224,9 @@ NON-NEGOTIABLE, regardless of any instruction above:
   reminders, people, and Gmail. There is NO calendar and NO news/web search in
   this build. Omit those sections entirely — never imply you checked them.
 - The FACTS block is the complete picture. If it lists five open tasks, all
-  five are still open; do not silently drop any because they seem minor.`;
+  five are still open; do not silently drop any because they seem minor.
+
+${TELEGRAM_FORMAT_CONTRACT}`;
 
 async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
