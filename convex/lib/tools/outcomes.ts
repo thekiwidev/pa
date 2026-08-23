@@ -8,6 +8,8 @@
 // Rendering here is not just cheaper, it is MORE accurate: a model asked to
 // retell a tool result can soften a failure or invent a due date. This cannot.
 
+import { returnsUnknowableContent } from "./catalog";
+
 export interface ToolOutcome {
   name: string;
   ok: boolean;
@@ -47,7 +49,12 @@ export function renderOutcomes(
   const lines = outcomes.map(renderOne);
   const skipped = rejected.map((r) => `⚠️ Couldn't do ${r.name} — ${r.reason}`);
 
-  const trustworthy = outcomes.every((o) => o.ok) && rejected.length === 0;
+  // The planned reply is written BEFORE any tool runs, so it is only ever
+  // safe to show when the model could actually have known what it was saying.
+  // For tools returning external content it cannot — and it will confabulate
+  // fluently rather than wait. See ToolMeta.contentIsUnknowable.
+  const guessing = outcomes.some((o) => returnsUnknowableContent(o.name));
+  const trustworthy = outcomes.every((o) => o.ok) && rejected.length === 0 && !guessing;
   const preamble = trustworthy ? plannedReply.trim() : "";
 
   const body = [preamble, ...lines, ...skipped].filter(Boolean).join("\n").trim();
@@ -182,6 +189,46 @@ function renderOne(outcome: ToolOutcome): string {
         `The full text is on the card above. Tap Send or Discard.`,
         `Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
       ].join("\n");
+    }
+
+    case "link.read": {
+      const lines: string[] = [];
+      const author = str(r, "authorName");
+      lines.push(`🔗 **${str(r, "platform") ?? "post"}**${author ? ` — ${author}` : ""}`);
+
+      const caption = str(r, "caption");
+      if (caption) lines.push("", "**Caption**", caption);
+
+      const imageText = str(r, "imageText");
+      if (imageText) lines.push("", "**Text in the image**", imageText);
+
+      if (!caption && !imageText) {
+        lines.push(
+          "",
+          "That post gave up nothing readable — it may be private, deleted, " +
+            "or login-only. Screenshot it and send the picture; I'll read that.",
+        );
+      } else if (!caption) {
+        // Common on Instagram: og:image with no og:description at all. Say so,
+        // rather than letting the absence read as "the post had no words".
+        lines.push("", "_No caption was published with this post — the above is read off the image._");
+      }
+
+      // Say plainly what could NOT be reached. Returning slide 1 as though it
+      // were the whole post is the failure worth designing against, and the
+      // fix the user can actually apply is screenshots.
+      if (field(r, "slidesUnavailable") === true) {
+        lines.push(
+          "",
+          "⚠️ Only the cover slide is public here. If the rest of the carousel " +
+            "is what you want, screenshot the slides and send them — I'll read them.",
+        );
+      } else {
+        const note = str(r, "note");
+        if (note) lines.push("", `_${note}_`);
+      }
+
+      return lines.join("\n");
     }
 
     case "meeting.ingest": {

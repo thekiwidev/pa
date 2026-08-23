@@ -9,6 +9,50 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-23 — Instagram serves og: tags to BOTS and a login wall to browsers
+
+Exactly backwards from the guess. The connector originally sent a Chrome
+user-agent, reasoning that a real browser string gets the real page; Instagram
+returned no og: tags at all. A bot-shaped UA gets the full set.
+
+That is the intended path, not a bypass: og: tags exist to be read by
+link-preview crawlers. Measured across four UA strings, an honest
+`PersonalAssistantBot/1.0` works exactly as well as impersonating
+`facebookexternalhit/1.1`, so there is no reason to impersonate anyone.
+
+Other measurements from the same session, all likely to rot:
+- Instagram often exposes og:image with NO og:description — the picture is the
+  whole content, so OCR is the entire value of the fetch, not a bonus.
+- Its og:image URL says `.heic` and serves `image/jpeg`. Trust the
+  content-type header, not the extension.
+- Only the cover slide is public. Slides 2+ genuinely need a session.
+- X's `publish.twitter.com/oembed` returns full tweet text with no auth and is
+  the most reliable of the five.
+- TikTok's public oEmbed 400s on some videos; treat a failure as normal.
+- Captions carry HEX entities (`&#x2014;`, `&#x1F42E;`), not just decimal.
+
+## 2026-08-23 — A model will narrate a tool result it has not seen
+
+The worst-shaped bug of the sprint. Asked to read an Instagram post, the
+assistant produced a detailed seven-step Minoxidil guide, correctly formatted
+and entirely invented — the fetch had returned nothing. It did the same for a
+TikTok, describing a video it had never seen.
+
+Mechanism, and it was already documented in this codebase: the planner writes
+its `reply` BEFORE tools execute. `renderOutcomes` keeps that reply whenever
+every tool "succeeded" — and a fetch returning an empty caption IS a success.
+
+The general rule: **for any tool whose result the model could not possibly
+know in advance, its pre-written prose is confabulation and must be dropped**,
+not merely discouraged. `TOOL_META.contentIsUnknowable` marks them.
+
+Why this is worse than ordinary hallucination: the invented content was
+plausible, well-formatted, on-topic, and arrived alongside a real tool result,
+so it read as sourced. Social posts are the perfect substrate for it — the
+model has seen a million of them and can always produce one.
+
+---
+
 ## 2026-08-23 — Attached content must not choose the procedure
 
 Sprints 2 and 3 made attachments part of the message text, and that quietly

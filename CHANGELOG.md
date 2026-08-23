@@ -9,6 +9,46 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — reading social posts (`link.read`)
+
+Paste an Instagram, TikTok, X, LinkedIn or Facebook link and get its caption
+and the text read off its image, then act on it with any existing tool
+("make a routine from this").
+
+Three controls, in order of how much they matter:
+
+- **An allowlist, not a denylist.** This is the project's first fetch of a URL
+  chosen from outside, which is the classic SSRF shape. Five hosts and their
+  subdomains, https only, no embedded credentials, no IP literals, and
+  `redirect: "manual"` so every hop is re-vetted — a permitted host that 302s
+  to `169.254.169.254` is refused rather than followed. Residual DNS-rebinding
+  risk is documented in the module rather than hidden.
+- **The URL must have come from YOU.** `link.read` is the only tool that sends
+  a request somewhere your own configuration did not decide, so it is the only
+  one with an exfiltration shape. The router checks the proposed URL against
+  your own recent messages; a URL found inside an email or a document is
+  refused. Untrusted content proposes nothing.
+- **Honest failure.** When a carousel's later slides need a login, it says so
+  and asks for screenshots — which the image pipeline already handles — rather
+  than presenting slide 1 as the whole post.
+
+Measured, and the opposite of the obvious guess: **Instagram serves og: tags
+to a bot-shaped user agent and a login wall to a browser one.** An honest
+self-identifying UA works as well as impersonating `facebookexternalhit`,
+which was tested and rejected as unnecessary.
+
+### Fixed — the model narrated tool results it had not seen yet
+
+Asked to read an Instagram post, the assistant produced a confident seven-step
+guide. The fetch had returned nothing at all. The planner writes its `reply`
+BEFORE any tool runs, so for a tool returning external content that reply is
+guesswork — and a model asked about a social post will always be able to
+invent a plausible one.
+
+`TOOL_META` now carries `contentIsUnknowable`, set on `link.read`,
+`email.get_message` and `meeting.ingest`. `renderOutcomes` drops the planned
+reply entirely when one of those ran, leaving only what the tool returned.
+
 ### Added — meeting transcripts (Phase 21)
 
 Send a transcript as `.txt`, `.md`, `.vtt` or `.srt`, or paste it, and get back
