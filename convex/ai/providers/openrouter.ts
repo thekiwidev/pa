@@ -23,15 +23,23 @@ export const openrouterProvider: AIProvider = {
   async run(req: AIRequest, model: string, apiKey: string): Promise<AIResult> {
     const content: unknown[] = [{ type: "text", text: buildPrompt(req.input, req.untrusted) }];
 
-    // Chat-completions multimodal shape: audio rides as a content part
-    // alongside the text, same slot vision images would use. Only sent when
-    // the caller actually attached audio (TRANSCRIBE calls), so a model with
-    // no audio support never sees an empty/malformed part.
-    if (req.audio) {
-      content.push({
-        type: "input_audio",
-        input_audio: { data: req.audio.dataBase64, format: req.audio.mimeType.split("/")[1] ?? "ogg" },
-      });
+    // Chat-completions multimodal shape. Audio and images use DIFFERENT
+    // part types here (unlike Gemini's single inlineData envelope), so the
+    // mime type decides which. Only sent when media is actually attached, so
+    // a text-only model never sees a malformed part.
+    for (const m of req.media ?? []) {
+      if (m.mimeType.startsWith("audio/")) {
+        content.push({
+          type: "input_audio",
+          input_audio: { data: m.dataBase64, format: m.mimeType.split("/")[1] ?? "ogg" },
+        });
+      } else {
+        // Images and PDFs both ride as a data: URL in an image_url part.
+        content.push({
+          type: "image_url",
+          image_url: { url: `data:${m.mimeType};base64,${m.dataBase64}` },
+        });
+      }
     }
 
     const res = await fetch(`${BASE}/chat/completions`, {

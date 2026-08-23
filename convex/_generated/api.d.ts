@@ -59,6 +59,7 @@ import type * as model_emailMessages from "../model/emailMessages.js";
 import type * as model_emailRules from "../model/emailRules.js";
 import type * as model_feedback from "../model/feedback.js";
 import type * as model_instructions from "../model/instructions.js";
+import type * as model_mediaGroups from "../model/mediaGroups.js";
 import type * as model_messages from "../model/messages.js";
 import type * as model_noiseSenders from "../model/noiseSenders.js";
 import type * as model_notifications from "../model/notifications.js";
@@ -135,6 +136,7 @@ declare const fullApi: ApiFromModules<{
   "model/emailRules": typeof model_emailRules;
   "model/feedback": typeof model_feedback;
   "model/instructions": typeof model_instructions;
+  "model/mediaGroups": typeof model_mediaGroups;
   "model/messages": typeof model_messages;
   "model/noiseSenders": typeof model_noiseSenders;
   "model/notifications": typeof model_notifications;

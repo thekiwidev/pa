@@ -3,6 +3,11 @@ import type { ProviderId } from "../lib/ai/resolve";
 import type { UntrustedBlock } from "../lib/ai/prompt";
 import { isQuotaExhausted } from "../lib/ai/errors";
 
+export interface MediaPart {
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface AIRequest {
   tier: Tier;
   system: string;
@@ -10,14 +15,21 @@ export interface AIRequest {
   /** External, attacker-controllable content. Wrapped, never merged into `input`. */
   untrusted?: UntrustedBlock[];
   /**
-   * Inline audio for TRANSCRIBE-tier calls. Base64, capped by the provider.
+   * Inline media: audio for TRANSCRIBE, images and PDFs for VISION. Base64,
+   * capped by the provider.
    *
-   * This is untrusted content of a different shape: whatever a voice note
-   * says, it is transcribed, never obeyed. The TRANSCRIBE prompt's only
-   * permitted output is a transcript, so there is no field an instruction
-   * inside the audio could act through. (Invariant I-2.)
+   * This is untrusted content of a different shape. Whatever a voice note
+   * says or an image depicts, it is TRANSCRIBED or DESCRIBED, never obeyed —
+   * and the prompts for those tasks permit no output but a transcript or a
+   * transcription, so there is no field an instruction inside the media could
+   * act through. (Invariant I-2.) That matters more for images than audio:
+   * "IGNORE PREVIOUS INSTRUCTIONS" printed on a flyer is a real attack, and
+   * the defence is structural, not a plea in the prompt.
+   *
+   * An array because Telegram sends a carousel as several photos and the
+   * whole point is to read them as one document.
    */
-  audio?: { mimeType: string; dataBase64: string };
+  media?: MediaPart[];
   maxOutputTokens?: number;
 }
 

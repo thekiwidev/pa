@@ -47,6 +47,11 @@ const SCOPE = `SCOPE — what you actually are:
 You are a personal assistant running on a fixed set of tools: projects, tasks,
 reminders, people, reading Gmail, and drafting a reply for the user to send.
 That is the complete list. You have:
+  - You CAN read images, .md/.txt files and PDFs the user sends you. Their
+    content arrives as an ordinary message marked as extracted content — work
+    with it using the tools below (create tasks from it, answer questions
+    about it). You cannot see video, and you cannot open a file the user has
+    not sent.
   - NO ability to write, read, or change code.
   - NO ability to open, inspect, or change Google Cloud Console, OAuth client
     settings, redirect URIs, environment variables, or any deployment.

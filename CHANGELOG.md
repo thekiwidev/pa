@@ -9,6 +9,41 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — images, and .md / .txt / .pdf files
+
+Send a photo, a carousel screenshot, or a document; its text becomes an
+ordinary conversation turn, so every existing tool applies with no new
+plumbing. "Turn this into a weekly routine" works because `task.create`
+already exists.
+
+- `AIRequest.audio` generalised to `media: MediaPart[]`. Gemini already used
+  its generic `inlineData` envelope so its change was mechanical; OpenRouter
+  needs `input_audio` vs `image_url` by mime type; OpenAI's `/v1/responses`
+  gets `input_image` / `input_file` content parts.
+- New `VISION` tier with `READ_IMAGE` and `READ_DOCUMENT` tasks, configured by
+  `<PROVIDER>_MODEL_VISION`.
+- **Albums.** Telegram sends a carousel as separate updates sharing a
+  `media_group_id`, with no count and no terminator — so slides buffer in a
+  new `mediaGroups` table and a 2-second scheduled flush reads them as one
+  document, in slide order.
+- `.pdf` rides the same inline transport as an image. `.md`/`.txt` decode
+  locally and cost no model call at all. A `skill: <name>` caption still means
+  a skill upload.
+- The extraction prompt's only permitted output is the text that was in the
+  image, so there is no field through which an instruction printed on a slide
+  could become an action. The caption is the user's instruction; extracted
+  text enters separately as content.
+
+### Fixed — OpenAI claimed audio support it did not have
+
+`resolve.ts` listed `TRANSCRIBE` for OpenAI while the provider silently
+dropped `req.audio`, so a voice note routed there got a confident answer to an
+empty prompt. The claim is removed and image/PDF support implemented instead.
+
+A new test asserts every declared tier is served by at least one provider —
+adding `VISION` to `TIERS` without adding it to any provider threw
+`NoProviderAvailable` at runtime, on the first image sent.
+
 ### Fix — the morning brief could not see anything you had taught it
 
 You told the bot about a personal routine, asked for it in the brief, and the

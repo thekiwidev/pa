@@ -117,6 +117,38 @@ http.route({
         return new Response(null, { status: 200 });
       }
 
+      // A photo, or one slide of an album.
+      const photo = parsePhotoMessage(update);
+      if (photo && photo.fromId === process.env.TELEGRAM_OWNER_ID) {
+        await ctx.scheduler.runAfter(0, internal.assistant.handlePhoto, {
+          telegramId: photo.fromId,
+          chatId: photo.chatId,
+          displayName: photo.displayName,
+          channelMessageId: photo.channelMessageId,
+          fileId: photo.fileId,
+          caption: photo.caption,
+          mediaGroupId: photo.mediaGroupId,
+        });
+        return new Response(null, { status: 200 });
+      }
+
+      // A .md/.txt/.pdf the user wants read. Runs after parseSkillDocument,
+      // so "skill: name" still means a skill upload.
+      const document = parseDocumentMessage(update);
+      if (document && document.fromId === process.env.TELEGRAM_OWNER_ID) {
+        await ctx.scheduler.runAfter(0, internal.assistant.handleDocument, {
+          telegramId: document.fromId,
+          chatId: document.chatId,
+          displayName: document.displayName,
+          channelMessageId: document.channelMessageId,
+          fileId: document.fileId,
+          fileName: document.fileName,
+          mimeType: document.mimeType,
+          caption: document.caption,
+        });
+        return new Response(null, { status: 200 });
+      }
+
       const unsupported = parseUnsupportedMessage(update);
       if (unsupported && unsupported.fromId === process.env.TELEGRAM_OWNER_ID) {
         await ctx.scheduler.runAfter(0, internal.assistant.handleUnsupported, {
@@ -242,6 +274,109 @@ function parseSkillDocument(update: unknown): {
   };
 }
 
+/**
+ * A photo, or one slide of an album.
+ *
+ * Telegram sends each `photo` in several sizes, largest last, and sends an
+ * ALBUM as SEPARATE updates that share a `media_group_id` — there is no
+ * single "album" update to wait for. That id is carried through so the
+ * handler can buffer the slides and read them as one document, which is the
+ * whole point for a carousel of text slides.
+ */
+function parsePhotoMessage(update: unknown): {
+  fromId: string;
+  chatId: string;
+  displayName: string;
+  channelMessageId: string;
+  fileId: string;
+  caption: string;
+  mediaGroupId?: string;
+} | null {
+  if (typeof update !== "object" || update === null) return null;
+  const message = (update as { message?: unknown }).message;
+  if (typeof message !== "object" || message === null) return null;
+
+  const m = message as Record<string, unknown>;
+  const chat = m.chat as { id?: unknown } | null;
+  const from = m.from as { id?: unknown; first_name?: unknown } | null;
+  if (typeof chat?.id !== "number" || typeof from?.id !== "number") return null;
+  if (typeof m.message_id !== "number") return null;
+
+  const sizes = m.photo;
+  if (!Array.isArray(sizes) || sizes.length === 0) return null;
+
+  // Last entry is the largest. Text on a flyer is unreadable at thumbnail
+  // size, and reading text is what these images are for.
+  const largest = sizes[sizes.length - 1] as { file_id?: unknown } | undefined;
+  if (typeof largest?.file_id !== "string") return null;
+
+  return {
+    fromId: String(from.id),
+    chatId: String(chat.id),
+    displayName: typeof from.first_name === "string" ? from.first_name : "unknown",
+    channelMessageId: String(m.message_id),
+    fileId: largest.file_id,
+    // On an album Telegram puts the caption on ONE slide, usually the first.
+    caption: typeof m.caption === "string" ? m.caption : "",
+    mediaGroupId: typeof m.media_group_id === "string" ? m.media_group_id : undefined,
+  };
+}
+
+/**
+ * A document the user wants READ — .md, .txt or .pdf.
+ *
+ * Runs after parseSkillDocument, so a file captioned "skill: name" is still a
+ * skill upload and never lands here. Everything else text-like or PDF becomes
+ * content to work with.
+ */
+function parseDocumentMessage(update: unknown): {
+  fromId: string;
+  chatId: string;
+  displayName: string;
+  channelMessageId: string;
+  fileId: string;
+  fileName: string;
+  mimeType: string;
+  caption: string;
+} | null {
+  if (typeof update !== "object" || update === null) return null;
+  const message = (update as { message?: unknown }).message;
+  if (typeof message !== "object" || message === null) return null;
+
+  const m = message as Record<string, unknown>;
+  const chat = m.chat as { id?: unknown } | null;
+  const from = m.from as { id?: unknown; first_name?: unknown } | null;
+  if (typeof chat?.id !== "number" || typeof from?.id !== "number") return null;
+  if (typeof m.message_id !== "number") return null;
+
+  const doc = m.document as
+    | { file_id?: unknown; mime_type?: unknown; file_name?: unknown }
+    | undefined;
+  if (typeof doc?.file_id !== "string") return null;
+
+  const mimeType = typeof doc.mime_type === "string" ? doc.mime_type : "";
+  const fileName = typeof doc.file_name === "string" ? doc.file_name : "";
+  const lower = fileName.toLowerCase();
+
+  const isText = mimeType.startsWith("text/") || lower.endsWith(".md") || lower.endsWith(".txt");
+  const isPdf = mimeType === "application/pdf" || lower.endsWith(".pdf");
+  // Deliberately narrow. A .docx or .zip would be silently mangled by the
+  // text decoder, and "I read your file" about garbage is worse than "I
+  // can't read that yet".
+  if (!isText && !isPdf) return null;
+
+  return {
+    fromId: String(from.id),
+    chatId: String(chat.id),
+    displayName: typeof from.first_name === "string" ? from.first_name : "unknown",
+    channelMessageId: String(m.message_id),
+    fileId: doc.file_id,
+    fileName: fileName || (isPdf ? "document.pdf" : "document.txt"),
+    mimeType: mimeType || (isPdf ? "application/pdf" : "text/plain"),
+    caption: typeof m.caption === "string" ? m.caption : "",
+  };
+}
+
 interface ParsedCallbackQuery {
   id: string;
   fromId: string;
@@ -297,6 +432,9 @@ function parseUnsupportedMessage(
   if (typeof chat?.id !== "number" || typeof from?.id !== "number") return null;
 
     // voice and audio are handled by parseVoiceMessage before this runs.
+  // photo and document are handled above when readable; anything reaching
+  // here is a kind with no support at all, or a document type we decline to
+  // guess at (.docx, .zip).
   const KINDS = ["photo", "document", "video", "video_note", "sticker"];
   const kind = KINDS.find((k) => m[k] !== undefined);
   if (!kind) return null;

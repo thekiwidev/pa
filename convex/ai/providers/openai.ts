@@ -10,6 +10,43 @@ const BASE = "https://api.openai.com/v1";
  * between them stays an environment-variable edit. chat/completions would need
  * `max_completion_tokens` for o-series and `max_tokens` for the rest.
  */
+/**
+ * A plain string when there is no media, the structured content-part form
+ * when there is.
+ *
+ * Media was silently DROPPED here until 2026-08-23 while resolve.ts claimed
+ * this provider supported TRANSCRIBE — so a voice note routed to OpenAI got a
+ * confident answer to an empty prompt. Images and PDFs are implemented below;
+ * the TRANSCRIBE claim was removed instead, because /v1/responses has no
+ * audio input part and pretending otherwise is what caused the bug.
+ */
+function buildInput(req: AIRequest): unknown {
+  const prompt = buildPrompt(req.input, req.untrusted);
+  const media = (req.media ?? []).filter((m) => !m.mimeType.startsWith("audio/"));
+  if (media.length === 0) return prompt;
+
+  return [
+    {
+      role: "user",
+      content: [
+        { type: "input_text", text: prompt },
+        ...media.map((m) =>
+          m.mimeType === "application/pdf"
+            ? {
+                type: "input_file",
+                filename: "document.pdf",
+                file_data: `data:${m.mimeType};base64,${m.dataBase64}`,
+              }
+            : {
+                type: "input_image",
+                image_url: `data:${m.mimeType};base64,${m.dataBase64}`,
+              },
+        ),
+      ],
+    },
+  ];
+}
+
 export const openaiProvider: AIProvider = {
   id: "openai",
 
@@ -23,7 +60,7 @@ export const openaiProvider: AIProvider = {
       body: JSON.stringify({
         model,
         instructions: req.system,
-        input: buildPrompt(req.input, req.untrusted),
+        input: buildInput(req),
         max_output_tokens: req.maxOutputTokens ?? 1024,
       }),
     });

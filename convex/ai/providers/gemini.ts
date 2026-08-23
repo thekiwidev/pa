@@ -30,6 +30,10 @@ const THINKING_RESERVE: Record<Tier, number> = {
   REASON: 4096,
   DRAFT: 2048,
   TRANSCRIBE: 1024,
+  // Reading text off a flyer or a carousel slide is transcription, not
+  // analysis — the same shape as TRANSCRIBE, and it must not eat the answer
+  // allowance on a multi-slide album.
+  VISION: 1024,
   EMBED: 0,
 };
 
@@ -39,15 +43,18 @@ const THINKING_LEVEL: Record<Tier, "low" | "high"> = {
   REASON: "high",
   DRAFT: "low",
   TRANSCRIBE: "low",
+  VISION: "low",
   EMBED: "low",
 };
 
 /**
- * Inline audio caps the whole request at 20 MB. Telegram voice notes are Opus
- * and tiny — a minute is roughly 100 KB — so anything approaching this is not
- * a voice note and should be refused before it is base64-encoded.
+ * Inline media caps the whole REQUEST at 20 MB, so this bounds the total
+ * across every part, not each one. Telegram voice notes are Opus and tiny (a
+ * minute is roughly 100 KB) and its photos are re-encoded JPEGs of a few
+ * hundred KB, so a four-slide carousel is comfortably inside this; anything
+ * approaching the cap is not what we think it is.
  */
-const MAX_INLINE_AUDIO_BYTES = 15 * 1024 * 1024;
+const MAX_INLINE_MEDIA_BYTES = 15 * 1024 * 1024;
 
 const DEFAULT_ANSWER_TOKENS = 1024;
 
@@ -63,20 +70,24 @@ const DEFAULT_ANSWER_TOKENS = 1024;
  */
 function buildParts(req: AIRequest): unknown[] {
   const parts: unknown[] = [{ text: buildPrompt(req.input, req.untrusted) }];
+  if (!req.media || req.media.length === 0) return parts;
 
-  if (req.audio) {
-    // base64 inflates by 4/3; check the decoded size against the real cap.
-    const bytes = Math.floor((req.audio.dataBase64.length * 3) / 4);
-    if (bytes > MAX_INLINE_AUDIO_BYTES) {
-      throw new Error(
-        `audio is ${Math.round(bytes / 1024 / 1024)} MB, over the ${
-          MAX_INLINE_AUDIO_BYTES / 1024 / 1024
-        } MB inline limit`,
-      );
-    }
-    parts.push({
-      inlineData: { mimeType: req.audio.mimeType, data: req.audio.dataBase64 },
-    });
+  // base64 inflates by 4/3; check DECODED size, summed across every part,
+  // against the request-wide cap.
+  const totalBytes = req.media.reduce(
+    (sum, m) => sum + Math.floor((m.dataBase64.length * 3) / 4),
+    0,
+  );
+  if (totalBytes > MAX_INLINE_MEDIA_BYTES) {
+    throw new Error(
+      `attached media is ${Math.round(totalBytes / 1024 / 1024)} MB, over the ${
+        MAX_INLINE_MEDIA_BYTES / 1024 / 1024
+      } MB inline limit`,
+    );
+  }
+
+  for (const m of req.media) {
+    parts.push({ inlineData: { mimeType: m.mimeType, data: m.dataBase64 } });
   }
 
   return parts;

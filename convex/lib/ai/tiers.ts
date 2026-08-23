@@ -3,6 +3,7 @@ export const TIERS = [
   "REASON",           // planning, multi-step decisions
   "DRAFT",            // prose you will read and send
   "TRANSCRIBE",       // audio → text
+  "VISION",           // images and PDFs → text
   "EMBED",            // Phase 17 only
 ] as const;
 
@@ -29,6 +30,11 @@ export const TASKS = {
   SUMMARIZE_THREAD:    { tier: "CHEAP_STRUCTURED" },  // Phase 5
   DRAFT_REPLY:         { tier: "DRAFT" },             // Phase 6
   TRANSCRIBE_VOICE:    { tier: "TRANSCRIBE" },        // Phase 9
+  // Images the user sends are mostly TEXT ON A PICTURE — flyers, carousel
+  // slides, screenshots — so the job is transcription, not description, and
+  // the output contract says so.
+  READ_IMAGE:          { tier: "VISION" },
+  READ_DOCUMENT:       { tier: "VISION" },
   EXTRACT_COMMITMENTS: { tier: "CHEAP_STRUCTURED" },
   COMPOSE_BRIEF:       { tier: "DRAFT" },             // Phase 12
 } as const satisfies Record<string, { tier: Tier }>;

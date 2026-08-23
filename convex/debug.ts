@@ -35,6 +35,10 @@ export const pingAI = internalAction({
      *  voice note — see scripts/test-transcription.sh. */
     audioBase64: v.optional(v.string()),
     audioMime: v.optional(v.string()),
+    /** Inline image, base64. Proves the VISION path without sending a photo
+     *  through Telegram — the same role audioBase64 plays for TRANSCRIBE. */
+    imageBase64: v.optional(v.string()),
+    imageMime: v.optional(v.string()),
   },
   handler: async (_ctx, args) => {
     const task = (args.task ?? "CHAT_REPLY") as TaskName;
@@ -70,14 +74,20 @@ export const pingAI = internalAction({
     const result = await runTask(task, {
       system: args.audioBase64
         ? "You transcribe audio. Output ONLY the verbatim transcript."
-        : "Answer in exactly one short sentence.",
+        : args.imageBase64
+          ? "You read images. Transcribe ALL text you can see, verbatim. Output only the text."
+          : "Answer in exactly one short sentence.",
       input: args.audioBase64
         ? "Transcribe the following audio."
-        : (args.prompt ?? "Say that the provider chain is working."),
-      audio: args.audioBase64
-        ? { mimeType: args.audioMime ?? "audio/ogg", dataBase64: args.audioBase64 }
-        : undefined,
-      maxOutputTokens: args.audioBase64 ? 1024 : 100,
+        : args.imageBase64
+          ? "Read the image."
+          : (args.prompt ?? "Say that the provider chain is working."),
+      media: args.audioBase64
+        ? [{ mimeType: args.audioMime ?? "audio/ogg", dataBase64: args.audioBase64 }]
+        : args.imageBase64
+          ? [{ mimeType: args.imageMime ?? "image/png", dataBase64: args.imageBase64 }]
+          : undefined,
+      maxOutputTokens: args.audioBase64 || args.imageBase64 ? 1024 : 100,
     });
 
     return {

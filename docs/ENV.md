@@ -53,6 +53,7 @@ right**, not a single name:
 
 ```
 GEMINI_MODEL_REASON=gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
+GEMINI_MODEL_VISION=gemini-3.5-flash,gemini-3.7-flash,gemini-flash-latest
 ```
 
 A single name still works — it is a ladder of one. Gemini free-tier quota is

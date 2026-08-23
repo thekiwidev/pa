@@ -9,6 +9,45 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-23 — Telegram has no "album" update
+
+A carousel arrives as N separate `message` updates sharing a
+`media_group_id`. There is no count, no terminator, and no way to ask how many
+are coming. The only signal that a group is complete is that you stop hearing
+about it — hence the `mediaGroups` buffer table plus a 2-second scheduled
+flush, with only the FIRST slide scheduling the flush (check-then-insert in
+one transaction, same pattern as everywhere else here).
+
+Two details measured while building it: each `photo` arrives as several sizes
+with the largest LAST — take that one, because text on a flyer is unreadable
+at thumbnail size. And the caption is attached to exactly one slide of the
+group, usually the first, so search all of them for it.
+
+## 2026-08-23 — A capability table is a promise the provider code must keep
+
+`PROVIDER_CAPABILITIES` listed `TRANSCRIBE` for OpenAI. `openai.ts` never read
+`req.audio` at all. So a voice note that failed over to OpenAI produced a
+confident answer to a prompt with no audio in it — the worst failure shape
+available, since nothing errors.
+
+Adding the `VISION` tier then produced the mirror-image bug: declared in
+`TIERS`, added to some providers and not others by a sloppy edit, and it threw
+`NoProviderAvailable` at runtime on the first image. The tier list and the
+capability list live in the same file and still drifted.
+
+Both are now covered by a test asserting every declared tier is served by at
+least one provider, and that OpenAI does not claim TRANSCRIBE. Generalisable:
+**a capability declared in one list and implemented in another needs a test
+linking them**, because nothing in the type system does.
+
+Vendor shapes worth remembering: Gemini takes ALL inline media through one
+`inlineData` envelope (audio, images and PDFs alike), which is why images cost
+almost nothing to add. OpenRouter needs `input_audio` for audio and
+`image_url` for everything else. OpenAI's `/v1/responses` uses `input_image`
+and `input_file`, and has no audio input part at all.
+
+---
+
 ## 2026-08-23 — Two prompt blocks can be individually correct and jointly wrong
 
 Wiring `userContext` into the brief was necessary and not sufficient. The

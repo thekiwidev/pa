@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { resolveProviderChain, NoProviderAvailable } from "../../convex/lib/ai/resolve";
+import {
+  resolveProviderChain,
+  NoProviderAvailable,
+  PROVIDER_CAPABILITIES,
+} from "../../convex/lib/ai/resolve";
+import { TIERS, TASKS } from "../../convex/lib/ai/tiers";
 
 // A fake environment. These tests never touch process.env, never touch the
 // network, and never start Convex — resolveProviderChain is a pure function.
@@ -46,5 +51,33 @@ describe("resolveProviderChain — openrouter", () => {
   test("openrouter participates in the priority chain like any provider", () => {
     const env = { AI_PROVIDER_PRIORITY: "openrouter,gemini", OPENROUTER_API_KEY: "sk-or-x" };
     expect(resolveProviderChain(env, "REASON")).toEqual(["openrouter"]);
+  });
+});
+
+describe("capability table completeness", () => {
+  // Adding "VISION" to TIERS while forgetting to add it to any provider's
+  // list threw NoProviderAvailable at RUNTIME, on the first image sent. The
+  // tier is declared in one file and consumed in another; nothing linked
+  // them. This does.
+  test("every declared tier is supported by at least one provider", () => {
+    for (const tier of TIERS) {
+      const supporting = PROVIDER_CAPABILITIES.filter((p) => p.tiers.includes(tier));
+      expect(supporting.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("every task's tier is one a provider can serve", () => {
+    for (const [task, { tier }] of Object.entries(TASKS)) {
+      const supporting = PROVIDER_CAPABILITIES.filter((p) => p.tiers.includes(tier));
+      expect(`${task}:${supporting.length > 0}`).toBe(`${task}:true`);
+    }
+  });
+
+  test("openai does NOT claim TRANSCRIBE", () => {
+    // It claimed it for months while silently dropping req.audio, so a voice
+    // note routed there got a confident answer to an empty prompt. A
+    // capability claim is a promise the provider code has to keep.
+    const openai = PROVIDER_CAPABILITIES.find((p) => p.id === "openai");
+    expect(openai?.tiers).not.toContain("TRANSCRIBE");
   });
 });

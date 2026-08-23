@@ -20,17 +20,21 @@ export const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
   {
     id: "gemini",
     apiKeyVar: "GEMINI_API_KEY",
-    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "TRANSCRIBE", "EMBED"],
+    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "TRANSCRIBE", "VISION", "EMBED"],
   },
   {
     id: "openai",
     apiKeyVar: "OPENAI_API_KEY",
-    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "TRANSCRIBE", "EMBED"],
+    // No TRANSCRIBE: /v1/responses has no audio input part, and the provider
+    // silently dropped req.audio while this list claimed otherwise — a voice
+    // note routed here got a confident answer to an empty prompt. Images and
+    // PDFs (VISION) are genuinely supported.
+    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "VISION", "EMBED"],
   },
   {
     id: "anthropic",
     apiKeyVar: "ANTHROPIC_API_KEY",
-    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT"], // no audio, no embeddings
+    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "VISION"], // no audio, no embeddings
   },
   {
     id: "openrouter",
@@ -40,7 +44,7 @@ export const PROVIDER_CAPABILITIES: readonly ProviderCapability[] = [
     // capabilities. Listed as full-capability here; a model that can't do
     // audio for TRANSCRIBE will just fail that one call, same as picking
     // the wrong Gemini model would.
-    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "TRANSCRIBE", "EMBED"],
+    tiers: ["CHEAP_STRUCTURED", "REASON", "DRAFT", "TRANSCRIBE", "VISION", "EMBED"],
   },
 ];
 

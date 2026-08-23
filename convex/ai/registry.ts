@@ -1,6 +1,6 @@
 import { TASKS, modelEnvVar, modelChain, type TaskName } from "../lib/ai/tiers";
 import { resolveProviderChain, PROVIDER_CAPABILITIES } from "../lib/ai/resolve";
-import type { AIProvider, AIResult } from "./types";
+import type { AIProvider, AIResult, MediaPart } from "./types";
 import { AllProvidersFailed } from "./types";
 import { isQuotaExhausted } from "../lib/ai/errors";
 import type { UntrustedBlock } from "../lib/ai/prompt";
@@ -20,7 +20,7 @@ export interface RunTaskArgs {
   system: string;
   input: string;
   untrusted?: UntrustedBlock[];
-  audio?: { mimeType: string; dataBase64: string };
+  media?: MediaPart[];
   maxOutputTokens?: number;
 }
 

@@ -288,6 +288,30 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_user", ["userId"]),
 
+  /**
+   * Slides of a Telegram album, buffered until the group is complete.
+   *
+   * Telegram has no "album" update: it sends each photo as a SEPARATE update
+   * sharing a media_group_id, with no count and no terminator. So slides are
+   * collected here and a scheduled flush reads them as one document — which
+   * is the entire point for a carousel whose meaning is spread across four
+   * text slides.
+   *
+   * Rows are deleted on flush; a group that somehow never flushes is
+   * harmless, since nothing reads an unflushed group.
+   */
+  mediaGroups: defineTable({
+    userId: v.id("users"),
+    mediaGroupId: v.string(),
+    chatId: v.string(),
+    fileId: v.string(),
+    caption: v.string(),
+    channelMessageId: v.string(),
+    receivedAt: v.number(),
+    /** Set on the first slide; the flush job for this group. */
+    flushJobId: v.optional(v.id("_scheduled_functions")),
+  }).index("by_group", ["mediaGroupId"]),
+
   // ── Phase 5 ────────────────────────────────────────────────
   notifications: defineTable({
     userId: v.id("users"),
