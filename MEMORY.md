@@ -9,6 +9,38 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-23 — Attached content must not choose the procedure
+
+Sprints 2 and 3 made attachments part of the message text, and that quietly
+broke skill selection: `relevantSkillNames` matched the WHOLE turn, so a
+meeting transcript containing "email" — in an injected instruction, of all
+places — loaded `check_email`, whose compose pass then reformatted the meeting
+output into an email-shaped reply.
+
+Not a breach: the injection was refused, and the router still gates every
+consequential tool. But it is the same family. Untrusted content that cannot
+make the system ACT should not be able to STEER it either, and "which
+procedure runs" is steering.
+
+`converse()` now takes `intentText` — the caption or command — and matches
+skills against that. The turn text still carries the attachment for the model
+to work with. Worth generalising: **when you widen what counts as "the
+message", re-check everything that pattern-matches on it.**
+
+## 2026-08-23 — Two systems creating the same task is invisible when one dedupes
+
+`meeting.ingest` creates tasks internally; the planner also proposed
+`task.create` for the same commitment. Only one task existed afterwards, which
+looked like correctness and was actually `tasks.create` deduping on title. A
+slightly different wording from either side would have produced two.
+
+Fixed in the tool description ("this tool ALREADY creates the tasks — do not
+also call task.create"), but the lesson is the check: when a tool has internal
+side effects, the model will often duplicate them unless told not to, and a
+dedupe elsewhere will hide it.
+
+---
+
 ## 2026-08-23 — Telegram has no "album" update
 
 A carousel arrives as N separate `message` updates sharing a

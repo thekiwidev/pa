@@ -312,6 +312,25 @@ export default defineSchema({
     flushJobId: v.optional(v.id("_scheduled_functions")),
   }).index("by_group", ["mediaGroupId"]),
 
+  /**
+   * Not in the build plan's schema — added with Phase 21. One row per
+   * ingested transcript.
+   *
+   * `transcript` is capped like emailMessages.bodyText and for the same
+   * reason: Convex bills database BANDWIDTH, and a 200 KB transcript re-read
+   * on every list query is the expensive mistake. The extraction is what is
+   * actually re-read.
+   */
+  meetings: defineTable({
+    userId: v.id("users"),
+    title: v.string(),
+    occurredAt: v.number(), // ms epoch — when the meeting was, best effort
+    transcript: v.optional(v.string()), // capped at TRANSCRIPT_CAP_BYTES
+    extraction: v.any(), // the parsed ExtractionSchema result
+    createdTaskIds: v.array(v.id("tasks")),
+    createdReminderIds: v.array(v.id("reminders")),
+  }).index("by_user_occurred", ["userId", "occurredAt"]),
+
   // ── Phase 5 ────────────────────────────────────────────────
   notifications: defineTable({
     userId: v.id("users"),

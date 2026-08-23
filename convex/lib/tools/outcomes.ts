@@ -184,6 +184,76 @@ function renderOne(outcome: ToolOutcome): string {
       ].join("\n");
     }
 
+    case "meeting.ingest": {
+      const lines: string[] = [`📋 **${str(r, "title") ?? "Meeting"}**`, ""];
+
+      const tldr = str(r, "personalTldr");
+      if (tldr) lines.push(tldr, "");
+
+      const section = (heading: string, items: unknown, bullet: string) => {
+        if (!Array.isArray(items) || items.length === 0) return;
+        lines.push(heading);
+        for (const item of items) lines.push(`  ${bullet} ${String(item)}`);
+        lines.push("");
+      };
+
+      section("**YOU OWE**", field(r, "youOwe"), "✅");
+      section("**WAITING ON**", field(r, "waitingOn"), "🚧");
+
+      // NEEDS YOUR CALL is not optional. Every commitment with no clear owner
+      // lands here and creates NOTHING — that is the difference between a
+      // system that quietly invents tasks and one you can hand a transcript
+      // to. Rendered even when the model found none, so its absence means
+      // "nothing was ambiguous" rather than "this section was dropped".
+      const unknowns = field(r, "needsYourCall");
+      if (Array.isArray(unknowns) && unknowns.length > 0) {
+        lines.push("**NEEDS YOUR CALL** — nothing created for these");
+        for (const item of unknowns) lines.push(`  ❓ ${String(item)}`);
+        lines.push("");
+      }
+
+      const scheduling = field(r, "scheduling");
+      if (Array.isArray(scheduling) && scheduling.length > 0) {
+        lines.push("**MENTIONED, NOT SCHEDULED** — there is no calendar tool");
+        for (const item of scheduling) lines.push(`  📅 ${String(item)}`);
+        lines.push("");
+      }
+
+      section("**DECIDED**", field(r, "decisions"), "•");
+
+      return lines.join("\n").trimEnd();
+    }
+
+    case "meeting.list": {
+      const meetings = field(r, "meetings");
+      if (!Array.isArray(meetings) || meetings.length === 0) {
+        return "No meetings processed yet. Send me a transcript.";
+      }
+      return [
+        `📋 ${meetings.length} recent meeting${meetings.length === 1 ? "" : "s"}:`,
+        ...meetings.map((entry) => {
+          const m = entry as Record<string, unknown>;
+          const count = Number(m.taskCount ?? 0);
+          return `  • ${String(m.title)} — ${String(m.occurredAt)}${
+            count > 0 ? `, ${count} task${count === 1 ? "" : "s"}` : ""
+          }`;
+        }),
+      ].join("\n");
+    }
+
+    case "meeting.get": {
+      const lines = [
+        `📋 **${str(r, "title") ?? "Meeting"}** — ${str(r, "occurredAt") ?? ""}`,
+        "",
+        str(r, "personalTldr") ?? "",
+      ];
+      const decisions = field(r, "decisions");
+      if (Array.isArray(decisions) && decisions.length > 0) {
+        lines.push("", "**DECIDED**", ...decisions.map((d) => `  • ${String(d)}`));
+      }
+      return lines.join("\n").trimEnd();
+    }
+
     case "email.add_rule":
       return field(r, "created") === true
         ? `✅ Rule saved: ${str(r, "description")}.\nIt applies from the next email in, before anything is read.`

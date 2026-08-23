@@ -358,7 +358,11 @@ function parseDocumentMessage(update: unknown): {
   const fileName = typeof doc.file_name === "string" ? doc.file_name : "";
   const lower = fileName.toLowerCase();
 
-  const isText = mimeType.startsWith("text/") || lower.endsWith(".md") || lower.endsWith(".txt");
+  // .vtt and .srt are subtitle formats and the usual export from a meeting
+  // recorder. lib/meetings/transcript.ts strips their cue numbering.
+  const isText =
+    mimeType.startsWith("text/") ||
+    [".md", ".txt", ".vtt", ".srt"].some((ext) => lower.endsWith(ext));
   const isPdf = mimeType === "application/pdf" || lower.endsWith(".pdf");
   // Deliberately narrow. A .docx or .zip would be silently mangled by the
   // text decoder, and "I read your file" about garbage is worse than "I

@@ -35,7 +35,12 @@ export const TASKS = {
   // the output contract says so.
   READ_IMAGE:          { tier: "VISION" },
   READ_DOCUMENT:       { tier: "VISION" },
-  EXTRACT_COMMITMENTS: { tier: "CHEAP_STRUCTURED" },
+  // Was CHEAP_STRUCTURED. A transcript is the one input where getting
+  // attribution wrong silently manufactures — or loses — someone's task.
+  // This is a per-transcript cost, not per-message, so REASON is affordable
+  // here in a way it would not be for PLAN_TOOLS.
+  EXTRACT_COMMITMENTS: { tier: "REASON" },
+  SUMMARIZE_MEETING:   { tier: "DRAFT" },             // the personal TL;DR
   COMPOSE_BRIEF:       { tier: "DRAFT" },             // Phase 12
 } as const satisfies Record<string, { tier: Tier }>;
 

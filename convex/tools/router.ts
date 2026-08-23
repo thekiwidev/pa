@@ -621,6 +621,57 @@ async function dispatch(
       };
     }
 
+    case "meeting.ingest": {
+      // The heavy lifting is an action of its own: two model passes plus the
+      // deterministic apply. The router stays a dispatcher.
+      return await ctx.runAction(internal.meetings.ingest, {
+        userId,
+        transcript: a.transcript as string,
+        title: a.title as string | undefined,
+        occurredAt: a.occurredAt as string | undefined,
+      });
+    }
+
+    case "meeting.list": {
+      const rows = await ctx.runQuery(internal.model.meetings.list, {
+        userId,
+        limit: (a.limit as number | undefined) ?? 10,
+      });
+      return {
+        meetings: rows.map((m) => ({
+          title: m.title,
+          occurredAt: formatInstant(m.occurredAt, timezone),
+          taskCount: m.createdTaskIds.length,
+        })),
+      };
+    }
+
+    case "meeting.get": {
+      const row = a.meetingId
+        ? await ctx.runQuery(internal.model.meetings.getById, {
+            userId,
+            meetingId: a.meetingId as Id<"meetings">,
+          })
+        : await ctx.runQuery(internal.model.meetings.findByFragment, {
+            userId,
+            fragment: a.titleFragment as string,
+          });
+      if (!row) throw new Error("no meeting matching that");
+
+      const extraction = row.extraction as {
+        personalTldr?: string;
+        decisions?: string[];
+        commitments?: { who: string; what: string; owner: string }[];
+      };
+      return {
+        title: row.title,
+        occurredAt: formatInstant(row.occurredAt, timezone),
+        personalTldr: extraction.personalTldr ?? "",
+        decisions: extraction.decisions ?? [],
+        commitments: extraction.commitments ?? [],
+      };
+    }
+
     case "email.add_rule": {
       const result = await ctx.runMutation(internal.model.emailRules.add, {
         userId,

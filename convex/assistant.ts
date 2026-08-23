@@ -110,6 +110,19 @@ export async function converse(
   userId: Id<"users">,
   displayName: string,
   text: string,
+  /**
+   * What the USER actually asked, when `text` also carries attached content
+   * (an image transcription, a document, a meeting transcript).
+   *
+   * Skill selection is keyword-matched against this and never against the
+   * attachment. Observed 2026-08-23: a meeting transcript containing the word
+   * "email" — inside an injected instruction, no less — pulled the
+   * check_email procedure into the prompt and it rewrote the meeting output.
+   * Untrusted content must not get to choose which procedure runs. It cannot
+   * make the assistant ACT (the router gates that), but it should not steer
+   * it either.
+   */
+  intentText?: string,
 ): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
@@ -129,7 +142,7 @@ export async function converse(
 
   // Deterministic keyword match, no model call spent deciding — a turn with
   // no email/brief/draft language pays nothing for skills existing at all.
-  const skillNames = relevantSkillNames(text);
+  const skillNames = relevantSkillNames(intentText ?? text);
   const activeSkills = [];
   for (const name of skillNames) {
     const found = await ctx.runQuery(internal.model.skills.getEffective, { userId, name });
@@ -694,7 +707,7 @@ async function readImagesAndConverse(
       text: turn,
     });
 
-    reply = await converse(ctx, args.userId, args.displayName, turn);
+    reply = await converse(ctx, args.userId, args.displayName, turn, instruction);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     await ctx.runMutation(internal.model.audit.record, {
@@ -811,7 +824,7 @@ export const handleDocument = internalAction({
         text: turn,
       });
 
-      reply = await converse(ctx, userId, args.displayName, turn);
+      reply = await converse(ctx, userId, args.displayName, turn, instruction);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(internal.model.audit.record, {

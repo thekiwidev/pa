@@ -311,6 +311,32 @@ export const TOOL_SCHEMAS = {
       .describe('part of the rule to drop — a domain, or words from its subject pattern'),
   }),
 
+  "meeting.ingest": z.object({
+    transcript: z
+      .string()
+      .min(40)
+      .describe("the full transcript text, exactly as the user supplied it"),
+    title: z.string().optional().describe('what to call it, e.g. "Momentum sync"'),
+    occurredAt: z
+      .string()
+      .optional()
+      .describe('when the meeting was, ISO local time — omit if not stated'),
+  }),
+  "meeting.list": z.object({
+    limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+  }),
+  "meeting.get": z
+    .object({
+      meetingId: z.string().optional().describe("id from a meeting.list result"),
+      titleFragment: z
+        .string()
+        .optional()
+        .describe('words from the title, e.g. "Momentum", when you have no id'),
+    })
+    .refine((v) => Boolean(v.meetingId || v.titleFragment), {
+      message: "give either meetingId or titleFragment",
+    }),
+
   "instruction.add": z.object({
     text: z
       .string()
@@ -530,6 +556,36 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "email.remove_rule": {
     description: 'Drop a mail rule. Use for "start showing me X again".',
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "meeting.ingest": {
+    description:
+      "Process a meeting transcript: extract what the user committed to, " +
+      "what they are waiting on from others, decisions, and people — then " +
+      "create tasks for their own commitments. Use when the user pastes a " +
+      'transcript or sends one as a file, or says "here\'s the transcript", ' +
+      '"process this meeting", "what did I commit to". When a document\'s ' +
+      "content arrives in the message and it reads as a meeting or call " +
+      "transcript, pass that content here rather than summarising it " +
+      "yourself. A commitment with no clear owner is REPORTED, never turned " +
+      "into a task.\n" +
+      "This tool ALREADY creates the tasks, blockers and people it finds — do " +
+      "NOT also call task.create, task.block or person.upsert for the same " +
+      "meeting, and do not restate its output in your own words. Emit this " +
+      "one call and let its result stand.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "meeting.list": {
+    description: "List recently processed meetings, newest first.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "meeting.get": {
+    description:
+      'Recall one processed meeting — "what did we decide in the Momentum ' +
+      'call?". Returns its TL;DR, decisions and commitments.',
     consequential: false,
     requiresAccountId: false,
   },
