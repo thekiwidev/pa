@@ -266,6 +266,28 @@ export default defineSchema({
     pattern: v.string(), // exact address or domain
   }).index("by_user_pattern", ["userId", "pattern"]),
 
+  /**
+   * User-taught rules about which mail matters, applied deterministically in
+   * lib/email/prefilter.ts BEFORE any model call.
+   *
+   * Supersedes noiseSenders, which could only express "this exact address is
+   * noise" and had no way to list or undo a rule. noiseSenders is kept and
+   * still consulted so existing [Not important] taps are not lost.
+   *
+   * Conditions are ANDed: sender + subject is ONE rule ("ignore security
+   * alerts from Google"), not two, so it cannot silence the same subject
+   * from a different sender.
+   */
+  emailRules: defineTable({
+    userId: v.id("users"),
+    senderPattern: v.optional(v.string()), // "a@b.com" or "@b.com" (domain)
+    subjectPattern: v.optional(v.string()), // case-insensitive substring
+    category: v.optional(v.string()), // a Gmail labelId
+    action: v.string(), // IGNORE | NEVER_ALERT | FLOOR_HIGH
+    reason: v.optional(v.string()), // the user's own words, for /rules
+    createdAt: v.number(),
+  }).index("by_user", ["userId"]),
+
   // ── Phase 5 ────────────────────────────────────────────────
   notifications: defineTable({
     userId: v.id("users"),

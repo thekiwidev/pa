@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { TELEGRAM_FORMAT_CONTRACT } from "../../convex/lib/prompts/format";
+import { KNOWLEDGE_HEADING, buildKnowledgeBlock } from "../../convex/lib/prompts/knowledge";
 import {
   planningSystemPrompt,
   skillComposeSystemPrompt,
@@ -234,6 +235,63 @@ describe("planningSystemPrompt — Phase 6 send scope", () => {
     // makes that false; a prompt that contradicts itself teaches the model
     // that its own SCOPE is unreliable.
     expect(flat()).not.toContain("no ability to send, reply, or delete");
+  });
+});
+
+describe("user-taught knowledge reaches every user-facing prompt", () => {
+  // THE READER TEST. Twice a config surface shipped with a writer and no
+  // reader — skills in Aug 2026, then userContext/customInstructions missing
+  // from the morning brief. Neither failed loudly: a stored-but-unread fact
+  // looks exactly like a fact the model chose to ignore.
+  //
+  // A shared renderer alone would not have caught either. This is what does:
+  // every prompt whose output the user reads must demonstrably contain the
+  // block. Add the next prompt builder here, or it will be the third.
+  const nowMs = Date.parse("2026-08-23T09:00:00Z");
+  const skills = [{ title: "T", content: "do the thing" }];
+  const knowledge = {
+    userContext: [
+      { category: "profile" as const, text: "frontend engineer" },
+      { category: "preferences" as const, text: "washes hair on Sundays" },
+    ],
+    customInstructions: ["keep replies short"],
+  };
+
+  const withKnowledge: [string, string][] = [
+    [
+      "planningSystemPrompt",
+      planningSystemPrompt({
+        ...base,
+        userContext: knowledge.userContext,
+        customInstructions: knowledge.customInstructions,
+      }),
+    ],
+    [
+      "skillComposeSystemPrompt",
+      skillComposeSystemPrompt("Ade", skills, nowMs, "Africa/Lagos", knowledge),
+    ],
+    ["tldrOnlySystemPrompt", tldrOnlySystemPrompt(skills, nowMs, "Africa/Lagos", knowledge)],
+  ];
+
+  for (const [name, prompt] of withKnowledge) {
+    test(`${name} renders the knowledge block`, () => {
+      expect(prompt).toContain(KNOWLEDGE_HEADING);
+    });
+
+    test(`${name} carries an actual recorded fact through`, () => {
+      // Not just the heading — the CONTENT. A heading with an empty body is
+      // how the brief bug would have looked if only the heading were tested.
+      expect(prompt).toContain("washes hair on Sundays");
+      expect(prompt).toContain("keep replies short");
+    });
+  }
+
+  test("buildKnowledgeBlock renders its headings even when empty", () => {
+    // "nothing recorded" must be distinguishable from "this prompt forgot to
+    // ask" — that ambiguity is what hid the bug for two days.
+    const empty = buildKnowledgeBlock({ userContext: [], customInstructions: [] });
+    expect(empty).toContain(KNOWLEDGE_HEADING);
+    expect(empty).toContain("(none saved)");
   });
 });
 

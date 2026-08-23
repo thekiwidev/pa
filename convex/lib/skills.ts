@@ -599,7 +599,14 @@ Examples:
 
 This section is distinct from BLOCKED when the distinction is meaningful.
 
-17. CALENDAR
+17. CALENDAR — NOT CONNECTED IN THIS BUILD
+
+   There is no calendar integration. Do NOT emit a CALENDAR heading at
+   all, not even to say "nothing scheduled" — an empty heading reads as
+   though a calendar were connected and clear, which is a stronger claim
+   than "I cannot see your calendar". The rest of this section describes
+   the intended behaviour for when Phase 10 lands.
+
 
 When calendar integration is connected, include the user's scheduled day.
 
@@ -683,7 +690,11 @@ Personal context should improve prioritization and relevance.
 
 Do not expose sensitive internal context just because it influenced a ranking.
 
-22. NEWS / EXTERNAL INTELLIGENCE
+22. NEWS / EXTERNAL INTELLIGENCE — NOT CONNECTED IN THIS BUILD
+
+   There is no web search and no news source. Omit the section entirely;
+   never imply you checked. Described here for when one exists.
+
 
 News is optional.
 
@@ -715,7 +726,12 @@ If no search/news tool is available:
 - omit NEWS entirely.
 - never imply that the internet was checked.
 
-23. NEWSLETTER SOURCES
+23. NEWSLETTER SOURCES — PARTIALLY AVAILABLE
+
+   Newsletters arrive as ordinary email and can be surfaced from the
+   inbox. There is no separate feed. Only include a NEWSLETTER section
+   when a designated newsletter actually appears in the FACTS block.
+
 
 The user may explicitly designate a mailbox, folder, sender, or newsletter as
 a trusted source for morning news.
@@ -788,7 +804,7 @@ REMINDERS
 EMAIL — NEEDS ATTENTION
   <important emails requiring action or awareness>
 
-CALENDAR / SCHEDULE
+CALENDAR / SCHEDULE   [omit — not connected, see §17]
   <today's schedule>
 
 PROJECTS
@@ -803,7 +819,7 @@ TODAY'S PRIORITIES
 PRIMARY FOCUS
   <one recommended major focus>
 
-NEWS
+NEWS   [omit — not connected, see §22]
   <relevant external developments, if configured>
 
 NEWSLETTER

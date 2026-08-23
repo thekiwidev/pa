@@ -13,6 +13,7 @@ import { sendCard, sendMessage } from "../channels/telegram";
 const CARD_BODY_LIMIT = 3600;
 import { alreadyHtml, escapeTelegramHtml } from "../lib/telegram/html";
 import { BODY_OUTPUT_CONTRACT, extractDraftBody } from "../lib/email/draftBody";
+import { describeRule, normalizePattern, type RuleAction } from "../lib/email/rules";
 import { payloadHash } from "../security/hash";
 import { runTask } from "../ai/registry";
 import type { ToolOutcome } from "../lib/tools/outcomes";
@@ -618,6 +619,51 @@ async function dispatch(
         body,
         approvalExpiresAt: formatInstant(approval.expiresAt, timezone),
       };
+    }
+
+    case "email.add_rule": {
+      const result = await ctx.runMutation(internal.model.emailRules.add, {
+        userId,
+        senderPattern: a.senderPattern as string | undefined,
+        subjectPattern: a.subjectPattern as string | undefined,
+        category: a.category as string | undefined,
+        action: a.action as string,
+        reason: a.reason as string | undefined,
+      });
+      return {
+        created: result.created,
+        description: describeRule({
+          senderPattern: a.senderPattern
+            ? normalizePattern(a.senderPattern as string)
+            : undefined,
+          subjectPattern: a.subjectPattern as string | undefined,
+          category: a.category as string | undefined,
+          action: a.action as RuleAction,
+        }),
+      };
+    }
+
+    case "email.list_rules": {
+      const rows = await ctx.runQuery(internal.model.emailRules.list, { userId });
+      return {
+        rules: rows.map((r) => ({
+          description: describeRule({
+            senderPattern: r.senderPattern,
+            subjectPattern: r.subjectPattern,
+            category: r.category,
+            action: r.action as RuleAction,
+          }),
+          reason: r.reason,
+        })),
+      };
+    }
+
+    case "email.remove_rule": {
+      const result = await ctx.runMutation(internal.model.emailRules.removeByFragment, {
+        userId,
+        fragment: a.fragment as string,
+      });
+      return { removed: result.removed };
     }
 
     case "email.discard_draft": {

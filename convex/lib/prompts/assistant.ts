@@ -1,9 +1,10 @@
 // Pure. Prompt construction with no ctx and no I/O, so the exact string the
 // model receives is unit-testable.
 import { describeCatalog } from "../tools/catalog";
-import { renderUserContext, type ContextEntry } from "../userContext";
+import type { ContextEntry } from "../userContext";
 import { formatInstant } from "../time";
 import { TELEGRAM_FORMAT_CONTRACT } from "./format";
+import { buildKnowledgeBlock, type KnowledgeInput } from "./knowledge";
 
 export interface ConversationTurn {
   direction: "in" | "out";
@@ -179,10 +180,6 @@ export function planningSystemPrompt(ctx: PlanningContext): string {
         .join("\n")
     : "  (none pending)";
 
-  const instructions = ctx.customInstructions.length
-    ? ctx.customInstructions.map((i) => `  - ${i}`).join("\n")
-    : "  (none saved)";
-
   const skills = ctx.activeSkills.length
     ? ctx.activeSkills
         .map((sk) => `--- ${sk.title} ---\n${sk.content}`)
@@ -221,14 +218,13 @@ ${reminders}
 Connected mailboxes:
 ${accounts}
 
-Your standing instructions (from the user — tone/workflow only, see SCOPE):
-${instructions}
-
 Active skills for this message:
 ${skills}
 
-What you know about ${ctx.displayName}:
-${renderUserContext(ctx.userContext as ContextEntry[])}
+${buildKnowledgeBlock({
+  userContext: ctx.userContext as ContextEntry[],
+  customInstructions: ctx.customInstructions,
+})}
 
 Tools available:
 ${describeCatalog()}
@@ -265,6 +261,7 @@ export function skillComposeSystemPrompt(
   skills: { title: string; content: string }[],
   nowMs: number,
   timezone: string,
+  knowledge: KnowledgeInput = { userContext: [], customInstructions: [] },
 ): string {
   const procedures = skills
     .map((s) => `--- ${s.title} ---\n${s.content}`)
@@ -277,6 +274,8 @@ Current date and time: ${formatInstant(nowMs, timezone)} (${timezone}).
 
 The tools have already run. Their results are in the untrusted block below.
 Your job is to present those results by FOLLOWING THE PROCEDURE below exactly.
+
+${buildKnowledgeBlock(knowledge)}
 
 ${procedures}
 
@@ -331,6 +330,7 @@ export function tldrOnlySystemPrompt(
   skills: { title: string; content: string }[],
   nowMs: number,
   timezone: string,
+  knowledge: KnowledgeInput = { userContext: [], customInstructions: [] },
 ): string {
   const procedures = skills.map((s) => s.content).join("\n\n");
 
@@ -339,6 +339,8 @@ untrusted block below. The full email has ALREADY been shown to the user —
 do not repeat it, do not greet, do not preamble.
 
 Current date and time: ${formatInstant(nowMs, timezone)} (${timezone}).
+
+${buildKnowledgeBlock(knowledge)}
 
 Follow the TL;DR rules from this procedure:
 

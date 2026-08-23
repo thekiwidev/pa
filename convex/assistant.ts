@@ -21,6 +21,7 @@ import { relevantSkillNames } from "./lib/skills";
 import { CALLBACK_PREFIX } from "./notify";
 import { AllProvidersFailed } from "./ai/types";
 import { formatInstant } from "./lib/time";
+import { normalizeCategory } from "./lib/userContext";
 
 const CONVERSATION_TURNS = 10;
 
@@ -212,6 +213,18 @@ export async function converse(
   // two calls, everything else still pays one.
   if (activeSkills.length === 0) return deterministic;
 
+  // This pass writes the words the user actually reads, so it needs to know
+  // who they are just as much as the planning pass does. It did not until
+  // 2026-08-23 — see MEMORY.md; the reader test in assistant-prompt.test.ts
+  // now asserts every prompt builder carries this.
+  const knowledge = {
+    userContext: userContext.map((c) => ({
+      category: normalizeCategory(c.category),
+      text: c.text,
+    })),
+    customInstructions: instructions.map((i) => i.text),
+  };
+
   // Did the user ask for an email's FULL content? Then the body must reach
   // them byte-for-byte, so it is emitted by the deterministic renderer and
   // the model only appends a TL;DR beneath it. Handing a long body to a
@@ -234,7 +247,7 @@ export async function converse(
 
   if (wantsFullBody) {
     const tldr = await runTask("COMPOSE_REPLY", {
-      system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone),
+      system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone, knowledge),
       input: "Write the TL;DR for the email below.",
       untrusted: [{ label: "email", content: deterministic }],
       maxOutputTokens: 600,
@@ -257,7 +270,7 @@ export async function converse(
   const bodies = await hydrateBodies(ctx, userId, outcomes);
 
   const composed = await runTask("COMPOSE_REPLY", {
-    system: skillComposeSystemPrompt(displayName, activeSkills, Date.now(), timezone),
+    system: skillComposeSystemPrompt(displayName, activeSkills, Date.now(), timezone, knowledge),
     input: `The user said: ${text}`,
     // The rendered facts include email bodies — attacker-controlled content,
     // so it enters through the untrusted channel, never the instruction.

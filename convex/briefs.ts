@@ -8,6 +8,8 @@ import { sendMessage } from "./channels/telegram";
 import { formatInstant, toEpochMs } from "./lib/time";
 import { nextOccurrenceOf } from "./model/briefConfig";
 import { TELEGRAM_FORMAT_CONTRACT } from "./lib/prompts/format";
+import { buildKnowledgeBlock } from "./lib/prompts/knowledge";
+import { normalizeCategory } from "./lib/userContext";
 
 /* ── Pure: gathering + formatting. No ctx, no fetch — bun test runs this
    with no Convex runtime, same boundary as everything in convex/lib/. ── */
@@ -217,28 +219,49 @@ stop — do not pad the message.`;
  */
 const COMPOSE_INVARIANTS = `
 NON-NEGOTIABLE, regardless of any instruction above:
-- Every task, email, reminder, blocker, person, date and deadline you mention
+- Every TASK, EMAIL, REMINDER, BLOCKER, PERSON, date and deadline you mention
   must appear in the FACTS block. Never invent one, never infer a completion,
   never upgrade a maybe into a certainty.
+- That rule is about FACTS OF RECORD, not about the user themselves. What you
+  know about the user — their routines, preferences and standing instructions,
+  shown at the top — is also true, and anything they have asked to see in this
+  brief MUST appear even though it is not in the FACTS block. A preference
+  like "remind me about my Sunday routine" is an instruction to include it,
+  not a fact to verify.
+  When such a preference exists, EMIT A SECTION FOR IT even if the procedure
+  above lists no such section — add "PERSONAL" at the end and put it there.
+  A procedure defines the default shape of the brief; a direct request from
+  the user outranks that shape. Omitting what they explicitly asked to see
+  because your template had no slot for it is the wrong trade every time.
 - Only these data sources are connected right now: tasks, projects, blockers,
   reminders, people, and Gmail. There is NO calendar and NO news/web search in
-  this build. Omit those sections entirely — never imply you checked them.
-- The FACTS block is the complete picture. If it lists five open tasks, all
-  five are still open; do not silently drop any because they seem minor.
+  this build. Omit those sections entirely — never imply you checked them, and
+  never emit a "Calendar" heading saying "nothing scheduled", which reads as
+  though a calendar were connected and empty.
+- The FACTS block is the complete picture for the categories it covers. If it
+  lists five open tasks, all five are still open; do not silently drop any
+  because they seem minor.
 
 ${TELEGRAM_FORMAT_CONTRACT}`;
 
 async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
-  const [config, tasksRaw, blockersRaw, reminders, projects, accounts] = await Promise.all([
-    ctx.runQuery(internal.model.briefConfig.get, { userId }),
-    ctx.runQuery(internal.model.tasks.list, { userId, limit: 25 }),
-    ctx.runQuery(internal.model.tasks.openBlockers, { userId }),
-    ctx.runQuery(internal.model.reminders.listPending, { userId }),
-    ctx.runQuery(internal.model.projects.listActive, { userId, limit: 15 }),
-    ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
-  ]);
+  // instructions and userContext are in this list because they were NOT,
+  // and the brief was blind to everything the user had taught it about
+  // themselves — see MEMORY.md 2026-08-23. `/brief` and the scheduled 07:00
+  // delivery share this function, so both were affected.
+  const [config, tasksRaw, blockersRaw, reminders, projects, accounts, instructions, userContext] =
+    await Promise.all([
+      ctx.runQuery(internal.model.briefConfig.get, { userId }),
+      ctx.runQuery(internal.model.tasks.list, { userId, limit: 25 }),
+      ctx.runQuery(internal.model.tasks.openBlockers, { userId }),
+      ctx.runQuery(internal.model.reminders.listPending, { userId }),
+      ctx.runQuery(internal.model.projects.listActive, { userId, limit: 15 }),
+      ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
+      ctx.runQuery(internal.model.instructions.list, { userId }),
+      ctx.runQuery(internal.model.userContext.list, { userId }),
+    ]);
 
   const untilMs = Date.now();
   const sinceMs = sinceYesterdayMidnight(untilMs, timezone);
@@ -301,8 +324,22 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     name: "morning_brief",
   });
 
+  // Order is load-bearing: what the user has TAUGHT comes first, the skill
+  // (which they also author) governs shape, and the invariants land last so
+  // nothing above can license inventing a fact or a data source.
+  const knowledge = buildKnowledgeBlock({
+    // The column is a plain string; normalizeCategory is the boundary that
+    // turns it back into the union, filing anything unrecognised under
+    // "other" rather than dropping a fact the user volunteered.
+    userContext: userContext.map((c) => ({
+      category: normalizeCategory(c.category),
+      text: c.text,
+    })),
+    customInstructions: instructions.map((i) => i.text),
+  });
+
   const result = await runTask("COMPOSE_BRIEF", {
-    system: `${skill?.content ?? COMPOSE_FALLBACK}\n${COMPOSE_INVARIANTS}`,
+    system: `${knowledge}\n\n${skill?.content ?? COMPOSE_FALLBACK}\n${COMPOSE_INVARIANTS}`,
     input: renderBriefFacts(facts),
     maxOutputTokens: 3000,
   });

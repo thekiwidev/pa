@@ -9,6 +9,50 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-23 — Two prompt blocks can be individually correct and jointly wrong
+
+Wiring `userContext` into the brief was necessary and not sufficient. The
+fact reached the prompt and the brief still omitted it, because
+`COMPOSE_INVARIANTS` said "every item you mention must appear in the FACTS
+block" — and a hair-care routine is not a fact of record. The model obeyed
+both blocks perfectly and produced the wrong output.
+
+The invariant was written when the only failure mode imaginable was
+*hallucination*, so it drew the boundary at "in FACTS or not". Adding a second
+legitimate source of content silently converted a safety rule into a gag. Now
+scoped: FACTS governs tasks/emails/reminders/people/dates; who the user IS is
+separately true and separately required.
+
+Worth carrying: **when you add a new source of prompt content, re-read every
+existing constraint for whether it now excludes that source.** A "never
+mention anything not in X" rule is the shape most likely to bite.
+
+Second-order lesson from the same session: the model omitted it *silently and
+plausibly*, producing a good brief. Neither the tests nor a glance at the
+output would show it. Only asking "is the thing I asked for in here?" did.
+
+## 2026-08-23 — Rule precedence should be ordered by safety, not specificity
+
+`emailRules` was the obvious place to reach for "most specific rule wins",
+which is what mail clients do. Wrong here. The asymmetry: showing something
+the user wanted hidden costs them two seconds; hiding something they wanted
+shown can cost them a deadline they never learn about.
+
+So `FLOOR_HIGH > NEVER_ALERT > IGNORE`, regardless of insertion order or
+specificity, and a `FLOOR_HIGH` rule also overrides the bulk and promotions
+heuristics — an explicit instruction should never lose to an inference. The
+one exception is deliberate: an `IGNORE` rule DOES beat a CRITICAL sender,
+because that is the user changing their mind about a judgement this system
+made, not about one they made.
+
+Also: "ignore X from Y" must AND its conditions. Storing sender and subject as
+two rules would silence that subject from every sender — which for the literal
+example ("security alerts from Google") would have silenced the user's bank.
+The tool description says so explicitly, because the model's natural reading
+of "ignore security alerts from Google" is a single sender rule.
+
+---
+
 ## 2026-08-23 — A document's ALTITUDE is part of its contract
 
 `draft_reply` was a good skill used at the wrong height. It describes how to

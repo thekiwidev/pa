@@ -9,6 +9,63 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fix — the morning brief could not see anything you had taught it
+
+You told the bot about a personal routine, asked for it in the brief, and the
+brief omitted it. The fact was stored correctly: `briefs.ts` simply never
+called `instructions.list` or `userContext.list`. `/brief` and the scheduled
+07:00 delivery share one composer, so both were blind. Same class as the
+skills bug of 2026-08-21 — a config surface with a writer and no reader.
+
+A second, subtler cause sat underneath: `COMPOSE_INVARIANTS` said every item
+mentioned must appear in the FACTS block, which correctly forbade mentioning a
+preference. That rule is now scoped to facts of record — tasks, emails,
+reminders, people, dates — and the invariants explicitly require honouring
+anything the user asked to see, adding a section for it when the procedure has
+no slot.
+
+- New pure `lib/prompts/knowledge.ts#buildKnowledgeBlock`, now the single
+  rendering, consumed by the planning prompt, both compose passes, and the
+  brief. The compose passes had no knowledge at all before, despite writing
+  the words the user actually reads.
+- A **reader test** in `assistant-prompt.test.ts` asserts every prompt builder
+  contains the block *and* carries a real recorded fact through. This bug
+  class has now happened twice; the test is what stops a third.
+- `COMPOSE_INVARIANTS` also forbids emitting a "Calendar — nothing scheduled"
+  heading, which claimed more than "I cannot see your calendar". The default
+  `morning_brief` skill's calendar and news sections are marked NOT CONNECTED
+  rather than deleted, since they are the intended shape for later phases.
+
+### Added — teachable mail rules
+
+"Ignore security alerts from Google" now works, applied deterministically
+before any model call. New `emailRules` table, pure matcher in
+`lib/email/rules.ts`, three tools (`email.add_rule`, `email.list_rules`,
+`email.remove_rule`).
+
+Previously the only way to teach an ignore was the `[Not important]` button,
+which could write nothing but an exact address — so "anything from this
+domain" was unexpressible, and there was no way to list or undo one.
+`noiseSenders.list` and `.remove` had existed with zero callers.
+
+- **Domain patterns**: `@google.com` matches subdomains but never a lookalike
+  like `notgoogle.com`.
+- **Conditions AND together**: sender + subject is one rule, so "security
+  alerts from Google" cannot silence the same subject from a bank.
+- **Three actions**: `IGNORE` (never show), `NEVER_ALERT` (classify but no
+  card — "stop interrupting me" is a weaker request than "never show me"),
+  `FLOOR_HIGH` (always important).
+- **Precedence is by safety, not specificity**: `FLOOR_HIGH` beats
+  `NEVER_ALERT` beats `IGNORE`, in any order, so a broad ignore can never bury
+  something separately marked important. A `FLOOR_HIGH` rule also rescues mail
+  the bulk and promotions heuristics would have dropped — an explicit
+  instruction outranks an inference.
+- A rule with no conditions is refused at both the write and the match, so it
+  can never silence the whole inbox.
+
+The matched rule is recorded on the message, so "why didn't I see X?" is
+answerable from the row.
+
 ### Fix — a sent email contained the assistant's chat narration
 
 The most serious defect found so far. Asked to send a drafted reply, the

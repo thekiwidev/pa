@@ -184,6 +184,31 @@ function renderOne(outcome: ToolOutcome): string {
       ].join("\n");
     }
 
+    case "email.add_rule":
+      return field(r, "created") === true
+        ? `✅ Rule saved: ${str(r, "description")}.\nIt applies from the next email in, before anything is read.`
+        : `Already had that rule: ${str(r, "description")}.`;
+
+    case "email.list_rules": {
+      const rules = field(r, "rules");
+      if (!Array.isArray(rules) || rules.length === 0) {
+        return "No mail rules yet. Say something like \"ignore security alerts from Google\".";
+      }
+      return [
+        `📋 ${rules.length} mail rule${rules.length === 1 ? "" : "s"}:`,
+        ...rules.map((entry) => {
+          const rule = entry as Record<string, unknown>;
+          const because = typeof rule.reason === "string" && rule.reason ? ` — ${rule.reason}` : "";
+          return `  • ${String(rule.description ?? "?")}${because}`;
+        }),
+      ].join("\n");
+    }
+
+    case "email.remove_rule":
+      return field(r, "removed") === true
+        ? "✅ Rule removed."
+        : "No rule matched that — try `email.list_rules` to see them.";
+
     case "email.discard_draft":
       return field(r, "discarded") === true ? "🗑️ Draft discarded." : "Nothing to discard.";
 

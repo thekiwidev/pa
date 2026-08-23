@@ -269,6 +269,48 @@ export const TOOL_SCHEMAS = {
       message: "give either emailMessageId or senderOrSubject",
     }),
 
+  "email.add_rule": z
+    .object({
+      senderPattern: z
+        .string()
+        .optional()
+        .describe(
+          'who it is from: a full address ("a@b.com") or a whole domain ' +
+            '("@google.com", which also covers accounts.google.com)',
+        ),
+      subjectPattern: z
+        .string()
+        .optional()
+        .describe(
+          'words that appear in the subject, e.g. "security alert" — ' +
+            "case-insensitive, matched as a substring",
+        ),
+      category: z
+        .string()
+        .optional()
+        .describe(
+          'a Gmail category label: CATEGORY_PROMOTIONS, CATEGORY_SOCIAL, ' +
+            "CATEGORY_UPDATES, CATEGORY_FORUMS",
+        ),
+      action: z
+        .enum(["IGNORE", "NEVER_ALERT", "FLOOR_HIGH"])
+        .describe(
+          "IGNORE = never show it; NEVER_ALERT = still classify it but do " +
+            "not push a card; FLOOR_HIGH = always treat it as important",
+        ),
+      reason: z.string().optional().describe("the user's own words, so they can recognise it later"),
+    })
+    .refine((v) => Boolean(v.senderPattern || v.subjectPattern || v.category), {
+      message: "a rule needs at least one of senderPattern, subjectPattern or category",
+    }),
+  "email.list_rules": z.object({}),
+  "email.remove_rule": z.object({
+    fragment: z
+      .string()
+      .min(1)
+      .describe('part of the rule to drop — a domain, or words from its subject pattern'),
+  }),
+
   "instruction.add": z.object({
     text: z
       .string()
@@ -468,6 +510,28 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     description: "Full detail of one email by id.",
     consequential: false,
     requiresAccountId: true,
+  },
+  "email.add_rule": {
+    description:
+      "Teach a permanent rule about which mail matters. Use whenever the " +
+      'user says "ignore ...", "stop showing me ...", "don\'t alert me ' +
+      'about ...", or "always flag ...". Conditions combine with AND, so ' +
+      "sender + subject means BOTH must match — prefer that over a bare " +
+      "sender when the user named a topic, so you do not silence everything " +
+      "from an address they still need. Applied before any reading of the " +
+      "message, so an ignored mail costs nothing.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "email.list_rules": {
+    description: "List the mail rules the user has taught.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "email.remove_rule": {
+    description: 'Drop a mail rule. Use for "start showing me X again".',
+    consequential: false,
+    requiresAccountId: false,
   },
   "instruction.add": {
     description:

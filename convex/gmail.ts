@@ -20,6 +20,7 @@ import {
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
 import { runTask } from "./ai/registry";
 import { prefilter } from "./lib/email/prefilter";
+import { describeRule, matchRules } from "./lib/email/rules";
 import {
   CLASSIFICATION_SYSTEM_PROMPT,
   CLASSIFIER_VERSION,
@@ -201,6 +202,13 @@ interface ClassificationResult {
   importance: string;
   whyItMatters?: string;
   deadlineMentioned?: string | null;
+  /**
+   * A NEVER_ALERT rule matched. The message is still classified and still
+   * appears in the brief and in searches — only the real-time card is
+   * suppressed. "Stop interrupting me about X" and "never show me X" are
+   * different requests and this is the weaker one.
+   */
+  neverAlert?: boolean;
 }
 
 /** Used when the model call fails outright or its response fails to parse. */
@@ -227,7 +235,7 @@ async function classifyMessage(
   normalized: NormalizedEmail,
 ): Promise<ClassificationResult> {
   try {
-    const [isNoise, person, projects] = await Promise.all([
+    const [isNoise, person, projects, rules] = await Promise.all([
       ctx.runQuery(internal.model.noiseSenders.matches, {
         userId,
         fromAddress: normalized.fromAddress,
@@ -237,6 +245,7 @@ async function classifyMessage(
         email: normalized.fromAddress,
       }),
       ctx.runQuery(internal.model.projects.listActive, { userId, limit: 25 }),
+      ctx.runQuery(internal.model.emailRules.listForMatching, { userId }),
     ]);
 
     const haystack = `${normalized.subject ?? ""} ${normalized.bodyText ?? ""}`.toLowerCase();
@@ -250,19 +259,35 @@ async function classifyMessage(
       | "LOW"
       | undefined;
 
+    // Matching is pure; only fetching the rows needs ctx.
+    const userRule = matchRules(
+      {
+        fromAddress: normalized.fromAddress,
+        subject: normalized.subject,
+        labelIds: normalized.labelIds,
+      },
+      rules,
+    );
+
     const verdict = prefilter({
       isNoiseSender: isNoise,
       labelIds: normalized.labelIds,
       hasListUnsubscribe: Boolean(normalized.listUnsubscribe),
       senderImportance,
       projectKeywordHit,
+      userRule,
     });
 
     if (verdict.skip) {
       await ctx.runMutation(internal.model.emailMessages.recordClassification, {
         emailMessageId,
         importance: verdict.importance,
-        classification: { prefilterReason: verdict.reason },
+        classification: {
+          prefilterReason: verdict.reason,
+          // Which rule silenced it, so "why didn't I see X?" is answerable
+          // from the row rather than by re-deriving the match.
+          ...(userRule ? { matchedRule: describeRule(userRule) } : {}),
+        },
         classifierVersion: CLASSIFIER_VERSION,
       });
       return { importance: verdict.importance };
@@ -309,7 +334,10 @@ async function classifyMessage(
       classifierVersion: CLASSIFIER_VERSION,
     });
 
-    return classification;
+    // neverAlert is a DELIVERY decision, not a classification — it is not
+    // stored on the row, only carried to deliverIfDue. The message keeps its
+    // real importance so the brief and searches still surface it.
+    return { ...classification, neverAlert: verdict.neverAlert };
   } catch (error) {
     console.warn(
       `classify_failed emailMessageId=${emailMessageId}: ${
@@ -526,6 +554,10 @@ async function deliverIfDue(
   classified: ClassificationResult,
 ): Promise<void> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  // A user rule saying "don't alert me about this" outranks importance.
+  // Checked before the window so it holds at every hour of the day.
+  if (classified.neverAlert) return;
+
   const immediate =
     classified.importance === "CRITICAL" ||
     (classified.importance === "HIGH" && withinImmediateWindow(Date.now(), timezone));
