@@ -286,8 +286,25 @@ function renderOne(outcome: ToolOutcome): string {
       return [`Applied ${okCount}/${results.length} changes to Linear:`, ...lines].join("\n");
     }
 
-    case "note.save":
-      return `📓 Saved to Notion: **${str(r, "title") ?? "note"}**`;
+    case "note.save": {
+      const category = str(r, "category");
+      return category
+        ? `📓 Saved to Notion under **${category}**: ${str(r, "title") ?? "note"}`
+        : `📓 Saved to Notion: **${str(r, "title") ?? "note"}**`;
+    }
+
+    case "note.categories": {
+      if (field(r, "reachable") === false) return `⚠️ ${str(r, "reason")}`;
+      const rows = field(r, "categories");
+      const categories = Array.isArray(rows) ? rows : [];
+      if (categories.length === 0) {
+        return "No sections yet — saving a note with a category creates one.";
+      }
+      return [
+        `📓 ${categories.length} section${categories.length === 1 ? "" : "s"}:`,
+        ...categories.map((c) => `  • ${String((c as Record<string, unknown>).name ?? "?")}`),
+      ].join("\n");
+    }
 
     case "note.search": {
       // "Could not reach" and "found nothing" are DIFFERENT sentences, and
@@ -303,7 +320,8 @@ function renderOne(outcome: ToolOutcome): string {
         `📓 ${notes.length} note${notes.length === 1 ? "" : "s"}:`,
         ...notes.map((entry) => {
           const n = entry as Record<string, unknown>;
-          return `  • ${String(n.title ?? "(untitled)")}  [${String(n.pageId ?? "")}]`;
+          const section = typeof n.category === "string" && n.category ? ` (${n.category})` : "";
+          return `  • ${String(n.title ?? "(untitled)")}${section}  [${String(n.pageId ?? "")}]`;
         }),
       ].join("\n");
     }

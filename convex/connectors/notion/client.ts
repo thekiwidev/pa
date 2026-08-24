@@ -99,6 +99,8 @@ export interface SavedNote {
   pageId: string;
   url: string;
   title: string;
+  /** The section it was filed under, when there is one. */
+  category?: string;
 }
 
 /**
@@ -124,8 +126,71 @@ async function parentKind(): Promise<"database" | "page"> {
   }
 }
 
+export interface NoteCategory {
+  /** The category page's own id — notes are created under this. */
+  pageId: string;
+  name: string;
+}
+
 /**
- * Create a note under the configured parent.
+ * The sections under the root page: Personal, Work, Library, Movies, whatever
+ * the user has made.
+ *
+ * A section is just a sub-page. Notion exposes them as `child_page` blocks
+ * with their title inlined, so one request lists them — no per-page fetch.
+ *
+ * Only DIRECT children count. A note filed under Work is itself a child page
+ * of Work, and treating it as a section would make every note a category.
+ */
+export async function listCategories(): Promise<NoteCategory[]> {
+  const root = requireParentId();
+  const result = await notionFetch<{
+    results: { id: string; type?: string; child_page?: { title?: string } }[];
+  }>(`/blocks/${root}/children?page_size=100`, { method: "GET" });
+
+  return result.results
+    .filter((b) => b.type === "child_page")
+    .map((b) => ({ pageId: b.id, name: b.child_page?.title ?? "(untitled)" }))
+    .filter((c) => c.name.trim().length > 0);
+}
+
+/**
+ * Find the section page by name, creating it if it does not exist.
+ *
+ * Matching is case- and space-insensitive so "work notes", "Work Notes" and
+ * "Work" do not become three sections. The FIRST match wins rather than the
+ * closest — a user who has genuinely made two similar sections gets the one
+ * they made first, which is stable, instead of a guess that changes.
+ *
+ * Check-then-create is not atomic here. With one user the race needs two
+ * simultaneous saves into a brand-new section, and the cost is a duplicate
+ * section rather than a lost note, so it is not worth a lock.
+ */
+async function ensureCategory(name: string): Promise<NoteCategory> {
+  const wanted = normalizeName(name);
+  const existing = await listCategories();
+  const hit = existing.find((c) => normalizeName(c.name) === wanted);
+  if (hit) return hit;
+
+  const created = await notionFetch<{ id: string }>("/pages", {
+    method: "POST",
+    body: {
+      parent: { page_id: requireParentId() },
+      properties: {
+        title: { title: [{ type: "text", text: { content: name.trim().slice(0, 100) } }] },
+      },
+    },
+  });
+
+  return { pageId: created.id, name: name.trim() };
+}
+
+function normalizeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Create a note under the configured parent, optionally inside a section.
  *
  * Notion caps `children` at 100 blocks per request. A longer note has its
  * first 100 created with the page and the rest appended — splitting rather
@@ -134,11 +199,22 @@ async function parentKind(): Promise<"database" | "page"> {
 export async function createNote(args: {
   title: string;
   markdown: string;
+  category?: string;
 }): Promise<SavedNote> {
   const blocks = markdownToBlocks(args.markdown);
-  const parentId = requireParentId();
   const kind = await parentKind();
   const title = args.title.slice(0, 200);
+
+  // Sections are sub-pages, so they exist only under a page parent. Under a
+  // database, rows are already organised by its own properties and nesting
+  // pages inside it would fight that.
+  let parentPageId = requireParentId();
+  let category: string | undefined;
+  if (kind === "page" && args.category?.trim()) {
+    const section = await ensureCategory(args.category);
+    parentPageId = section.pageId;
+    category = section.name;
+  }
 
   // A database row carries its title as a PROPERTY; a child page carries it
   // as `properties.title`. Same field name, different parent — Notion's own
@@ -146,7 +222,7 @@ export async function createNote(args: {
   const body =
     kind === "database"
       ? {
-          parent: { database_id: parentId },
+          parent: { database_id: requireParentId() },
           // The title property's NAME varies per database; the property id
           // "title" addresses whichever column is the title, which is the one
           // handle stable across differently-configured databases.
@@ -154,7 +230,7 @@ export async function createNote(args: {
           children: blocks.slice(0, 100),
         }
       : {
-          parent: { page_id: parentId },
+          parent: { page_id: parentPageId },
           properties: { title: { title: [{ type: "text", text: { content: title } }] } },
           children: blocks.slice(0, 100),
         };
@@ -171,7 +247,7 @@ export async function createNote(args: {
     });
   }
 
-  return { pageId: page.id, url: page.url, title: args.title };
+  return { pageId: page.id, url: page.url, title: args.title, category };
 }
 
 interface NotionPage {
@@ -195,6 +271,8 @@ export interface NoteSummary {
   url: string;
   title: string;
   lastEditedAt?: string;
+  /** Which section it is filed under, when it is in one. */
+  category?: string;
 }
 
 /**
@@ -206,7 +284,11 @@ export interface NoteSummary {
  * configured page — so sharing something else with the integration later
  * cannot leak into notes.
  */
-export async function searchNotes(query: string, limit: number): Promise<NoteSummary[]> {
+export async function searchNotes(
+  query: string,
+  limit: number,
+  category?: string,
+): Promise<NoteSummary[]> {
   const parentId = requireParentId();
   const trimmed = query.trim();
   const pageSize = Math.min(limit, 25);
@@ -228,13 +310,28 @@ export async function searchNotes(query: string, limit: number): Promise<NoteSum
       `/databases/${parentId}/query`,
       { method: "POST", body },
     );
-    return result.results.map(toSummary);
+    return result.results.map((p) => toSummary(p));
   }
 
   // Page parent. /v1/search matches TITLES across everything the integration
   // can see — which is only what has been shared with it — and the results
-  // are then narrowed to children of the configured page, so sharing
+  // are then narrowed to the root page and its sections, so sharing
   // something else with the integration later cannot leak into notes.
+  const sections = await listCategories();
+  const wanted = category?.trim()
+    ? sections.filter((c) => normalizeName(c.name) === normalizeName(category))
+    : sections;
+
+  // A category the user named but has not created yet is not an error and not
+  // "everything" — it is genuinely empty. Falling back to all sections here
+  // would answer a question about Movies with notes about work.
+  if (category?.trim() && wanted.length === 0) return [];
+
+  const byParent = new Map<string, string>();
+  for (const c of wanted) byParent.set(normalizeId(c.pageId), c.name);
+  // Notes saved before any section existed sit directly under the root.
+  if (!category?.trim()) byParent.set(normalizeId(parentId), "");
+
   const result = await notionFetch<{ results: (NotionPage & { parent?: { page_id?: string } })[] }>(
     "/search",
     {
@@ -248,11 +345,17 @@ export async function searchNotes(query: string, limit: number): Promise<NoteSum
     },
   );
 
-  const wanted = normalizeId(parentId);
+  const sectionIds = new Set(sections.map((c) => normalizeId(c.pageId)));
+
   return result.results
-    .filter((p) => normalizeId(p.parent?.page_id ?? "") === wanted)
+    .filter((p) => {
+      // A section page is a container, not a note. It matches "work" as a
+      // title and would otherwise be returned as a note called Work.
+      if (sectionIds.has(normalizeId(p.id))) return false;
+      return byParent.has(normalizeId(p.parent?.page_id ?? ""));
+    })
     .slice(0, pageSize)
-    .map(toSummary);
+    .map((p) => toSummary(p, byParent.get(normalizeId(p.parent?.page_id ?? "")) || undefined));
 }
 
 /** Notion returns ids hyphenated and accepts them either way. */
@@ -260,12 +363,13 @@ function normalizeId(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
 }
 
-function toSummary(page: NotionPage): NoteSummary {
+function toSummary(page: NotionPage, category?: string): NoteSummary {
   return {
     pageId: page.id,
     url: page.url,
     title: titleOf(page),
     lastEditedAt: page.last_edited_time,
+    category,
   };
 }
 

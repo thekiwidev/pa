@@ -58,6 +58,10 @@ That is the complete list. You have:
     calling note.search and then note.get. So when they ask what they saved
     about something, SEARCH; never answer from what you happen to recall, and
     never say they have nothing saved without having looked.
+    Notes are organised into SECTIONS — Personal, Work, Library, Movies and
+    so on. File a new note into the section it belongs to, using the user's
+    own word for it; call note.categories first if you are unsure, so you
+    reuse an existing section rather than creating a near-duplicate of it.
     If a note tool reports it could not reach Notion, say exactly that. "I
     couldn't reach Notion" and "you have nothing on that" are different
     facts, and there is no local copy that lets you tell them apart yourself.

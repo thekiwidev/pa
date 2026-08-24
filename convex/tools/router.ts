@@ -20,6 +20,7 @@ import { assertFetchable } from "../lib/net/urlGuard";
 import {
   NotionUnavailable,
   createNote,
+  listCategories,
   readNote,
   searchNotes,
 } from "../connectors/notion/client";
@@ -759,8 +760,25 @@ async function dispatch(
       const saved = await createNote({
         title: a.title as string,
         markdown: a.content as string,
+        category: a.category as string | undefined,
       });
-      return { pageId: saved.pageId, url: saved.url, title: saved.title };
+      return {
+        pageId: saved.pageId,
+        url: saved.url,
+        title: saved.title,
+        category: saved.category,
+      };
+    }
+
+    case "note.categories": {
+      try {
+        return { reachable: true, categories: await listCategories() };
+      } catch (error) {
+        if (error instanceof NotionUnavailable) {
+          return { reachable: false, reason: error.userFacing };
+        }
+        throw error;
+      }
     }
 
     case "note.search": {
@@ -771,6 +789,7 @@ async function dispatch(
         const notes = await searchNotes(
           (a.query as string) ?? "",
           (a.limit as number | undefined) ?? 10,
+          a.category as string | undefined,
         );
         return { reachable: true, notes };
       } catch (error) {

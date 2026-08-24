@@ -395,16 +395,32 @@ export const TOOL_SCHEMAS = {
       .string()
       .min(1)
       .describe("the note body, as markdown — headings, bullets and checkboxes all render"),
-  }),
-  "note.search": z.object({
-    query: z
+    category: z
       .string()
+      .optional()
       .describe(
-        "words from the note's TITLE — Notion cannot search page bodies, so " +
-          "search broadly and then read the promising ones with note.get",
+        'which section to file it under, e.g. "Personal", "Work", "Library", ' +
+          '"Movies". Created if it does not exist yet. Use the user\'s own ' +
+          "word for it, and reuse an existing section rather than inventing a " +
+          "near-duplicate — call note.categories first when unsure.",
       ),
-    limit: z.number().int().min(1).max(25).optional().describe("default 10"),
   }),
+  "note.categories": z.object({}),
+  "note.search": z
+    .object({
+      query: z
+        .string()
+        .describe(
+          "words from the note's TITLE — Notion cannot search page bodies, so " +
+            "search broadly and then read the promising ones with note.get. " +
+            "Pass an empty string to list everything.",
+        ),
+      category: z
+        .string()
+        .optional()
+        .describe("limit to one section — omit to search every section"),
+      limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+    }),
   "note.get": z.object({
     pageId: z.string().min(1).describe("pageId from a note.search result"),
   }),
@@ -737,6 +753,15 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "how anything long-term gets written down.",
     consequential: false,
     requiresAccountId: false,
+  },
+  "note.categories": {
+    description:
+      "List the sections the user's notes are organised into. Cheap — call it " +
+      "before saving when you are unsure which section something belongs to, " +
+      "so you reuse an existing one instead of creating a near-duplicate.",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
   },
   "note.search": {
     description:
