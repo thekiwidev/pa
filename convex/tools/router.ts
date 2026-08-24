@@ -17,6 +17,12 @@ import { describeRule, normalizePattern, type RuleAction } from "../lib/email/ru
 import { detectPlatform, extractUrls } from "../lib/social/detect";
 import { fetchPost } from "../connectors/social/client";
 import { assertFetchable } from "../lib/net/urlGuard";
+import {
+  NotionUnavailable,
+  createNote,
+  readNote,
+  searchNotes,
+} from "../connectors/notion/client";
 import { changesetIdFromHash, changesetPayloadHash } from "../security/hash";
 import { open } from "../security/crypto";
 import {
@@ -747,6 +753,44 @@ async function dispatch(
       const apiKey = await linearApiKey(ctx, userId);
       const results = await applyChangeset(apiKey, changes);
       return { results };
+    }
+
+    case "note.save": {
+      const saved = await createNote({
+        title: a.title as string,
+        markdown: a.content as string,
+      });
+      return { pageId: saved.pageId, url: saved.url, title: saved.title };
+    }
+
+    case "note.search": {
+      // A Notion failure must never render as "you have no notes about that".
+      // With no local copy, that sentence would be a false statement about
+      // the user's own data — see NotionUnavailable.userFacing.
+      try {
+        const notes = await searchNotes(
+          (a.query as string) ?? "",
+          (a.limit as number | undefined) ?? 10,
+        );
+        return { reachable: true, notes };
+      } catch (error) {
+        if (error instanceof NotionUnavailable) {
+          return { reachable: false, reason: error.userFacing };
+        }
+        throw error;
+      }
+    }
+
+    case "note.get": {
+      try {
+        const note = await readNote(a.pageId as string);
+        return { reachable: true, ...note };
+      } catch (error) {
+        if (error instanceof NotionUnavailable) {
+          return { reachable: false, reason: error.userFacing };
+        }
+        throw error;
+      }
     }
 
     case "link.read": {

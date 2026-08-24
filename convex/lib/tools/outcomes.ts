@@ -286,6 +286,33 @@ function renderOne(outcome: ToolOutcome): string {
       return [`Applied ${okCount}/${results.length} changes to Linear:`, ...lines].join("\n");
     }
 
+    case "note.save":
+      return `📓 Saved to Notion: **${str(r, "title") ?? "note"}**`;
+
+    case "note.search": {
+      // "Could not reach" and "found nothing" are DIFFERENT sentences, and
+      // with no local copy of the notes the difference is the whole point.
+      if (field(r, "reachable") === false) return `⚠️ ${str(r, "reason")}`;
+
+      const rows = field(r, "notes");
+      const notes = Array.isArray(rows) ? rows : [];
+      if (notes.length === 0) {
+        return "Nothing in your Notion notes matched that title. Notion only searches titles, so try a different word.";
+      }
+      return [
+        `📓 ${notes.length} note${notes.length === 1 ? "" : "s"}:`,
+        ...notes.map((entry) => {
+          const n = entry as Record<string, unknown>;
+          return `  • ${String(n.title ?? "(untitled)")}  [${String(n.pageId ?? "")}]`;
+        }),
+      ].join("\n");
+    }
+
+    case "note.get": {
+      if (field(r, "reachable") === false) return `⚠️ ${str(r, "reason")}`;
+      return [`📓 **${str(r, "title") ?? "Note"}**`, "", str(r, "markdown") ?? "(empty)"].join("\n");
+    }
+
     case "link.read": {
       const lines: string[] = [];
       const author = str(r, "authorName");

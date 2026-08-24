@@ -27,7 +27,9 @@ bunx convex env list --prod   # verify prod
 `TELEGRAM_OWNER_ID` (identifies you, not the bot) · `AI_PROVIDER_PRIORITY` ·
 all `*_API_KEY` · all `*_MODEL_*` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` ·
 `GOOGLE_PUBSUB_AUDIENCE` · `GOOGLE_PUBSUB_SA_EMAIL` · `USER_TIMEZONE` ·
-`APPROVAL_TTL_MINUTES` · `MAX_ALERTS_PER_HOUR` · `ZOHO_*` · `MS_*` · `LINEAR_API_KEY`
+`APPROVAL_TTL_MINUTES` · `MAX_ALERTS_PER_HOUR` · `ZOHO_*` · `MS_*` · `LINEAR_API_KEY
+NOTION_API_KEY
+NOTION_NOTES_DATABASE_ID`
 
 ## First consumed by phase
 

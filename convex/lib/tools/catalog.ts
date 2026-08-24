@@ -389,6 +389,26 @@ export const TOOL_SCHEMAS = {
       .describe("id from a linear.propose_changeset result — propose the batch first, always"),
   }),
 
+  "note.save": z.object({
+    title: z.string().min(1).describe("a short title — this is how the note is found later"),
+    content: z
+      .string()
+      .min(1)
+      .describe("the note body, as markdown — headings, bullets and checkboxes all render"),
+  }),
+  "note.search": z.object({
+    query: z
+      .string()
+      .describe(
+        "words from the note's TITLE — Notion cannot search page bodies, so " +
+          "search broadly and then read the promising ones with note.get",
+      ),
+    limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+  }),
+  "note.get": z.object({
+    pageId: z.string().min(1).describe("pageId from a note.search result"),
+  }),
+
   "link.read": z.object({
     url: z
       .string()
@@ -707,6 +727,32 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "cannot run on your own proposal alone.",
     consequential: true,
     requiresAccountId: false,
+  },
+  "note.save": {
+    description:
+      "Save a note to the user's Notion. Use when they say \"save this\", " +
+      '"add this to my notes", "remember this in Notion", or after ' +
+      "capturing something from an image, a link or a meeting that they want " +
+      "kept. Notes live ONLY in Notion — there is no local copy — so this is " +
+      "how anything long-term gets written down.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "note.search": {
+    description:
+      "Find saved notes by title. Use for \"what did I save about X\", " +
+      '"do I have notes on Y". Searching matches TITLES only, so cast a wide ' +
+      "net and read the likely ones with note.get rather than assuming an " +
+      "empty result means nothing was saved.",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
+  },
+  "note.get": {
+    description: "Read one saved note in full, by its pageId from note.search.",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
   },
   "link.read": {
     description:

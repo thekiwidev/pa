@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { runTask } from "./ai/registry";
 import { geminiProvider } from "./ai/providers/gemini";
 import { seal, open } from "./security/crypto";
+import { NotionUnavailable, checkAccess } from "./connectors/notion/client";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { parseToolPlan } from "./lib/tools/plan";
@@ -243,6 +244,36 @@ export const connectLinear = internalAction({
     });
 
     return { accountId: result.accountId, created: result.created };
+  },
+});
+
+/**
+ * Prove the Notion setup works before a note depends on it.
+ *
+ * The commonest mistake is not the token: it is forgetting to SHARE the notes
+ * database with the integration in Notion's UI, which yields a 404 that reads
+ * exactly like a wrong database id.
+ *
+ *   bunx convex run debug:checkNotion '{}'
+ */
+export const checkNotion = internalAction({
+  args: {},
+  handler: async (): Promise<Record<string, unknown>> => {
+    try {
+      const result = await checkAccess();
+      return { ok: true, database: result.title };
+    } catch (error) {
+      if (error instanceof NotionUnavailable) {
+        return {
+          ok: false,
+          status: error.status,
+          hint: error.isAuthFailure
+            ? "Token rejected, OR the database is not shared with the integration. In Notion: open the database, ... menu, Connections, add your integration."
+            : error.userFacing,
+        };
+      }
+      return { ok: false, hint: error instanceof Error ? error.message : String(error) };
+    }
   },
 });
 

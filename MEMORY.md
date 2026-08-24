@@ -9,6 +9,45 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-24 — With no local copy, "I found nothing" is a claim you cannot make
+
+Notes live only in Notion. That makes an ordinary empty-result path unsafe: if
+the token expired, `searchNotes` throwing and the caller rendering "no notes
+matched" is a FALSE statement about the user's own data, and one they have no
+way to check.
+
+So `note.search` returns `{ reachable: false, reason }` rather than an empty
+list, and `NotionUnavailable.userFacing` writes the sentence. The general
+shape: **when you are the only reader of a remote store, absence and
+unavailability must be different return values, not the same empty array.**
+
+The second half is in the prompt, not the code: the model will happily answer
+"what did I save about X" from its own priors. `SCOPE` now says notes are
+searched, never recalled — the same class of confabulation as the social-post
+bug from 2026-08-23, and it needed the same explicit denial.
+
+## 2026-08-24 — Notion specifics worth not re-deriving
+
+- Auth is `Authorization: Bearer <token>` PLUS a pinned `Notion-Version`
+  header. Omitting the version is an error, not a default.
+- A token alone sees nothing. The database must be SHARED with the integration
+  in Notion's UI (database → ... → Connections). The failure is a 404 that
+  reads exactly like a wrong database id, which is why `debug:checkNotion`
+  says so in its hint.
+- `children` is capped at 100 blocks per request; a longer note appends the
+  rest via `PATCH /blocks/{id}/children`.
+- `rich_text` content is capped at 2000 characters per block.
+- A database query CANNOT search page bodies — only properties. So
+  `note.search` matches titles and `note.get` reads the body, and the tool
+  description tells the model to search broadly then read.
+- The title property's NAME differs per database, but the property id
+  `"title"` addresses whichever column is the title. That is the only stable
+  handle across differently-configured databases.
+- Passing a code language Notion does not recognise fails the whole request,
+  so unknown languages fall back to "plain text".
+
+---
+
 ## 2026-08-24 — Two rule systems is one too many
 
 Phase 7 ships `connectedAccounts.priorityRules`: per-account JSON floors and

@@ -9,6 +9,48 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — Notion as the notes store
+
+Notes and long-tail memory live in Notion and **nowhere else** — nothing is
+mirrored into Convex, per your choice. Three tools: `note.save`,
+`note.search`, `note.get`. Captures from images, links and meetings now have a
+place to go.
+
+The memory split, stated in `SCOPE` because it changes how the assistant must
+behave:
+
+| Layer | Lives in | Reaches the model |
+|---|---|---|
+| Identity facts — role, preferences, routines | Convex `userContext` | every message |
+| Notes and long-tail memory | **Notion only** | on demand, via `note.search` |
+
+A prompt cannot carry an unbounded store, which is why `userContext` is capped
+at 40 entries. Convex keeps the small always-on layer; Notion is the large
+searchable one.
+
+Two consequences the design has to handle rather than hope about:
+
+- **It must search, not recall.** With no local copy, a confident answer from
+  the model's own memory is indistinguishable from a real one. `SCOPE` says to
+  search, and never to claim nothing is saved without having looked.
+- **An outage is not an absence.** `note.search` returns `reachable: false`
+  with a reason rather than an empty list, and the renderer says "I couldn't
+  reach Notion" — because "you have nothing on that" would be a false
+  statement about the user's own data.
+
+Notion has no markdown field, so `lib/notion/blocks.ts` translates both ways.
+The return trip is deliberately tolerant: a page edited by hand in Notion
+contains block types this never writes, and one embedded video must not fail
+the whole read. Long lines are split rather than truncated at Notion's
+2000-character rich-text limit — a note whose tail vanished looks complete.
+
+`bunx convex run debug:checkNotion` verifies the setup. The commonest mistake
+is not the token but forgetting to share the database with the integration,
+which returns a 404 that reads exactly like a wrong database id.
+
+Needs `NOTION_API_KEY` and `NOTION_NOTES_DATABASE_ID`; until they are set,
+every note tool says so plainly instead of pretending the notes are empty.
+
 ### Added — three mailboxes, deterministic routing (Phase 7)
 
 All three Gmail accounts were already connected, so this is the routing half.

@@ -327,3 +327,19 @@ describe("format contract reaches every user-facing prompt", () => {
     });
   }
 });
+
+describe("SCOPE tells the truth about where notes live", () => {
+  // Notes are in Notion ONLY, with no local copy. Two failure modes follow,
+  // and both are the model answering from itself instead of looking:
+  // claiming to recall a note, and claiming none exists.
+  test("says notes must be searched, not recalled", () => {
+    const prompt = planningSystemPrompt(base);
+    expect(prompt).toContain("note.search");
+    expect(prompt).toContain("never answer from what you happen to recall");
+  });
+
+  test("distinguishes an outage from an absence", () => {
+    const prompt = planningSystemPrompt(base);
+    expect(prompt).toContain("couldn't reach Notion");
+  });
+});
