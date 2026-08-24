@@ -9,6 +9,51 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — Linear (Phase 16)
+
+Ask what's open on a board, and report progress in plain language to get a
+batch of proposed issue changes with **one** approval for the whole batch, not
+one per issue. `LINEAR_API_KEY` was already set; `debug:connectLinear` seals it
+into a `connectedAccounts` row, since a personal API key has no OAuth
+handshake to run.
+
+The build doc claimed this "reuses Phase 6's machinery wholesale". It does not:
+that machinery is draft-specific, and three pieces had to be generalised.
+
+- `targetFor` learned `linear_changesets`; without it the gate refused every
+  apply with "Missing the id this action applies to" — failing closed, but
+  unusable.
+- `approvals.consume` threw on any target type but `drafts`. It now has a
+  changeset branch that re-hashes the STORED batch, the same
+  recompute-from-live guarantee the draft path gives.
+- `changesetPayloadHash` moved into `convex/security/hash.ts`, since `model/`
+  must not import from `tools/`. Its id is the first 16 hex characters of the
+  hash — a full SHA-256 hex is 64 chars, which alone exhausts Telegram's
+  64-BYTE `callback_data` limit before any prefix. Shortening the id weakens
+  addressing, never integrity: the approval still binds the full hash.
+
+`linear.apply_changeset` no longer accepts raw `changes`. The doc allowed
+proposing and applying "in the same breath", which the approval gate makes
+unreachable by construction — an approval must exist before apply runs, and
+only `propose_changeset` opens one.
+
+### Fixed — "waiting for your tap" rendered as "unknown error"
+
+`renderOne` returned early on `ok: false` and printed `unknown error`. But
+`executeToolCall` marks a consequential call `ok: false` *precisely because it
+did not execute* — so a correctly-working approval gate looked like a crash.
+This affected `email.send_reply` too, not just Linear; it went unnoticed
+because `email.create_draft` sends the card, so the send path is rarely
+reached by the model directly.
+
+### Fixed — a stale changeset id quoted back from history
+
+The proposal renderer printed the changeset id, so the model would later call
+`apply_changeset` itself using an id from earlier in the conversation, for
+which no approval existed. The renderer no longer emits the id at all — the
+card carries the button — and `propose_changeset`'s description now says to
+stop after proposing.
+
 ### Added — reading social posts (`link.read`)
 
 Paste an Instagram, TikTok, X, LinkedIn or Facebook link and get its caption

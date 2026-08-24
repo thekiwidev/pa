@@ -81,11 +81,15 @@ describe("planningSystemPrompt", () => {
     expect(prompt).toContain("account.connect_link");
   });
 
-  test("states scope boundaries: no code, no infra, no Calendar/Drive/send", () => {
+  test("states scope boundaries: no code, no infra, no Calendar/Drive", () => {
     const prompt = planningSystemPrompt(base);
     expect(prompt).toContain("NO ability to write, read, or change code");
     expect(prompt).toContain("Google Cloud Console");
-    expect(prompt).toContain("Calendar, Drive, Linear, WhatsApp");
+    // Linear left this list when Phase 16 landed. The list is a promise about
+    // what does not exist — every entry removed from it must correspond to a
+    // real tool, and every tool absent from the catalogue must be in it.
+    expect(prompt).toContain("Calendar, Drive, WhatsApp");
+    expect(prompt).toContain("You CAN read and update Linear issues");
     expect(prompt).toContain('Never say "I am checking / investigating');
   });
 

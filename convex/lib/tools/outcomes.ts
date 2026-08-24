@@ -64,6 +64,23 @@ export function renderOutcomes(
   return body || "I understood that but couldn't act on it. Try rephrasing?";
 }
 
+/** Linear's OWN scale, 0-4 — see the note on LINEAR_PRIORITY in catalog.ts. */
+const LINEAR_PRIORITY_WORDS = ["No priority", "Urgent", "High", "Medium", "Low"];
+
+function linearPriorityWord(p: unknown): string {
+  return typeof p === "number" && LINEAR_PRIORITY_WORDS[p] ? LINEAR_PRIORITY_WORDS[p]! : "?";
+}
+
+function renderLinearIssueRow(m: unknown): string {
+  const state = str(field(m, "state"), "name") ?? "?";
+  const assigneeName = str(field(m, "assignee"), "name");
+  return (
+    `• ${str(m, "identifier") ?? "?"} — ${str(m, "title") ?? "(untitled)"} ` +
+    `[${state}, ${linearPriorityWord(field(m, "priority"))}]` +
+    (assigneeName ? ` — ${assigneeName}` : "")
+  );
+}
+
 function renderEmailList(r: unknown): string {
   if (field(r, "connected") === false) {
     return "No mailbox connected. I can send you a link to connect one — just ask.";
@@ -90,7 +107,14 @@ function renderEmailList(r: unknown): string {
 }
 
 function renderOne(outcome: ToolOutcome): string {
-  if (!outcome.ok) {
+  // "Waiting for your tap" is not a failure, even though the outcome is
+  // ok:false — executeToolCall marks a consequential call ok:false precisely
+  // BECAUSE it did not execute. This early return used to swallow that and
+  // print "unknown error", which made a correctly-working approval gate look
+  // broken. Affected email.send_reply too, not just Linear.
+  const awaiting = field(outcome.result, "awaitingApproval") === true;
+
+  if (!outcome.ok && !awaiting) {
     const error = str(outcome.result, "error") ?? "unknown error";
     return `⚠️ ${outcome.name} failed: ${error}`;
   }
@@ -189,6 +213,77 @@ function renderOne(outcome: ToolOutcome): string {
         `The full text is on the card above. Tap Send or Discard.`,
         `Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
       ].join("\n");
+    }
+
+    case "linear.list_issues": {
+      const rows = Array.isArray(r) ? r : [];
+      if (rows.length === 0) return "No matching Linear issues.";
+      return rows.map(renderLinearIssueRow).join("\n");
+    }
+
+    case "linear.get_issue": {
+      if (field(r, "found") !== true) return "No Linear issue matching that id.";
+      const description = str(r, "description");
+      return [
+        `${str(r, "identifier") ?? "?"} — ${str(r, "title") ?? "(untitled)"}`,
+        `State: ${str(field(r, "state"), "name") ?? "?"}   Priority: ${linearPriorityWord(field(r, "priority"))}`,
+        String(field(r, "url") ?? ""),
+        "",
+        description || "(no description)",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "linear.propose_changeset": {
+      const rows = field(r, "changes");
+      const changes = Array.isArray(rows) ? rows : [];
+      return [
+        `📋 ${str(r, "summary") ?? "Proposed batch"} (${changes.length} issue${changes.length === 1 ? "" : "s"})`,
+        ...changes.map((c, n) => {
+          const change = c as Record<string, unknown>;
+          const parts: string[] = [];
+          if (typeof change.stateName === "string") parts.push(`state → ${change.stateName}`);
+          if (typeof change.title === "string") parts.push(`title → "${change.title}"`);
+          if (typeof change.priority === "number") {
+            parts.push(`priority → ${LINEAR_PRIORITY_WORDS[change.priority] ?? change.priority}`);
+          }
+          if (typeof change.description === "string") parts.push("description updated");
+          return `  ${n + 1}. ${String(change.issueId ?? change.issueRef ?? "?")} — ${parts.join(", ") || "no change"}`;
+        }),
+        "",
+        // Deliberately NOT "say approved" and deliberately NOT quoting the
+        // changeset id. The card above carries the button; giving the model
+        // an id to repeat invites it to call apply itself with a stale one
+        // from earlier in the conversation, which is exactly what happened.
+        `Tap Apply on the card above to write these to Linear. Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
+      ].join("\n");
+    }
+
+    case "linear.apply_changeset": {
+      // Same shape as email.send_reply: a call that reaches the gate without
+      // a consumed approval is not an error, it is the system waiting for a
+      // tap. Rendering it as "unknown error" made a working refusal look
+      // broken.
+      if (field(r, "awaitingApproval") === true) {
+        const expires = str(r, "expiresAt");
+        return expires
+          ? `⏳ Tap Apply on the card to confirm — expires ${expires}.`
+          : "⏳ Tap Apply on the card to confirm.";
+      }
+      if (field(r, "error") !== undefined) {
+        return `⚠️ Not applied: ${str(r, "error")}`;
+      }
+
+      const rows = field(r, "results");
+      const results = Array.isArray(rows) ? rows : [];
+      const okCount = results.filter((x) => field(x, "success") === true).length;
+      const lines = results.map((x) =>
+        field(x, "success") === true
+          ? `  ✅ ${str(x, "identifier") ?? str(x, "issueId")}`
+          : `  ⚠️ ${str(x, "issueId") ?? "?"} — ${str(x, "error") ?? "failed"}`,
+      );
+      return [`Applied ${okCount}/${results.length} changes to Linear:`, ...lines].join("\n");
     }
 
     case "link.read": {

@@ -292,3 +292,41 @@ describe("renderOutcomes — user context", () => {
     );
   });
 });
+
+describe("awaiting approval is not a failure", () => {
+  // executeToolCall marks a consequential call ok:false precisely because it
+  // did NOT execute. renderOne used to return early on ok:false and print
+  // "unknown error", so a correctly-working gate looked broken.
+  test("email.send_reply awaiting a tap points at the card", () => {
+    const out = renderOutcomes("", [
+      {
+        name: "email.send_reply",
+        ok: false,
+        result: { awaitingApproval: true, expiresAt: "Mon, 24 Aug 2026 at 09:00" },
+      },
+    ]);
+    expect(out).toContain("Tap Send");
+    expect(out).not.toContain("unknown error");
+    expect(out).not.toContain("failed");
+  });
+
+  test("linear.apply_changeset awaiting a tap points at the card", () => {
+    const out = renderOutcomes("", [
+      { name: "linear.apply_changeset", ok: false, result: { awaitingApproval: true } },
+    ]);
+    expect(out).toContain("Tap Apply");
+    expect(out).not.toContain("unknown error");
+  });
+
+  test("a genuine failure still reads as one", () => {
+    const out = renderOutcomes("", [
+      { name: "email.send_reply", ok: false, result: { error: "that draft no longer exists" } },
+    ]);
+    expect(out).toContain("that draft no longer exists");
+  });
+
+  test("a failure with no error field still says something", () => {
+    const out = renderOutcomes("", [{ name: "task.create", ok: false, result: {} }]);
+    expect(out).toContain("task.create");
+  });
+});

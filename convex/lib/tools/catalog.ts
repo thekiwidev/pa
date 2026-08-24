@@ -114,6 +114,56 @@ const needsTaskRef = <T extends { taskId?: string; taskTitle?: string }>(value: 
   Boolean(value.taskId || value.taskTitle);
 const TASK_REF_ERROR = { message: "give either taskId or taskTitle" };
 
+/**
+ * An issue is addressed by Linear's own UUID OR its human identifier
+ * ("ENG-123") — Linear's API resolves either, so the router passes
+ * whichever one it was given straight through without normalizing it.
+ */
+const LINEAR_ISSUE_REF = z
+  .string()
+  .min(1)
+  .describe('Linear issue id or identifier, e.g. "ENG-123"');
+
+/**
+ * Linear's OWN priority scale — 0 (none) to 4 (low), urgency DEscending.
+ * This is a different scale from PRIORITY above (1=critical...5=lowest,
+ * urgency AScending) — do not reuse PRIORITY here, the numbers mean the
+ * opposite thing.
+ */
+const LINEAR_PRIORITY = z
+  .preprocess((value) => {
+    if (typeof value === "number") return value;
+    if (typeof value !== "string") return value;
+    const asNumber = Number(value.trim());
+    if (!Number.isNaN(asNumber)) return asNumber;
+    const words: Record<string, number> = {
+      none: 0, no_priority: 0,
+      urgent: 1, critical: 1,
+      high: 2,
+      medium: 3, normal: 3,
+      low: 4, minor: 4,
+    };
+    return words[value.trim().toLowerCase().replace(/\s+/g, "_")] ?? value;
+  }, z.number().int().min(0).max(4))
+  .describe('Linear\'s own scale: 0=none 1=urgent 2=high 3=medium 4=low, or the words');
+
+/**
+ * One issue's proposed diff. `stateName` — never an id — the same "resolve
+ * a name in code, never trust an id the model invented" rule that
+ * projectName and taskTitle already follow elsewhere in this file.
+ */
+const LINEAR_CHANGE = z.object({
+  issueRef: LINEAR_ISSUE_REF,
+  title: z.string().optional().describe("new title"),
+  description: z.string().optional().describe("new description"),
+  stateName: z
+    .string()
+    .optional()
+    .describe('target workflow state, e.g. "Done" or "In Progress" — the literal Linear state name for that issue\'s team'),
+  priority: LINEAR_PRIORITY.optional(),
+});
+
+
 export const TOOL_SCHEMAS = {
   "memory.upsert_project": z.object({
     name: z.string().min(1).describe("project name"),
@@ -311,6 +361,25 @@ export const TOOL_SCHEMAS = {
       .describe('part of the rule to drop — a domain, or words from its subject pattern'),
   }),
 
+  "linear.list_issues": z.object({
+    teamKey: z.string().optional().describe('Linear team key, e.g. "ENG" — omit to search every team the key can see'),
+    stateName: z.string().optional().describe('workflow state name, e.g. "In Progress" — a literal Linear state, not a judgement call'),
+    limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+  }),
+  "linear.get_issue": z.object({
+    issueRef: LINEAR_ISSUE_REF,
+  }),
+  "linear.propose_changeset": z.object({
+    changes: z.array(LINEAR_CHANGE).min(1).describe("one entry per issue to change — builds the batch only, does not touch Linear"),
+    summary: z.string().min(1).describe('one sentence describing the whole batch, e.g. "move 3 issues to Done after the deploy" — shown on the approval card'),
+  }),
+  "linear.apply_changeset": z.object({
+    changesetId: z
+      .string()
+      .min(1)
+      .describe("id from a linear.propose_changeset result — propose the batch first, always"),
+  }),
+
   "link.read": z.object({
     url: z
       .string()
@@ -427,8 +496,13 @@ interface ToolMeta {
   /** true → the account must be resolved in code, never inferred (I-3). */
   requiresAccountId: boolean;
   /**
-   * True when the model CANNOT know this tool's result before calling it —
-   * it returns external content (a post, an email body, a transcript).
+   * True when the model CANNOT know this tool's result before calling it:
+   * external content (a post, an email body, a transcript) or content this
+   * system generates (a brief, a summary).
+   *
+   * NOT set on reads of internal state the prompt already carries — open
+   * tasks, reminders and saved context are listed above the tool catalogue,
+   * so a planned reply about them is informed rather than invented.
    *
    * The planner writes its `reply` BEFORE any tool executes, so for these
    * tools that reply is guesswork dressed as fact. Observed live on
@@ -526,6 +600,7 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "query Gmail live with no day limit instead. Read-only.",
     consequential: false,
     requiresAccountId: true,
+    contentIsUnknowable: true,
   },
   "email.search": {
     description:
@@ -534,6 +609,7 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "Read-only.",
     consequential: false,
     requiresAccountId: true,
+    contentIsUnknowable: true,
   },
   "email.create_draft": {
     description:
@@ -563,6 +639,7 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "you. Read-only.",
     consequential: false,
     requiresAccountId: true,
+    contentIsUnknowable: true,
   },
   "email.get_message": {
     description: "Full detail of one email by id.",
@@ -590,6 +667,36 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   "email.remove_rule": {
     description: 'Drop a mail rule. Use for "start showing me X again".',
     consequential: false,
+    requiresAccountId: false,
+  },
+  "linear.list_issues": {
+    description: "List Linear issues, optionally filtered by team or workflow state. Read-only.",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
+  },
+  "linear.get_issue": {
+    description: "Full detail of one Linear issue by id or identifier (e.g. ENG-123).",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
+  },
+  "linear.propose_changeset": {
+    description:
+      "Build a batch of Linear issue changes for the user to review and " +
+      "approve in one tap. Does not touch Linear. Use this whenever the " +
+      "user reports progress on project work and it implies issue updates " +
+      "— never call linear.apply_changeset without a changeset from this " +
+      "first, in the same plan or an earlier one.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "linear.apply_changeset": {
+    description:
+      "Apply a previously-proposed batch of Linear issue changes. " +
+      "Consequential — this always needs the user's explicit approval and " +
+      "cannot run on your own proposal alone.",
+    consequential: true,
     requiresAccountId: false,
   },
   "link.read": {
@@ -635,6 +742,7 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       'call?". Returns its TL;DR, decisions and commitments.',
     consequential: false,
     requiresAccountId: false,
+    contentIsUnknowable: true,
   },
   "instruction.add": {
     description:
@@ -693,6 +801,7 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "or test what it looks like before turning it on.",
     consequential: false,
     requiresAccountId: false,
+    contentIsUnknowable: true,
   },
   "context.set": {
     description:

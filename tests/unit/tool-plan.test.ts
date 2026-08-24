@@ -80,13 +80,27 @@ describe("catalog", () => {
     for (const name of TOOL_NAMES) expect(TOOL_META[name]).toBeDefined();
   });
 
-  test("exactly one tool is consequential, and it is email.send_reply", () => {
-    // Phase 2 asserted NOTHING was consequential. Phase 6 deliberately
-    // breaks that: sending is the first externally-visible action. Pinning
-    // the exact set means a future phase cannot quietly add a second one —
-    // every addition has to come here and be justified.
-    const consequential = TOOL_NAMES.filter((n) => TOOL_META[n].consequential);
-    expect(consequential).toEqual(["email.send_reply"]);
+  test("the consequential set is exactly what it should be", () => {
+    // Deliberately an EQUALITY assertion, not a count. A consequential tool
+    // is one that reaches outside the deployment or destroys something, and
+    // adding one must be a decision someone made on purpose — this test is
+    // the place that decision gets recorded.
+    //
+    // email.send_reply — sends mail to another person.
+    // linear.apply_changeset — writes to a shared issue tracker.
+    const consequential = Object.entries(TOOL_META)
+      .filter(([, meta]) => meta.consequential)
+      .map(([name]) => name)
+      .sort();
+
+    expect(consequential).toEqual(["email.send_reply", "linear.apply_changeset"]);
+  });
+
+  test("no tool that merely READS is marked consequential", () => {
+    for (const [name, meta] of Object.entries(TOOL_META)) {
+      const reads = /\.(list|get|search|read|preview|find)/.test(name);
+      if (reads) expect(`${name}:${meta.consequential}`).toBe(`${name}:false`);
+    }
   });
 
   test("no tool that permanently destroys anything exists", () => {

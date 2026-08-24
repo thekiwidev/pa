@@ -53,3 +53,48 @@ export async function payloadHash(payload: DraftPayload): Promise<string> {
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
+
+/** One issue's proposed diff, in the shape the hash cares about. */
+export interface ChangesetEntry {
+  issueId: string;
+  title?: string;
+  description?: string;
+  stateId?: string;
+  priority?: number;
+}
+
+/**
+ * The same discipline payloadHash applies to a draft, applied to a Linear
+ * batch: every field that changes what gets written, in a fixed order, so an
+ * edited batch can never match a stale approval.
+ *
+ * Lives here rather than in tools/router.ts because model/approvals.ts has to
+ * recompute it at consume time, and model/ must not import from tools/.
+ */
+export async function changesetPayloadHash(changes: ChangesetEntry[]): Promise<string> {
+  const canonical = changes
+    .map((c) =>
+      [c.issueId, c.title ?? "", c.description ?? "", c.stateId ?? "", c.priority ?? ""].join(
+        "\u001f",
+      ),
+    )
+    .join("\u001e");
+
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * A changeset's addressable id: the first 16 hex characters of its hash.
+ *
+ * Short because it rides in Telegram's callback_data, which is capped at 64
+ * BYTES total including the prefix — a full 64-char SHA-256 hex does not fit.
+ * Still content-addressed, and 64 bits is far beyond collision range for one
+ * user's pending batches. The FULL hash is what the approval binds itself to,
+ * so shortening the id weakens addressing, never integrity.
+ */
+export function changesetIdFromHash(hash: string): string {
+  return hash.slice(0, 16);
+}

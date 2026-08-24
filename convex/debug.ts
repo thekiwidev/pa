@@ -202,6 +202,50 @@ export const planOnly = internalAction({
  *
  *   bunx convex run debug:cryptoSelfTest '{}'
  */
+/**
+ * One-time: seal LINEAR_API_KEY into a connectedAccounts row.
+ *
+ * Linear has no OAuth handshake for a personal API key — there is no
+ * /connect flow to run instead. This IS the entire "connect Linear" step,
+ * and connectedAccounts.upsert is already idempotent on
+ * (userId, provider, accountEmail), so running this twice just re-seals the
+ * same row rather than duplicating it — safe to re-run after rotating the
+ * key.
+ *
+ *   bunx convex run debug:connectLinear '{}'
+ */
+export const connectLinear = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Record<string, unknown>> => {
+    const apiKey = process.env.LINEAR_API_KEY;
+    if (!apiKey) throw new Error("LINEAR_API_KEY is not set on this deployment");
+
+    const telegramId = process.env.TELEGRAM_OWNER_ID;
+    if (!telegramId) throw new Error("TELEGRAM_OWNER_ID is not set");
+
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId });
+    if (!user) throw new Error("owner has no user row yet — message the bot once first");
+
+    const sealed = await seal(apiKey);
+    const result = await ctx.runMutation(internal.model.connectedAccounts.upsert, {
+      userId: user._id,
+      provider: "linear",
+      // Linear has no mailbox concept — accountEmail is the identity Gmail
+      // uses to tell two accounts of the same provider apart. A stable
+      // literal does the same job here, since there is only ever one.
+      accountEmail: "linear",
+      displayName: "Linear",
+      label: "linear",
+      encryptedCredentials: sealed.ciphertext,
+      credentialIv: sealed.iv,
+      credentialAuthTag: sealed.authTag,
+      scopesGranted: [],
+    });
+
+    return { accountId: result.accountId, created: result.created };
+  },
+});
+
 export const cryptoSelfTest = internalAction({
   args: {},
   handler: async (): Promise<Record<string, unknown>> => {

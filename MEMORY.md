@@ -9,6 +9,59 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-24 — "Reuses the existing machinery" is a claim to verify, not accept
+
+PHASE-16's doc said Linear "reuses Phase 6's machinery wholesale". Three
+things were actually draft-shaped and had to be generalised: `targetFor` knew
+only `drafts`, `approvals.consume` THREW on any other target type, and
+`ConsumeResult` required a `draftId` on success.
+
+None of it failed loudly — `targetFor` returning null makes the gate refuse,
+which is the correct direction, so the feature was simply inert. Worth
+remembering when a doc promises reuse: **check the extension points, not the
+happy path.** The gate was right; it just had no branch for the new thing.
+
+## 2026-08-24 — Telegram's callback_data cap forces short content-addressed ids
+
+`callback_data` is capped at 64 BYTES including your prefix. A SHA-256 hex
+digest is 64 characters on its own, so a content-addressed id cannot be the
+full hash if a button has to carry it.
+
+Split the two roles: the ID addresses (first 16 hex chars, 64 bits — far
+beyond collision range for one user's pending batches), the HASH binds (full
+digest, stored on the approval and recomputed at consume). Shortening the
+addressing never weakens the integrity check.
+
+## 2026-08-24 — ok:false does not mean "failed"
+
+`executeToolCall` returns `ok: false` for a consequential call precisely
+BECAUSE it did not execute — that is the gate working. `renderOne` returned
+early on `ok: false` and printed "unknown error", so a functioning approval
+looked like a crash.
+
+Latent since Phase 6 and invisible because `email.create_draft` sends the card
+itself, so the model rarely reaches `send_reply` directly. Linear made it
+visible because `propose` and `apply` are separate tools the model calls in
+sequence.
+
+Generalisable: **a boolean named `ok` will be read as "succeeded" by the next
+person, including you.** The distinction here is "executed" vs "did not
+execute", and the renderer has to know which kind of not-executing it was.
+
+## 2026-08-24 — Never print an id the model can quote back at you
+
+The changeset renderer included "changeset <id>" in its output. Two turns
+later the model called `apply_changeset` with an id copied from that earlier
+message — a batch whose approval had long since been consumed or expired.
+
+The id had no reason to reach the model at all: the card carries the button,
+and the user's tap supplies the id from `callback_data`. Printing it created a
+path that only existed because the string was visible. **An identifier in
+model-visible text is an identifier the model will eventually use out of
+context.**
+
+---
+
 ## 2026-08-23 — Instagram serves og: tags to BOTS and a login wall to browsers
 
 Exactly backwards from the guess. The connector originally sent a Chrome

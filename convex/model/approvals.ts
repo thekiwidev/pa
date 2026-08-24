@@ -3,7 +3,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
-import { payloadHash } from "../security/hash";
+import { payloadHash, changesetPayloadHash, type ChangesetEntry } from "../security/hash";
 import { recipientsContained } from "../lib/email/recipients";
 
 const DEFAULT_TTL_MINUTES = 30;
@@ -123,7 +123,10 @@ export const rejectForTarget = internalMutation({
 });
 
 type ConsumeResult =
-  | { ok: true; approvalId: Id<"approvals">; draftId: Id<"drafts"> }
+  // draftId is present only for the "drafts" target type. A Linear batch is
+  // content-addressed and has no document to hand back, so the caller reads
+  // its target id from the callback data it already holds.
+  | { ok: true; approvalId: Id<"approvals">; draftId?: Id<"drafts"> }
   | { ok: false; reason: string };
 
 /**
@@ -157,8 +160,37 @@ export const consume = internalMutation({
       return { ok: false, reason: "This approval expired. Draft it again to get a new one." };
     }
 
+    // A Linear batch. Its target is content-addressed rather than a document
+    // id, so "recompute from the live record" means re-hashing the stored
+    // batch — same guarantee as the draft path below, reached differently.
+    if (args.targetType === "linear_changesets") {
+      const stored = await ctx.db
+        .query("preferences")
+        .withIndex("by_user_key", (q) =>
+          q.eq("userId", approval.userId).eq("key", `linear_changeset:${args.targetId}`),
+        )
+        .first();
+      if (!stored) {
+        return { ok: false, reason: "That batch is no longer available. Propose it again." };
+      }
+
+      const changes = (stored.value as { changes: ChangesetEntry[] }).changes;
+      const liveHash = await changesetPayloadHash(changes);
+      if (liveHash !== approval.payloadHash) {
+        return {
+          ok: false,
+          reason: "That batch changed after it was approved. Propose it again to re-approve.",
+        };
+      }
+
+      await ctx.db.patch("approvals", approval._id, {
+        status: "CONSUMED",
+        decidedAt: Date.now(),
+      });
+      return { ok: true, approvalId: approval._id };
+    }
+
     if (args.targetType !== "drafts") {
-      // Every consequential tool this phase knows about targets a draft.
       // Phase 8 adds a branch here for archive/trash/forward/unsubscribe,
       // each with its own live-target shape to recompute a hash from.
       throw new Error(`approvals.consume: unsupported targetType "${args.targetType}"`);

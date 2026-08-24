@@ -1104,6 +1104,20 @@ export const handleCallback = internalAction({
         await sendMessage(args.chatId, text);
         return;
       }
+      if (args.data.startsWith("applyset:")) {
+        const text = await applyChangesetCommand(ctx, userId, args.data.slice("applyset:".length));
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("discardset:")) {
+        const text = await discardChangesetCommand(
+          ctx,
+          userId,
+          args.data.slice("discardset:".length),
+        );
+        await sendMessage(args.chatId, text);
+        return;
+      }
       if (args.data.startsWith("discarddraft:")) {
         const text = await discardDraftCommand(
           ctx,
@@ -1257,6 +1271,45 @@ async function discardDraftCommand(ctx: ActionCtx, userId: Id<"users">, draftId:
     args: { draftId },
   });
   return renderOutcomes("", [outcome]);
+}
+
+async function applyChangesetCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  changesetId: string,
+): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  // Identical shape to sendDraftCommand: consume decides, and a tap that
+  // fails a check never reaches executeToolCall. The difference is only what
+  // gets re-hashed — a stored batch rather than a draft row.
+  const consumed = await ctx.runMutation(internal.model.approvals.consume, {
+    action: "linear.apply_changeset",
+    targetType: "linear_changesets",
+    targetId: changesetId,
+  });
+
+  if (!consumed.ok) return `Not applied: ${consumed.reason}`;
+
+  const outcome = await executeToolCall(ctx, { userId, timezone }, {
+    name: "linear.apply_changeset",
+    args: { changesetId },
+  });
+  return renderOutcomes("", [outcome]);
+}
+
+async function discardChangesetCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  changesetId: string,
+): Promise<string> {
+  const rejected = await ctx.runMutation(internal.model.approvals.rejectForTarget, {
+    action: "linear.apply_changeset",
+    targetType: "linear_changesets",
+    targetId: changesetId,
+  });
+  void userId;
+  return rejected.rejected ? "🗑️ Batch discarded — nothing was written to Linear." : "Nothing to discard.";
 }
 
 async function briefCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {

@@ -20,6 +20,7 @@ import type * as channels_telegram from "../channels/telegram.js";
 import type * as connectors_gmail_client from "../connectors/gmail/client.js";
 import type * as connectors_gmail_normalize from "../connectors/gmail/normalize.js";
 import type * as connectors_gmail_oauth from "../connectors/gmail/oauth.js";
+import type * as connectors_linear_client from "../connectors/linear/client.js";
 import type * as connectors_social_client from "../connectors/social/client.js";
 import type * as crons from "../crons.js";
 import type * as debug from "../debug.js";
@@ -104,6 +105,7 @@ declare const fullApi: ApiFromModules<{
   "connectors/gmail/client": typeof connectors_gmail_client;
   "connectors/gmail/normalize": typeof connectors_gmail_normalize;
   "connectors/gmail/oauth": typeof connectors_gmail_oauth;
+  "connectors/linear/client": typeof connectors_linear_client;
   "connectors/social/client": typeof connectors_social_client;
   crons: typeof crons;
   debug: typeof debug;

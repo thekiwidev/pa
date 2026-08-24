@@ -17,6 +17,15 @@ import { describeRule, normalizePattern, type RuleAction } from "../lib/email/ru
 import { detectPlatform, extractUrls } from "../lib/social/detect";
 import { fetchPost } from "../connectors/social/client";
 import { assertFetchable } from "../lib/net/urlGuard";
+import { changesetIdFromHash, changesetPayloadHash } from "../security/hash";
+import { open } from "../security/crypto";
+import {
+  listIssues,
+  getIssue,
+  listWorkflowStates,
+  applyChangeset,
+  type LinearIssueChange,
+} from "../connectors/linear/client";
 import { payloadHash } from "../security/hash";
 import { runTask } from "../ai/registry";
 import type { ToolOutcome } from "../lib/tools/outcomes";
@@ -108,14 +117,24 @@ export async function executeToolCall(
 }
 
 /** Which (action, targetType, targetId) a consequential call resolves to.
- *  Only email.send_reply exists this phase — Phase 8 adds a case here for
- *  each of archive/trash/forward/unsubscribe, unchanged elsewhere. */
+ *  Phase 8 adds a case here for each of archive/trash/forward/unsubscribe,
+ *  unchanged elsewhere. */
 function targetFor(call: ToolCall): { targetType: string; targetId: string } | null {
   switch (call.name) {
     case "email.send_reply": {
       const draftId = call.args.draftId;
       return typeof draftId === "string" && draftId.length > 0
         ? { targetType: "drafts", targetId: draftId }
+        : null;
+    }
+    case "linear.apply_changeset": {
+      // Only a changesetId addresses a batch. The catalogue no longer accepts
+      // raw `changes` here: an approval must exist BEFORE apply is reached,
+      // and only linear.propose_changeset can open one, so "propose and apply
+      // in the same breath" was never actually reachable through the gate.
+      const changesetId = call.args.changesetId;
+      return typeof changesetId === "string" && changesetId.length > 0
+        ? { targetType: "linear_changesets", targetId: changesetId }
         : null;
     }
     default:
@@ -132,6 +151,21 @@ async function createFallbackApproval(
   action: string,
   target: { targetType: string; targetId: string },
 ): Promise<{ approvalId: Id<"approvals">; expiresAt: number }> {
+  if (target.targetType === "linear_changesets") {
+    const rows = await ctx.runQuery(internal.model.preferences.all, { userId });
+    const stored = rows.find((p) => p.key === `linear_changeset:${target.targetId}`);
+    if (!stored) throw new Error("that batch is no longer available — propose it again");
+
+    const changes = (stored.value as { changes: LinearIssueChange[] }).changes;
+    return await ctx.runMutation(internal.model.approvals.create, {
+      userId,
+      action,
+      targetType: target.targetType,
+      targetId: target.targetId,
+      payloadHash: await changesetPayloadHash(changes),
+    });
+  }
+
   if (target.targetType !== "drafts") {
     throw new Error(`no hash strategy for target type "${target.targetType}" yet`);
   }
@@ -624,6 +658,97 @@ async function dispatch(
       };
     }
 
+    case "linear.list_issues": {
+      const apiKey = await linearApiKey(ctx, userId);
+      return await listIssues(apiKey, {
+        teamKey: a.teamKey as string | undefined,
+        stateName: a.stateName as string | undefined,
+        limit: (a.limit as number | undefined) ?? 10,
+      });
+    }
+
+    case "linear.get_issue": {
+      const apiKey = await linearApiKey(ctx, userId);
+      const issue = await getIssue(apiKey, a.issueRef as string);
+      if (!issue) return { found: false };
+      return { found: true, ...issue };
+    }
+
+    case "linear.propose_changeset": {
+      const apiKey = await linearApiKey(ctx, userId);
+      const changes = await toLinearChanges(apiKey, a.changes as Array<Record<string, unknown>>);
+
+      const hash = await changesetPayloadHash(changes);
+      const changesetId = changesetIdFromHash(hash);
+
+      // Reused, not a new table — see resolveChangeset's comment above.
+      await ctx.runMutation(internal.model.preferences.set, {
+        userId,
+        key: `linear_changeset:${changesetId}`,
+        value: { changes, summary: a.summary, createdAt: Date.now() },
+      });
+
+      // The approval desk opens with the proposal, exactly as it does for a
+      // draft — the batch and the button that applies it arrive together, so
+      // there is no window where the user has been shown something they
+      // cannot act on. The hash is of the RESOLVED changes (state NAMES
+      // already turned into ids), so a re-proposal that resolves differently
+      // gets a different approval.
+      const approval = await ctx.runMutation(internal.model.approvals.create, {
+        userId,
+        action: "linear.apply_changeset",
+        targetType: "linear_changesets",
+        targetId: changesetId,
+        payloadHash: hash,
+      });
+
+      const user = await ctx.runQuery(internal.model.users.get, { userId });
+      if (user) {
+        const lines = [
+          `<b>📋 Linear — ${escapeTelegramHtml(String(a.summary))}</b>`,
+          ``,
+          ...changes.map((c, n) => {
+            const parts: string[] = [];
+            if (c.stateName) parts.push(`state → ${c.stateName}`);
+            if (c.title) parts.push(`title → "${c.title}"`);
+            if (c.priority !== undefined) parts.push(`priority → ${LINEAR_PRIORITY_NAMES[c.priority] ?? c.priority}`);
+            if (c.description) parts.push("description updated");
+            return `${n + 1}. <b>${escapeTelegramHtml(c.issueId)}</b> — ${escapeTelegramHtml(parts.join(", ") || "no change")}`;
+          }),
+          ``,
+          `Applies ${changes.length} issue${changes.length === 1 ? "" : "s"} in one go. Expires ${escapeTelegramHtml(formatInstant(approval.expiresAt, timezone))}.`,
+        ];
+
+        await sendCard(
+          user.telegramId,
+          alreadyHtml(lines.join("\n")),
+          [
+            [
+              { text: "Apply", data: `applyset:${changesetId}` },
+              { text: "Discard", data: `discardset:${changesetId}` },
+            ],
+          ],
+        );
+      }
+
+      return {
+        changesetId,
+        summary: a.summary,
+        changes,
+        approvalExpiresAt: formatInstant(approval.expiresAt, timezone),
+      };
+    }
+
+    case "linear.apply_changeset": {
+      // Reached only once Phase 6's consequential gate has already matched
+      // this exact call to a CONSUMED approval — dispatch's job here is
+      // only to execute, never to re-decide whether it's allowed to.
+      const changes = await resolveChangeset(ctx, userId, a);
+      const apiKey = await linearApiKey(ctx, userId);
+      const results = await applyChangeset(apiKey, changes);
+      return { results };
+    }
+
     case "link.read": {
       const proposed = (a.url as string).trim();
 
@@ -1081,6 +1206,96 @@ function summarizeTask(timezone: string) {
 // (convex/lib/skills.ts), so the user can edit it like any other skill. The
 // hard output contract is BODY_OUTPUT_CONTRACT in lib/email/draftBody.ts and
 // is appended after it.
+
+/**
+ * Linear has exactly one connected account per deployment — no OAuth, no
+ * label to disambiguate — so a provider lookup is enough. Unlike Gmail's
+ * resolveAccountIds, there is nothing to pick between.
+ */
+/** Linear's OWN scale, 0-4 — see the note on LINEAR_PRIORITY in catalog.ts.
+ *  Duplicated from outcomes.ts deliberately: this file must not import the
+ *  renderer, and four strings are cheaper than the coupling. */
+const LINEAR_PRIORITY_NAMES = ["No priority", "Urgent", "High", "Medium", "Low"];
+
+async function linearApiKey(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
+  const account = accounts.find((a) => a.provider === "linear" && a.status === "ACTIVE");
+  if (!account) {
+    throw new Error(
+      "No Linear account connected. Run `bunx convex run debug:connectLinear` " +
+        "once to seal LINEAR_API_KEY into a connectedAccounts row.",
+    );
+  }
+  return await open({
+    ciphertext: account.encryptedCredentials,
+    iv: account.credentialIv,
+    authTag: account.credentialAuthTag,
+  });
+}
+
+/**
+ * "Move it to Done" names a STATE, not an id — and different teams can
+ * have differently-worded states, so this is resolved from the issue's own
+ * team, in code, exactly like a taskTitle or projectName is resolved
+ * before anything is written (I-3). The model never sees or invents a
+ * Linear state id.
+ */
+async function resolveStateId(apiKey: string, issueRef: string, stateName: string): Promise<string> {
+  const issue = await getIssue(apiKey, issueRef);
+  if (!issue) throw new Error(`no Linear issue matching "${issueRef}"`);
+
+  const states = await listWorkflowStates(apiKey, issue.team.key);
+  const match = states.find((s) => s.name.toLowerCase() === stateName.trim().toLowerCase());
+  if (!match) {
+    throw new Error(
+      `${issue.team.key} has no workflow state named "${stateName}" ` +
+        `(has: ${states.map((s) => s.name).join(", ")})`,
+    );
+  }
+  return match.id;
+}
+
+async function toLinearChanges(
+  apiKey: string,
+  rawChanges: Array<Record<string, unknown>>,
+): Promise<LinearIssueChange[]> {
+  return await Promise.all(
+    rawChanges.map(async (c) => ({
+      issueId: c.issueRef as string,
+      title: c.title as string | undefined,
+      description: c.description as string | undefined,
+      stateName: c.stateName as string | undefined,
+      stateId:
+        typeof c.stateName === "string" && c.stateName.length > 0
+          ? await resolveStateId(apiKey, c.issueRef as string, c.stateName)
+          : undefined,
+      priority: c.priority as number | undefined,
+    })),
+  );
+}
+
+/**
+ * The stored batch for a changesetId.
+ *
+ * The batch lives in `preferences` under a content-addressed key — reusing an
+ * existing generic table rather than adding a new one, the same call
+ * PHASE-05B's brief config makes for the same reason.
+ */
+async function resolveChangeset(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  args: Record<string, unknown>,
+): Promise<LinearIssueChange[]> {
+  const changesetId = args.changesetId;
+  if (typeof changesetId !== "string" || changesetId.length === 0) {
+    throw new Error("no changesetId given — propose the batch first");
+  }
+
+  const rows = await ctx.runQuery(internal.model.preferences.all, { userId });
+  const stored = rows.find((p) => p.key === `linear_changeset:${changesetId}`);
+  if (!stored) throw new Error(`no proposed changeset "${changesetId}" — propose one first`);
+  return (stored.value as { changes: LinearIssueChange[] }).changes;
+}
 
 /**
  * OCR a post's images.
