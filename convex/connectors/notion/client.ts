@@ -1,10 +1,16 @@
 // A thin Notion REST client. No SDK, one host, four operations.
 //
-// AUTH: an internal integration token, not OAuth. There is one user and one
-// workspace, so a personal token is the whole credential — same call Phase 16
-// makes for Linear. The token must be given access to the notes database by
-// sharing that database with the integration in Notion's UI; a token alone
-// sees nothing, which is Notion's design and the most common setup mistake.
+// AUTH: an internal integration ("connection") token, not OAuth and not a
+// personal access token. There is one user and one workspace, so a single
+// token is the whole credential — same call Phase 16 makes for Linear.
+//
+// The token alone sees NOTHING. The notes page or database must be shared
+// with the integration in Notion's UI (page -> ... -> Connections). That is
+// Notion's design and the most common setup mistake, and it fails as a 404
+// that reads exactly like a wrong id.
+//
+// NOTES_PARENT: either an ordinary page (notes become child pages) or a
+// database (notes become rows). Both work; `parentKind` probes which.
 
 import { blocksToMarkdown, markdownToBlocks } from "../../lib/notion/blocks";
 
@@ -28,7 +34,7 @@ export class NotionUnavailable extends Error {
     this.name = "NotionUnavailable";
   }
 
-  /** A revoked token, or a database never shared with the integration. */
+  /** A revoked token, or a page/database never shared with the integration. */
   get isAuthFailure(): boolean {
     return this.status === 401 || this.status === 403;
   }
@@ -38,11 +44,11 @@ export class NotionUnavailable extends Error {
     if (this.isAuthFailure) {
       return (
         "I couldn't reach your Notion — the integration token was rejected. " +
-        "Check it is still valid and that the notes database is shared with it."
+        "Check it is still valid and that your notes page is shared with it."
       );
     }
     if (this.status === 404) {
-      return "I couldn't reach your Notion notes database — it may have been moved or unshared.";
+      return "I couldn't reach your Notion notes page — it may have been moved, deleted, or unshared from the integration.";
     }
     return "I couldn't reach Notion just now, so I can't tell you what's saved there.";
   }
@@ -52,16 +58,20 @@ function requireToken(): string {
   const token = process.env.NOTION_API_KEY;
   if (!token) {
     throw new Error(
-      "Notion isn't set up yet. Set NOTION_API_KEY and NOTION_NOTES_DATABASE_ID on the deployment.",
+      "Notion isn't set up yet. Set NOTION_API_KEY to your integration token.",
     );
   }
   return token;
 }
 
-function requireDatabaseId(): string {
+/** The page or database notes are written under. */
+function requireParentId(): string {
   const id = process.env.NOTION_NOTES_DATABASE_ID;
   if (!id) {
-    throw new Error("Notion isn't set up yet. Set NOTION_NOTES_DATABASE_ID on the deployment.");
+    throw new Error(
+      "Notion isn't set up yet. Set NOTION_NOTES_DATABASE_ID to the id of the " +
+        "Notion page (or database) your notes should live under.",
+    );
   }
   return id;
 }
@@ -92,34 +102,66 @@ export interface SavedNote {
 }
 
 /**
- * Create a page in the notes database.
+ * Whether the configured id names a DATABASE or an ordinary PAGE.
+ *
+ * Both are legitimate homes for notes and the setup instructions for a page
+ * are shorter, so rather than insisting on one, this probes. Notion answers
+ * `GET /databases/{id}` with 404 for a page id, which is the whole detection.
+ *
+ * Not cached: it is one small request, it self-heals if the id is later
+ * changed from one to the other, and caching it would mean a stale kind
+ * surviving a reconfiguration — the classic shape of a bug nobody can explain.
+ */
+async function parentKind(): Promise<"database" | "page"> {
+  try {
+    await notionFetch(`/databases/${requireParentId()}`, { method: "GET" });
+    return "database";
+  } catch (error) {
+    if (error instanceof NotionUnavailable && (error.status === 404 || error.status === 400)) {
+      return "page";
+    }
+    throw error;
+  }
+}
+
+/**
+ * Create a note under the configured parent.
  *
  * Notion caps `children` at 100 blocks per request. A longer note has its
- * first 100 blocks created with the page and the rest appended — splitting
- * rather than dropping, same reason blocks.ts splits a long line.
+ * first 100 created with the page and the rest appended — splitting rather
+ * than dropping, same reason blocks.ts splits a long line.
  */
 export async function createNote(args: {
   title: string;
   markdown: string;
-  tags?: string[];
-  sourceUrl?: string;
 }): Promise<SavedNote> {
   const blocks = markdownToBlocks(args.markdown);
+  const parentId = requireParentId();
+  const kind = await parentKind();
+  const title = args.title.slice(0, 200);
 
-  const properties: Record<string, unknown> = {
-    // The title property's NAME varies per database; Notion accepts the
-    // property id "title" for whichever column is the title, which is the
-    // one thing that is stable across differently-configured databases.
-    title: { title: [{ type: "text", text: { content: args.title.slice(0, 200) } }] },
-  };
+  // A database row carries its title as a PROPERTY; a child page carries it
+  // as `properties.title`. Same field name, different parent — Notion's own
+  // asymmetry, not ours.
+  const body =
+    kind === "database"
+      ? {
+          parent: { database_id: parentId },
+          // The title property's NAME varies per database; the property id
+          // "title" addresses whichever column is the title, which is the one
+          // handle stable across differently-configured databases.
+          properties: { title: { title: [{ type: "text", text: { content: title } }] } },
+          children: blocks.slice(0, 100),
+        }
+      : {
+          parent: { page_id: parentId },
+          properties: { title: { title: [{ type: "text", text: { content: title } }] } },
+          children: blocks.slice(0, 100),
+        };
 
   const page = await notionFetch<{ id: string; url: string }>("/pages", {
     method: "POST",
-    body: {
-      parent: { database_id: requireDatabaseId() },
-      properties,
-      children: blocks.slice(0, 100),
-    },
+    body,
   });
 
   for (let i = 100; i < blocks.length; i += 100) {
@@ -156,38 +198,75 @@ export interface NoteSummary {
 }
 
 /**
- * Search the notes database.
+ * Find notes by title.
  *
- * Notion's `/search` covers the whole workspace, which would surface pages
- * that have nothing to do with notes. Querying the database directly keeps
- * the blast radius to the one place the user designated.
+ * Two paths because the parent can be either kind. Both stay scoped to the
+ * one place the user designated: a database query cannot see outside its
+ * database, and the page path filters `/search` down to children of the
+ * configured page — so sharing something else with the integration later
+ * cannot leak into notes.
  */
 export async function searchNotes(query: string, limit: number): Promise<NoteSummary[]> {
-  const body: Record<string, unknown> = {
-    page_size: Math.min(limit, 25),
-    sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
-  };
-
+  const parentId = requireParentId();
   const trimmed = query.trim();
-  if (trimmed.length > 0) {
+  const pageSize = Math.min(limit, 25);
+
+  if ((await parentKind()) === "database") {
+    const body: Record<string, unknown> = {
+      page_size: pageSize,
+      sorts: [{ timestamp: "last_edited_time", direction: "descending" }],
+    };
     // A title filter, not full text: Notion's database query cannot search
-    // page BODIES. searchNotes therefore finds notes by what they are called,
-    // and note.get reads the body — which is why the tool descriptions tell
-    // the model to search broadly and then read.
-    body.filter = { property: "title", title: { contains: trimmed } };
+    // page BODIES. So notes are found by what they are called, and note.get
+    // reads the body — which is why the tool description tells the model to
+    // search broadly and then read.
+    if (trimmed.length > 0) {
+      body.filter = { property: "title", title: { contains: trimmed } };
+    }
+
+    const result = await notionFetch<{ results: NotionPage[] }>(
+      `/databases/${parentId}/query`,
+      { method: "POST", body },
+    );
+    return result.results.map(toSummary);
   }
 
-  const result = await notionFetch<{ results: NotionPage[] }>(
-    `/databases/${requireDatabaseId()}/query`,
-    { method: "POST", body },
+  // Page parent. /v1/search matches TITLES across everything the integration
+  // can see — which is only what has been shared with it — and the results
+  // are then narrowed to children of the configured page, so sharing
+  // something else with the integration later cannot leak into notes.
+  const result = await notionFetch<{ results: (NotionPage & { parent?: { page_id?: string } })[] }>(
+    "/search",
+    {
+      method: "POST",
+      body: {
+        query: trimmed,
+        page_size: 100,
+        filter: { property: "object", value: "page" },
+        sort: { direction: "descending", timestamp: "last_edited_time" },
+      },
+    },
   );
 
-  return result.results.map((page) => ({
+  const wanted = normalizeId(parentId);
+  return result.results
+    .filter((p) => normalizeId(p.parent?.page_id ?? "") === wanted)
+    .slice(0, pageSize)
+    .map(toSummary);
+}
+
+/** Notion returns ids hyphenated and accepts them either way. */
+function normalizeId(id: string): string {
+  return id.replace(/-/g, "").toLowerCase();
+}
+
+function toSummary(page: NotionPage): NoteSummary {
+  return {
     pageId: page.id,
     url: page.url,
     title: titleOf(page),
     lastEditedAt: page.last_edited_time,
-  }));
+  };
 }
 
 /** A page's body as markdown. Untrusted content — it is whatever was written. */
@@ -206,14 +285,23 @@ export async function readNote(pageId: string): Promise<{ title: string; markdow
   };
 }
 
-/** Cheap liveness probe: does the token still see the notes database? */
-export async function checkAccess(): Promise<{ ok: true; title: string }> {
-  const db = await notionFetch<{ title?: { plain_text?: string }[] }>(
-    `/databases/${requireDatabaseId()}`,
-    { method: "GET" },
-  );
-  return {
-    ok: true,
-    title: (db.title ?? []).map((t) => t.plain_text ?? "").join("") || "(untitled database)",
-  };
+/** Cheap liveness probe: does the token still see the configured parent, and
+ *  is it a database or a page? */
+export async function checkAccess(): Promise<{ ok: true; title: string; kind: string }> {
+  const parentId = requireParentId();
+
+  if ((await parentKind()) === "database") {
+    const db = await notionFetch<{ title?: { plain_text?: string }[] }>(
+      `/databases/${parentId}`,
+      { method: "GET" },
+    );
+    return {
+      ok: true,
+      kind: "database",
+      title: (db.title ?? []).map((t) => t.plain_text ?? "").join("") || "(untitled database)",
+    };
+  }
+
+  const page = await notionFetch<NotionPage>(`/pages/${parentId}`, { method: "GET" });
+  return { ok: true, kind: "page", title: titleOf(page) };
 }

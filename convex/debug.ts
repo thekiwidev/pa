@@ -251,8 +251,11 @@ export const connectLinear = internalAction({
  * Prove the Notion setup works before a note depends on it.
  *
  * The commonest mistake is not the token: it is forgetting to SHARE the notes
- * database with the integration in Notion's UI, which yields a 404 that reads
- * exactly like a wrong database id.
+ * page with the integration in Notion's UI, which yields a 404 that reads
+ * exactly like a wrong id.
+ *
+ * Reports whether the id resolved to a page or a database, so a silent
+ * mismatch between what you configured and what you meant is visible.
  *
  *   bunx convex run debug:checkNotion '{}'
  */
@@ -261,14 +264,14 @@ export const checkNotion = internalAction({
   handler: async (): Promise<Record<string, unknown>> => {
     try {
       const result = await checkAccess();
-      return { ok: true, database: result.title };
+      return { ok: true, kind: result.kind, title: result.title };
     } catch (error) {
       if (error instanceof NotionUnavailable) {
         return {
           ok: false,
           status: error.status,
           hint: error.isAuthFailure
-            ? "Token rejected, OR the database is not shared with the integration. In Notion: open the database, ... menu, Connections, add your integration."
+            ? "Token rejected, OR the page is not shared with the integration. In Notion: open the page, ... menu at the top right, Connections, add your integration."
             : error.userFacing,
         };
       }
