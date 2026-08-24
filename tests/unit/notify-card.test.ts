@@ -119,3 +119,32 @@ describe("composeCard — every special character is escaped", () => {
     expect(card.text).not.toContain("\\");
   });
 });
+
+describe("a card always names its mailbox", () => {
+  // With three inboxes connected, "who is this even for?" is the first
+  // question a card has to answer. Before Phase 7 the label was present by
+  // accident of composeCard's layout; this makes it a guarantee.
+  test.each(["personal", "recruiting", "client"])("names %s", (label) => {
+    const card = composeCard({ ...base, accountLabel: label }, "Africa/Lagos");
+    expect(card.text).toContain(label);
+  });
+
+  test("names the mailbox even when everything optional is absent", () => {
+    const card = composeCard(
+      {
+        emailMessageId: "m1",
+        accountLabel: "recruiting",
+        fromAddress: "a@b.com",
+        isSpam: false,
+        importance: "HIGH",
+      },
+      "Africa/Lagos",
+    );
+    expect(card.text).toContain("recruiting");
+  });
+
+  test("a label containing markup is escaped, not dropped", () => {
+    const card = composeCard({ ...base, accountLabel: "client<b>" }, "Africa/Lagos");
+    expect(card.text).toContain("client&lt;b&gt;");
+  });
+});

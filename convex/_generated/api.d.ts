@@ -35,6 +35,7 @@ import type * as lib_email_classification from "../lib/email/classification.js";
 import type * as lib_email_draftBody from "../lib/email/draftBody.js";
 import type * as lib_email_markdownToEmailHtml from "../lib/email/markdownToEmailHtml.js";
 import type * as lib_email_prefilter from "../lib/email/prefilter.js";
+import type * as lib_email_priority from "../lib/email/priority.js";
 import type * as lib_email_recipients from "../lib/email/recipients.js";
 import type * as lib_email_rules from "../lib/email/rules.js";
 import type * as lib_json from "../lib/json.js";
@@ -120,6 +121,7 @@ declare const fullApi: ApiFromModules<{
   "lib/email/draftBody": typeof lib_email_draftBody;
   "lib/email/markdownToEmailHtml": typeof lib_email_markdownToEmailHtml;
   "lib/email/prefilter": typeof lib_email_prefilter;
+  "lib/email/priority": typeof lib_email_priority;
   "lib/email/recipients": typeof lib_email_recipients;
   "lib/email/rules": typeof lib_email_rules;
   "lib/json": typeof lib_json;

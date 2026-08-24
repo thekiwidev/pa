@@ -145,3 +145,45 @@ describe("describeRule", () => {
     );
   });
 });
+
+describe("matchRules — per-mailbox scope", () => {
+  const inbox = { ...msg, accountLabel: "personal" };
+
+  test("a rule scoped to a mailbox only fires in that mailbox", () => {
+    // With three mailboxes the same sender means different things in each.
+    const rules = [rule({ senderPattern: "@google.com", accountLabel: "personal" })];
+    expect(matchRules(inbox, rules)?.action).toBe("IGNORE");
+    expect(matchRules({ ...inbox, accountLabel: "recruiting" }, rules)).toBeNull();
+  });
+
+  test("an unscoped rule fires in every mailbox", () => {
+    const rules = [rule({ senderPattern: "@google.com" })];
+    expect(matchRules(inbox, rules)?.action).toBe("IGNORE");
+    expect(matchRules({ ...inbox, accountLabel: "recruiting" }, rules)?.action).toBe("IGNORE");
+  });
+
+  test("scope is case-insensitive", () => {
+    const rules = [rule({ senderPattern: "@google.com", accountLabel: "Personal" })];
+    expect(matchRules(inbox, rules)?.action).toBe("IGNORE");
+  });
+
+  test("a scope alone is not a condition, so it cannot silence a whole mailbox", () => {
+    // "in my personal mailbox" with no sender or subject would otherwise
+    // match every message in that inbox.
+    expect(matchRules(inbox, [rule({ accountLabel: "personal" })])).toBeNull();
+  });
+
+  test("a scoped FLOOR_HIGH still outranks an unscoped IGNORE", () => {
+    const rules = [
+      rule({ senderPattern: "@google.com", action: "IGNORE" }),
+      rule({ senderPattern: "@google.com", accountLabel: "personal", action: "FLOOR_HIGH" }),
+    ];
+    expect(matchRules(inbox, rules)?.action).toBe("FLOOR_HIGH");
+  });
+
+  test("describeRule names the mailbox so /rules is readable", () => {
+    expect(describeRule(rule({ senderPattern: "@x.com", accountLabel: "recruiting" }))).toContain(
+      "in recruiting",
+    );
+  });
+});

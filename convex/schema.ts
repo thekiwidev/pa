@@ -283,6 +283,7 @@ export default defineSchema({
     senderPattern: v.optional(v.string()), // "a@b.com" or "@b.com" (domain)
     subjectPattern: v.optional(v.string()), // case-insensitive substring
     category: v.optional(v.string()), // a Gmail labelId
+    accountLabel: v.optional(v.string()), // which mailbox; absent = all
     action: v.string(), // IGNORE | NEVER_ALERT | FLOOR_HIGH
     reason: v.optional(v.string()), // the user's own words, for /rules
     createdAt: v.number(),

@@ -9,6 +9,38 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-08-24 — Two rule systems is one too many
+
+Phase 7 ships `connectedAccounts.priorityRules`: per-account JSON floors and
+ceilings keyed on the classifier's category. Sprint 1 had already shipped
+`emailRules`: user-taught sender/subject rules, created by chat.
+
+Both are "rules about which mail matters", and the temptation was to leave
+them separate because the docs describe them separately. Resolved by asking
+which one the USER touches — `emailRules`, because it is the one with a tool —
+and giving that one the new capability (`accountLabel`). `priorityRules` stays
+as the category-floor policy, set out of band.
+
+The design detail worth keeping: `accountLabel` is a SCOPE, not a condition.
+A rule that says only "in my personal mailbox" must not count as having a
+condition, or it silences that entire inbox. The no-conditions guard has to
+look past it.
+
+## 2026-08-24 — `v.any()` columns are an unvalidated boundary
+
+`priorityRules` is `v.any()`, so it arrives as `unknown` and TypeScript
+correctly refuses to pass it to a typed function. The tempting fix is a cast;
+the right one is a narrowing parser, because the column holds hand-written
+JSON and a typo like `"URGENT"` instead of `"CRITICAL"` would otherwise index
+`undefined` into a rank table inside the sync loop — where the only visible
+symptom is mail quietly not classifying.
+
+`parsePriorityRules` drops malformed entries and keeps the good ones. Same
+posture as `parseClassifierResponse`: report and degrade, never throw, on a
+path where throwing loses data the user cannot recover.
+
+---
+
 ## 2026-08-24 — "Reuses the existing machinery" is a claim to verify, not accept
 
 PHASE-16's doc said Linear "reuses Phase 6's machinery wholesale". Three

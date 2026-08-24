@@ -20,6 +20,7 @@ import {
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
 import { runTask } from "./ai/registry";
 import { prefilter } from "./lib/email/prefilter";
+import { applyPriorityRules, parsePriorityRules } from "./lib/email/priority";
 import { describeRule, matchRules } from "./lib/email/rules";
 import {
   CLASSIFICATION_SYSTEM_PROMPT,
@@ -233,6 +234,10 @@ async function classifyMessage(
   userId: Id<"users">,
   emailMessageId: Id<"emailMessages">,
   normalized: NormalizedEmail,
+  /** connectedAccounts.priorityRules for the mailbox this arrived in. */
+  priorityRules?: unknown,
+  /** The label of that mailbox, so a rule can be scoped to one inbox. */
+  accountLabel?: string,
 ): Promise<ClassificationResult> {
   try {
     const [isNoise, person, projects, rules] = await Promise.all([
@@ -265,6 +270,7 @@ async function classifyMessage(
         fromAddress: normalized.fromAddress,
         subject: normalized.subject,
         labelIds: normalized.labelIds,
+        accountLabel,
       },
       rules,
     );
@@ -327,9 +333,19 @@ async function classifyMessage(
       bodyText: normalized.bodyText,
     });
 
+    // Per-mailbox floors and ceilings, applied to the classifier's OUTPUT.
+    // Code, not prompt text: "every interview email from the recruiting
+    // mailbox is at least CRITICAL" is a guarantee a rule engine can make
+    // and a prompt instruction cannot.
+    const adjusted = applyPriorityRules(
+      classification.importance,
+      classification.category,
+      parsePriorityRules(priorityRules),
+    );
+
     await ctx.runMutation(internal.model.emailMessages.recordClassification, {
       emailMessageId,
-      importance: classification.importance,
+      importance: adjusted,
       classification,
       classifierVersion: CLASSIFIER_VERSION,
     });
@@ -337,7 +353,7 @@ async function classifyMessage(
     // neverAlert is a DELIVERY decision, not a classification — it is not
     // stored on the row, only carried to deliverIfDue. The message keeps its
     // real importance so the brief and searches still surface it.
-    return { ...classification, neverAlert: verdict.neverAlert };
+    return { ...classification, importance: adjusted, neverAlert: verdict.neverAlert };
   } catch (error) {
     console.warn(
       `classify_failed emailMessageId=${emailMessageId}: ${
@@ -452,6 +468,8 @@ export const syncAccount = internalAction({
             account.userId,
             result.emailMessageId,
             normalized,
+            account.priorityRules,
+            account.label,
           );
           await deliverIfDue(ctx, account, result.emailMessageId, normalized, classified);
         }
@@ -496,17 +514,26 @@ export const syncAll = internalAction({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.runQuery(internal.model.connectedAccounts.listActive, {});
-    for (const account of accounts) {
-      try {
-        await ctx.runAction(internal.gmail.syncAccount, { accountId: account._id });
-      } catch (error) {
-        console.warn(
-          `gmail_sync_failed account=${account._id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
+
+    // Concurrent, not sequential. Awaiting each account in turn meant a noisy
+    // personal mailbox — many new messages, each needing its own getMessage
+    // round trip — ran to completion before the recruiting mailbox made its
+    // first Gmail call. With three mailboxes that is the difference between
+    // "alerts arrive" and "alerts arrive for whichever inbox sorted first".
+    // One account failing, or hanging, must not delay the others.
+    await Promise.all(
+      accounts.map(async (account) => {
+        try {
+          await ctx.runAction(internal.gmail.syncAccount, { accountId: account._id });
+        } catch (error) {
+          console.warn(
+            `gmail_sync_failed account=${account._id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }),
+    );
   },
 });
 

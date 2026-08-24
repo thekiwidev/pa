@@ -859,6 +859,7 @@ async function dispatch(
         senderPattern: a.senderPattern as string | undefined,
         subjectPattern: a.subjectPattern as string | undefined,
         category: a.category as string | undefined,
+        accountLabel: a.accountLabel as string | undefined,
         action: a.action as string,
         reason: a.reason as string | undefined,
       });
@@ -870,6 +871,7 @@ async function dispatch(
             : undefined,
           subjectPattern: a.subjectPattern as string | undefined,
           category: a.category as string | undefined,
+          accountLabel: a.accountLabel as string | undefined,
           action: a.action as RuleAction,
         }),
       };
@@ -883,6 +885,7 @@ async function dispatch(
             senderPattern: r.senderPattern,
             subjectPattern: r.subjectPattern,
             category: r.category,
+            accountLabel: r.accountLabel,
             action: r.action as RuleAction,
           }),
           reason: r.reason,

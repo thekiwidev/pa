@@ -32,6 +32,15 @@ export interface EmailRule {
   subjectPattern?: string;
   /** A Gmail labelId, e.g. "CATEGORY_PROMOTIONS". */
   category?: string;
+  /**
+   * Which connected mailbox this applies to, by its label ("personal",
+   * "recruiting"). Absent means every mailbox.
+   *
+   * With three mailboxes the same sender means different things in each —
+   * a recruiter in the recruiting inbox matters, the same recruiter in the
+   * personal one may not. Without this, one rule silences all three.
+   */
+  accountLabel?: string;
   action: RuleAction;
   /** The user's own words, kept for `/rules` so a rule can be recognised. */
   reason?: string;
@@ -41,6 +50,8 @@ export interface RuleTarget {
   fromAddress: string;
   subject?: string;
   labelIds: string[];
+  /** The label of the mailbox this arrived in. */
+  accountLabel?: string;
 }
 
 /**
@@ -70,6 +81,16 @@ function senderMatches(fromAddress: string, pattern: string): boolean {
 }
 
 function ruleMatches(target: RuleTarget, rule: EmailRule): boolean {
+  // accountLabel is a SCOPE, not a condition: a rule that only says
+  // "in my personal mailbox" and nothing else would silence that whole
+  // mailbox, so it does not count toward having a condition at all.
+  if (
+    rule.accountLabel &&
+    rule.accountLabel.trim().toLowerCase() !== (target.accountLabel ?? "").trim().toLowerCase()
+  ) {
+    return false;
+  }
+
   const conditions = [rule.senderPattern, rule.subjectPattern, rule.category].filter(Boolean);
   // A rule with no conditions would match everything and silence the whole
   // inbox. Refuse rather than trust that one is never written.
@@ -126,5 +147,6 @@ export function describeRule(rule: EmailRule): string {
   if (rule.category) parts.push(`in ${rule.category}`);
 
   const what = parts.length > 0 ? parts.join(" ") : "(no conditions — never matches)";
-  return `${ACTION_WORDS[rule.action]} mail ${what}`;
+  const scope = rule.accountLabel ? ` in ${rule.accountLabel}` : "";
+  return `${ACTION_WORDS[rule.action]} mail ${what}${scope}`;
 }

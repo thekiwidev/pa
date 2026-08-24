@@ -348,6 +348,15 @@ export const TOOL_SCHEMAS = {
           "IGNORE = never show it; NEVER_ALERT = still classify it but do " +
             "not push a card; FLOOR_HIGH = always treat it as important",
         ),
+      accountLabel: z
+        .string()
+        .optional()
+        .describe(
+          'which mailbox this applies to, by its label ("personal", ' +
+            '"recruiting") — omit to apply to every connected mailbox. Set it ' +
+            "whenever the user names a mailbox, since the same sender can " +
+            "matter in one inbox and not another.",
+        ),
       reason: z.string().optional().describe("the user's own words, so they can recognise it later"),
     })
     .refine((v) => Boolean(v.senderPattern || v.subjectPattern || v.category), {

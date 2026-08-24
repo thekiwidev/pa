@@ -9,6 +9,32 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — three mailboxes, deterministic routing (Phase 7)
+
+All three Gmail accounts were already connected, so this is the routing half.
+
+- **Sync is concurrent, not sequential.** `syncAll` awaited each account in
+  turn, so a noisy personal mailbox ran to completion before the recruiting
+  one made its first Gmail call. With three accounts that is the difference
+  between "alerts arrive" and "alerts arrive for whichever inbox sorted
+  first". One account failing or hanging no longer delays the others.
+- **Per-account floors and ceilings** (`lib/email/priority.ts`), applied to
+  the classifier's output between classification and delivery. "Every
+  interview email from the recruiting mailbox is at least CRITICAL" is a
+  guarantee a rule engine can make and a prompt cannot.
+- **Rules can be scoped to one mailbox.** `emailRules` gained `accountLabel`,
+  so "in my personal mailbox only, never alert me about GitHub" works — the
+  same sender means different things in different inboxes. Rather than
+  inventing a second rule system alongside `priorityRules`, the one the user
+  actually talks to grew the capability.
+- A card always names its mailbox, now asserted rather than incidental.
+
+`connectedAccounts.priorityRules` is a `v.any()` column, so what comes out of
+it is genuinely untyped — hand-written JSON. `parsePriorityRules` narrows it
+and drops anything malformed with the message keeping the classifier's own
+verdict, rather than letting a typo throw inside the sync loop where the only
+symptom would be mail silently not classifying.
+
 ### Added — Linear (Phase 16)
 
 Ask what's open on a board, and report progress in plain language to get a

@@ -35,6 +35,7 @@ export const listForMatching = internalQuery({
       senderPattern: r.senderPattern,
       subjectPattern: r.subjectPattern,
       category: r.category,
+      accountLabel: r.accountLabel,
       action: r.action as RuleAction,
       reason: r.reason,
     }));
@@ -47,6 +48,7 @@ export const add = internalMutation({
     senderPattern: v.optional(v.string()),
     subjectPattern: v.optional(v.string()),
     category: v.optional(v.string()),
+    accountLabel: v.optional(v.string()),
     action: v.string(),
     reason: v.optional(v.string()),
   },
@@ -61,6 +63,7 @@ export const add = internalMutation({
     const sender = args.senderPattern ? normalizePattern(args.senderPattern) : undefined;
     const subject = args.subjectPattern?.trim() || undefined;
     const category = args.category?.trim() || undefined;
+    const accountLabel = args.accountLabel?.trim().toLowerCase() || undefined;
     if (!sender && !subject && !category) {
       throw new Error("a rule needs at least one of: sender, subject, category");
     }
@@ -77,6 +80,7 @@ export const add = internalMutation({
         r.senderPattern === sender &&
         r.subjectPattern === subject &&
         r.category === category &&
+        r.accountLabel === accountLabel &&
         r.action === args.action,
     );
     if (duplicate) return { ruleId: duplicate._id, created: false };
@@ -90,6 +94,7 @@ export const add = internalMutation({
       senderPattern: sender,
       subjectPattern: subject,
       category,
+      accountLabel,
       action: args.action,
       reason: args.reason,
       createdAt: Date.now(),
@@ -113,7 +118,7 @@ export const removeByFragment = internalMutation({
       .take(MAX_RULES);
 
     const hit = rows.find((r) =>
-      [r.senderPattern, r.subjectPattern, r.category, r.reason]
+      [r.senderPattern, r.subjectPattern, r.category, r.accountLabel, r.reason]
         .filter((x): x is string => Boolean(x))
         .some((field) => field.toLowerCase().includes(fragment)),
     );
