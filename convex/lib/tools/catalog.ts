@@ -421,9 +421,21 @@ export const TOOL_SCHEMAS = {
         .describe("limit to one section — omit to search every section"),
       limit: z.number().int().min(1).max(25).optional().describe("default 10"),
     }),
-  "note.get": z.object({
-    pageId: z.string().min(1).describe("pageId from a note.search result"),
-  }),
+  "note.get": z
+    .object({
+      pageId: z.string().optional().describe("pageId from a note.search result"),
+      titleFragment: z
+        .string()
+        .optional()
+        .describe(
+          'words from the note\'s title, e.g. "cows" — use this when you have ' +
+            "no id, which is the usual case",
+        ),
+      category: z.string().optional().describe("narrow the title search to one section"),
+    })
+    .refine((v) => Boolean(v.pageId || v.titleFragment), {
+      message: "give either pageId or titleFragment",
+    }),
 
   "link.read": z.object({
     url: z
@@ -774,7 +786,12 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     contentIsUnknowable: true,
   },
   "note.get": {
-    description: "Read one saved note in full, by its pageId from note.search.",
+    description:
+      "Read one saved note in full. Pass titleFragment when you have no id — " +
+      "it finds the note itself, so you do NOT need to call note.search " +
+      "first. You get one batch of tool calls per message, so searching and " +
+      'then reading takes two turns; "read me my note about X" is a single ' +
+      "note.get with titleFragment.",
     consequential: false,
     requiresAccountId: false,
     contentIsUnknowable: true,

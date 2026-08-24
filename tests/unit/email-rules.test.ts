@@ -187,3 +187,47 @@ describe("matchRules — per-mailbox scope", () => {
     );
   });
 });
+
+describe("normalizePattern — a bare word is not a domain", () => {
+  // "@github" matches nothing, ever: no address ends in a bare "github".
+  // Observed live — a rule saved that way read correctly in /rules and
+  // silently never fired, which is the worst failure mode for a rule.
+  test("a bare word becomes a substring match, not a domain", () => {
+    expect(normalizePattern("github")).toBe("~github");
+    expect(normalizePattern("@github")).toBe("~github");
+  });
+
+  test("anything with a dot is still a domain", () => {
+    expect(normalizePattern("github.com")).toBe("@github.com");
+    expect(normalizePattern("@github.com")).toBe("@github.com");
+  });
+
+  test("a full address is unchanged", () => {
+    expect(normalizePattern("a@b.com")).toBe("a@b.com");
+  });
+});
+
+describe("matchRules — bare-word sender patterns actually fire", () => {
+  const gh = { ...msg, fromAddress: "notifications@github.com" };
+
+  test('"github" matches notifications@github.com', () => {
+    const rules = [rule({ senderPattern: normalizePattern("github") })];
+    expect(matchRules(gh, rules)?.action).toBe("IGNORE");
+  });
+
+  test("it matches the local part too", () => {
+    const rules = [rule({ senderPattern: normalizePattern("noreply") })];
+    expect(matchRules({ ...gh, fromAddress: "noreply@x.com" }, rules)?.action).toBe("IGNORE");
+  });
+
+  test("it does not match an unrelated sender", () => {
+    const rules = [rule({ senderPattern: normalizePattern("github") })];
+    expect(matchRules({ ...gh, fromAddress: "sarah@vercel.com" }, rules)).toBeNull();
+  });
+
+  test("describeRule explains it in the user's own words", () => {
+    const described = describeRule(rule({ senderPattern: normalizePattern("github") }));
+    expect(described).toContain('"github"');
+    expect(described).not.toContain("~");
+  });
+});

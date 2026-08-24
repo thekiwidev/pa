@@ -57,16 +57,37 @@ export interface RuleTarget {
 /**
  * "google.com" and "@google.com" must mean the same thing — a user typing an
  * ignore rule will not think about the @.
+ *
+ * A BARE WORD with no dot ("github", "linkedin") is not a domain and must not
+ * be turned into one: "@github" matches nothing, ever, because no address
+ * ends in a bare "github". Observed live — a rule saved that way looked
+ * correct in `/rules` and silently never fired. Those become substring
+ * matches on the address instead, which is what the user meant.
  */
 export function normalizePattern(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
-  if (trimmed.includes("@")) return trimmed;
-  return `@${trimmed}`;
+  if (trimmed.length === 0) return "";
+
+  // An @ with something before it is a full address: "a@b.com". Checked
+  // FIRST, because such a pattern also contains a dot and would otherwise be
+  // read as a domain.
+  const at = trimmed.indexOf("@");
+  if (at > 0) return trimmed;
+
+  // Leading @ or none. A dot makes it a domain, otherwise it is a bare word.
+  const bare = trimmed.replace(/^@/, "");
+  return bare.includes(".") ? `@${bare}` : `~${bare}`;
 }
 
 function senderMatches(fromAddress: string, pattern: string): boolean {
   const from = fromAddress.trim().toLowerCase();
   const p = pattern.trim().toLowerCase();
+
+  // "~github" — a bare word, matched anywhere in the address. Deliberately
+  // loose: the user said a brand name, not a domain, and being slightly too
+  // broad on a rule they wrote themselves is recoverable, while a rule that
+  // silently never fires is not.
+  if (p.startsWith("~")) return from.includes(p.slice(1));
 
   if (!p.startsWith("@")) return from === p;
 
@@ -142,7 +163,13 @@ const ACTION_WORDS: Record<RuleAction, string> = {
 /** One line the user can read back and recognise as the thing they asked for. */
 export function describeRule(rule: EmailRule): string {
   const parts: string[] = [];
-  if (rule.senderPattern) parts.push(`from ${rule.senderPattern}`);
+  if (rule.senderPattern) {
+    // "~github" is an implementation detail; the user typed "github".
+    const shown = rule.senderPattern.startsWith("~")
+      ? `anything with "${rule.senderPattern.slice(1)}" in the address`
+      : rule.senderPattern;
+    parts.push(`from ${shown}`);
+  }
   if (rule.subjectPattern) parts.push(`with "${rule.subjectPattern}" in the subject`);
   if (rule.category) parts.push(`in ${rule.category}`);
 

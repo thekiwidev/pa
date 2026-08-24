@@ -20,6 +20,7 @@ import { assertFetchable } from "../lib/net/urlGuard";
 import {
   NotionUnavailable,
   createNote,
+  findNote,
   listCategories,
   readNote,
   searchNotes,
@@ -802,7 +803,22 @@ async function dispatch(
 
     case "note.get": {
       try {
-        const note = await readNote(a.pageId as string);
+        // Resolve a title to an id HERE, in code — the same id-or-fragment
+        // shape tasks, emails and meetings already use. The model supplies
+        // words; it never has to have seen an id.
+        let pageId = a.pageId as string | undefined;
+        if (!pageId) {
+          const hit = await findNote(
+            a.titleFragment as string,
+            a.category as string | undefined,
+          );
+          if (!hit) {
+            return { reachable: true, notFound: true, query: a.titleFragment };
+          }
+          pageId = hit.pageId;
+        }
+
+        const note = await readNote(pageId);
         return { reachable: true, ...note };
       } catch (error) {
         if (error instanceof NotionUnavailable) {

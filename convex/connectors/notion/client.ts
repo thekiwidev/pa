@@ -313,10 +313,16 @@ export async function searchNotes(
     return result.results.map((p) => toSummary(p));
   }
 
-  // Page parent. /v1/search matches TITLES across everything the integration
-  // can see — which is only what has been shared with it — and the results
-  // are then narrowed to the root page and its sections, so sharing
-  // something else with the integration later cannot leak into notes.
+  // Page parent. Deliberately ENUMERATES rather than calling /v1/search.
+  //
+  // Notion's search index is eventually consistent: a note saved seconds ago
+  // is not findable yet, and "nothing matched" for something the user just
+  // watched you save is the worst possible answer from a notes tool. Listing
+  // children is immediately consistent, exact, and — for a personal notes
+  // store of a few hundred pages across a handful of sections — cheap.
+  //
+  // It also gives better matching than Notion would: a substring of the title,
+  // case-insensitive, rather than whatever the index decided.
   const sections = await listCategories();
   const wanted = category?.trim()
     ? sections.filter((c) => normalizeName(c.name) === normalizeName(category))
@@ -327,35 +333,49 @@ export async function searchNotes(
   // would answer a question about Movies with notes about work.
   if (category?.trim() && wanted.length === 0) return [];
 
-  const byParent = new Map<string, string>();
-  for (const c of wanted) byParent.set(normalizeId(c.pageId), c.name);
   // Notes saved before any section existed sit directly under the root.
-  if (!category?.trim()) byParent.set(normalizeId(parentId), "");
-
-  const result = await notionFetch<{ results: (NotionPage & { parent?: { page_id?: string } })[] }>(
-    "/search",
-    {
-      method: "POST",
-      body: {
-        query: trimmed,
-        page_size: 100,
-        filter: { property: "object", value: "page" },
-        sort: { direction: "descending", timestamp: "last_edited_time" },
-      },
-    },
-  );
+  const places: { id: string; name?: string }[] = wanted.map((c) => ({
+    id: c.pageId,
+    name: c.name,
+  }));
+  if (!category?.trim()) places.push({ id: parentId });
 
   const sectionIds = new Set(sections.map((c) => normalizeId(c.pageId)));
+  const needle = trimmed.toLowerCase();
+  const found: NoteSummary[] = [];
 
-  return result.results
-    .filter((p) => {
-      // A section page is a container, not a note. It matches "work" as a
-      // title and would otherwise be returned as a note called Work.
-      if (sectionIds.has(normalizeId(p.id))) return false;
-      return byParent.has(normalizeId(p.parent?.page_id ?? ""));
-    })
-    .slice(0, pageSize)
-    .map((p) => toSummary(p, byParent.get(normalizeId(p.parent?.page_id ?? "")) || undefined));
+  for (const place of places) {
+    const children = await notionFetch<{
+      results: {
+        id: string;
+        type?: string;
+        child_page?: { title?: string };
+        last_edited_time?: string;
+      }[];
+    }>(`/blocks/${place.id}/children?page_size=100`, { method: "GET" });
+
+    for (const block of children.results) {
+      if (block.type !== "child_page") continue;
+      // A section page is a container, not a note. Listing the root would
+      // otherwise return every section as though it were one.
+      if (sectionIds.has(normalizeId(block.id))) continue;
+
+      const title = block.child_page?.title ?? "(untitled)";
+      if (needle.length > 0 && !title.toLowerCase().includes(needle)) continue;
+
+      found.push({
+        pageId: block.id,
+        url: `https://www.notion.so/${normalizeId(block.id)}`,
+        title,
+        lastEditedAt: block.last_edited_time,
+        category: place.name,
+      });
+    }
+  }
+
+  return found
+    .sort((a, b) => (b.lastEditedAt ?? "").localeCompare(a.lastEditedAt ?? ""))
+    .slice(0, pageSize);
 }
 
 /** Notion returns ids hyphenated and accepts them either way. */
@@ -371,6 +391,21 @@ function toSummary(page: NotionPage, category?: string): NoteSummary {
     lastEditedAt: page.last_edited_time,
     category,
   };
+}
+
+/**
+ * Find one note by a fragment of its title.
+ *
+ * Exists so "read me my note about cows" is ONE tool call. The planner gets a
+ * single batch of calls per message, so a tool that can only take an id needs
+ * a search turn before it — and by then the turn is over.
+ */
+export async function findNote(
+  titleFragment: string,
+  category?: string,
+): Promise<NoteSummary | null> {
+  const matches = await searchNotes(titleFragment, 5, category);
+  return matches[0] ?? null;
 }
 
 /** A page's body as markdown. Untrusted content — it is whatever was written. */

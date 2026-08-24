@@ -328,6 +328,9 @@ function renderOne(outcome: ToolOutcome): string {
 
     case "note.get": {
       if (field(r, "reachable") === false) return `⚠️ ${str(r, "reason")}`;
+      if (field(r, "notFound") === true) {
+        return `No note matching "${str(r, "query") ?? "that"}". Titles only — try a different word, or ask what sections you have.`;
+      }
       return [`📓 **${str(r, "title") ?? "Note"}**`, "", str(r, "markdown") ?? "(empty)"].join("\n");
     }
 
