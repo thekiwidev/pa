@@ -73,22 +73,62 @@ export interface LinearIssueSummary {
   updatedAt: string;
   state: { id: string; name: string; type?: string };
   assignee?: { name: string } | null;
+  /** Linear's own Project, when the issue belongs to one. */
+  project?: { id: string; name: string } | null;
+  team?: { id: string; key: string } | null;
+}
+
+/**
+ * Linear's state categories that count as "still to do". Everything a board
+ * shows outside the Done and Canceled columns.
+ */
+export const OPEN_STATE_TYPES = ["triage", "backlog", "unstarted", "started"] as const;
+
+export interface ListIssuesOptions {
+  teamKey?: string;
+  stateName?: string;
+  /**
+   * Filter by state CATEGORY on the server. This is what "open issues" means,
+   * and it MUST be a server-side filter: filtering the newest N issues in
+   * code is how a board with 7 open issues and 40 recently-closed ones
+   * reported "no open tasks" (2026-10-15).
+   */
+  stateTypes?: readonly string[];
+  /** A Linear Project, by name, case-insensitive. */
+  projectName?: string;
+  /** Issues with no Linear Project at all. */
+  noProject?: boolean;
+  /** Issues carrying this label, case-insensitive. */
+  labelName?: string;
+  /** Exactly these issues, by UUID. Used to re-read after a write. */
+  ids?: readonly string[];
+  limit?: number;
+  after?: string;
 }
 
 /** Pure. Kept separate from listIssues() so its shape is testable alone. */
-export function buildListIssuesQuery(options: {
-  teamKey?: string;
-  stateName?: string;
-  limit?: number;
-}): { query: string; variables: Record<string, unknown> } {
+export function buildListIssuesQuery(options: ListIssuesOptions): {
+  query: string;
+  variables: Record<string, unknown>;
+} {
   const filter: Record<string, unknown> = {};
   if (options.teamKey) filter.team = { key: { eq: options.teamKey } };
   if (options.stateName) filter.state = { name: { eq: options.stateName } };
+  else if (options.stateTypes && options.stateTypes.length > 0) {
+    filter.state = { type: { in: [...options.stateTypes] } };
+  }
+  if (options.projectName) filter.project = { name: { eqIgnoreCase: options.projectName } };
+  else if (options.noProject) filter.project = { null: true };
+  if (options.labelName) filter.labels = { some: { name: { eqIgnoreCase: options.labelName } } };
+  if (options.ids && options.ids.length > 0) filter.id = { in: [...options.ids] };
+
+  const variables: Record<string, unknown> = { filter, first: options.limit ?? 10 };
+  if (options.after) variables.after = options.after;
 
   return {
     query: `
-      query ListIssues($filter: IssueFilter, $first: Int!) {
-        issues(filter: $filter, first: $first, orderBy: updatedAt) {
+      query ListIssues($filter: IssueFilter, $first: Int!, $after: String) {
+        issues(filter: $filter, first: $first, after: $after, orderBy: updatedAt) {
           nodes {
             id
             identifier
@@ -98,25 +138,63 @@ export function buildListIssuesQuery(options: {
             updatedAt
             state { id name type }
             assignee { name }
+            project { id name }
+            team { id key }
           }
+          pageInfo { hasNextPage endCursor }
         }
       }
     `,
-    variables: { filter, first: options.limit ?? 10 },
+    variables,
+  };
+}
+
+interface IssuePage {
+  issues: {
+    nodes: LinearIssueSummary[];
+    pageInfo?: { hasNextPage: boolean; endCursor?: string | null };
   };
 }
 
 export async function listIssues(
   apiKey: string,
-  options: { teamKey?: string; stateName?: string; limit?: number },
+  options: ListIssuesOptions,
 ): Promise<LinearIssueSummary[]> {
   const { query, variables } = buildListIssuesQuery(options);
-  const { data } = await linearFetch<{ issues: { nodes: LinearIssueSummary[] } }>(
-    apiKey,
-    query,
-    variables,
-  );
+  const { data } = await linearFetch<IssuePage>(apiKey, query, variables);
   return data.issues.nodes;
+}
+
+/** Linear's own page cap is 250; 50 keeps one response small. */
+const PAGE_SIZE = 50;
+
+/**
+ * Every issue matching `options`, following Linear's cursor, up to `max`.
+ *
+ * `truncated` is true when more existed than `max`. A caller that is about to
+ * say "all of them" must check it: claiming a complete list from a partial
+ * one is the failure this function exists to prevent.
+ */
+export async function listAllIssues(
+  apiKey: string,
+  options: Omit<ListIssuesOptions, "limit" | "after">,
+  max = 250,
+): Promise<{ issues: LinearIssueSummary[]; truncated: boolean }> {
+  const issues: LinearIssueSummary[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const { query, variables } = buildListIssuesQuery({
+      ...options,
+      limit: Math.min(PAGE_SIZE, max - issues.length),
+      after,
+    });
+    const { data } = await linearFetch<IssuePage>(apiKey, query, variables);
+    issues.push(...data.issues.nodes);
+    const page = data.issues.pageInfo;
+    if (!page?.hasNextPage || !page.endCursor) return { issues, truncated: false };
+    if (issues.length >= max) return { issues, truncated: true };
+    after = page.endCursor;
+  }
 }
 
 export interface LinearIssueDetail extends LinearIssueSummary {

@@ -288,21 +288,53 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       return "▶️ Unblocked — status is now RESUMED.";
 
     case "task.list": {
-      const rows = Array.isArray(r) ? r : [];
+      // Linear returns { total, tasks, truncated }; the local table a bare array.
+      const rows = Array.isArray(r) ? r : (field(r, "tasks") as unknown[] | undefined) ?? [];
+      const total = Array.isArray(r) ? rows.length : Number(field(r, "total") ?? rows.length);
+      const truncated = field(r, "truncated") === true;
       if (rows.length === 0) return "No tasks match.";
-      return rows
-        .map((t) => {
-          const due = str(t, "dueAt");
-          // A Linear-backed row carries its identifier and the team's own
-          // word for the column; a local one has neither.
-          const id = str(t, "taskId");
-          const identifier = id && /^[A-Z][A-Z0-9]*-\d+$/.test(id) ? `${id} ` : "";
-          const state = str(t, "stateName") ?? str(t, "status") ?? "?";
-          return `• ${identifier}${str(t, "title") ?? "(untitled)"} — ${state}${
-            due ? `, due ${due}` : ""
-          }`;
-        })
-        .join("\n");
+      const line = (t: unknown) => {
+        const due = str(t, "dueAt");
+        // A Linear-backed row carries its identifier and the team's own
+        // word for the column; a local one has neither.
+        const id = str(t, "taskId");
+        const identifier = id && /^[A-Z][A-Z0-9]*-\d+$/.test(id) ? `${id} ` : "";
+        const state = str(t, "stateName") ?? str(t, "status") ?? "?";
+        return `• ${identifier}${str(t, "title") ?? "(untitled)"} — ${state}${due ? `, due ${due}` : ""}`;
+      };
+      const header = Array.isArray(r)
+        ? []
+        : [`${truncated ? "At least " : ""}${total} task${total === 1 ? "" : "s"}${
+            rows.length < total ? ` (showing ${rows.length})` : ""
+          }:`];
+      // Grouped by project when any row has one, so "my tasks" reads the way
+      // the board does: each project, then the ones in no project.
+      const hasProjects = rows.some((t) => str(t, "project"));
+      if (!hasProjects) return [...header, ...rows.map(line)].join("\n");
+      const groups = new Map<string, unknown[]>();
+      for (const t of rows) {
+        const key = str(t, "project") ?? "No project";
+        groups.set(key, [...(groups.get(key) ?? []), t]);
+      }
+      const out = [...header];
+      for (const [name, items] of groups) out.push("", `${name}:`, ...items.map(line));
+      return out.join("\n").trim();
+    }
+
+    case "task.bulk_update": {
+      const toChange = Number(field(r, "toChange") ?? 0);
+      const matched = Number(field(r, "matched") ?? 0);
+      if (toChange === 0) {
+        return matched === 0 ? "No tasks matched, so nothing changes." : `All ${matched} matching tasks are already there.`;
+      }
+      const changes = field(r, "changes");
+      const list = Array.isArray(changes) ? changes.map((c) => `  • ${String(c)}`) : [];
+      return [
+        `📋 ${toChange} task${toChange === 1 ? "" : "s"} ready to move${field(r, "truncated") === true ? " (more exist beyond the first 250)" : ""}:`,
+        ...list,
+        "",
+        `Nothing has changed yet. Tap Apply on the card to do it. Expires ${str(r, "approvalExpiresAt") ?? "soon"}.`,
+      ].join("\n");
     }
 
     case "reminder.create":
@@ -661,11 +693,26 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
         made.filter((x) => field(x, "success") === true).length +
         results.filter((x) => field(x, "success") === true).length;
 
+      const verification = field(r, "verification");
+      const checked = Number(field(verification, "checked") ?? 0);
+      const mismatchedRows = field(verification, "mismatched");
+      const mismatched = Array.isArray(mismatchedRows) ? mismatchedRows : [];
+      const verifiedLine =
+        checked === 0
+          ? []
+          : mismatched.length === 0
+            ? [`Checked on the board: all ${checked} are where you asked.`]
+            : [
+                `⚠️ Checked on the board: ${mismatched.length} of ${checked} did NOT move:`,
+                ...mismatched.map((m) => `  • ${str(m, "identifier") ?? "?"} is still ${str(m, "state") ?? "?"}`),
+              ];
+
       return [
         `Applied ${okCount}/${total} change${total === 1 ? "" : "s"} in Linear:`,
         ...(createdLines.length ? ["  Created:", ...createdLines] : []),
         ...(updatedLines.length && createdLines.length ? ["  Updated:"] : []),
         ...updatedLines,
+        ...verifiedLine,
       ].join("\n");
     }
 

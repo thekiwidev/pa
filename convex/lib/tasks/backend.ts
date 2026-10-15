@@ -112,6 +112,24 @@ export function statusForStateType(type: string): TaskStatus {
 }
 
 /**
+ * The Linear state categories a task.list / task.bulk_update filter means.
+ *
+ * No status = every OPEN category, which is what "my tasks" means on a board:
+ * Triage, Backlog, Todo and In Progress together. PLANNED covers triage as
+ * well as backlog, because both are "not started, not scheduled". Returns
+ * undefined (no state filter at all) only when done items are wanted too.
+ */
+export function stateTypesForFilter(
+  status: TaskStatus | undefined,
+  includeDone: boolean,
+): LinearStateType[] | undefined {
+  if (status === "PLANNED") return ["triage", "backlog"];
+  if (status) return [stateTypeForStatus(status)];
+  if (includeDone) return undefined;
+  return ["triage", "backlog", "unstarted", "started"];
+}
+
+/**
  * Pick the workflow state a status should move an issue to.
  *
  * Prefers the state whose `type` matches. Within a type a team can have

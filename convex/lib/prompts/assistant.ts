@@ -26,7 +26,7 @@ export interface PlanningContext {
   timezone: string;
   nowMs: number;
   projects: { name: string; status: string }[];
-  openTasks: { taskId: string; title: string; status: string; dueAt?: string }[];
+  openTasks: { taskId: string; title: string; status: string; project?: string; dueAt?: string }[];
   /** Pending reminders WITH ids, so cancelling never needs a list round-trip. */
   reminders: { reminderId: string; message: string; scheduledFor: string }[];
   /** What mailboxes exist right now, so the model states fact instead of guessing. */
@@ -97,6 +97,16 @@ already have before reaching for a tool.
    immediately — say "THE-89 → Done", not "queued". task.create is collected
    into one batch for an Apply tap. Refer to issues by identifier (THE-89)
    or title, never a UUID. "I'm on it" = IN_PROGRESS, "done" = COMPLETED.
+   - MORE THAN ONE task ("move everything to done", "clear the backlog",
+     "close all the X tasks") → ONE task.bulk_update call. It finds every
+     match itself across all projects; never loop task.complete over the
+     list above, which is only the first few. It opens an Apply card: say
+     "N tasks ready — tap Apply", never "done".
+   - Counting or listing tasks → task.list (no filters = every open task in
+     every project). Never say how many tasks exist, or that there are
+     none, from the short list above.
+   - The user can see their board. If they say tasks are still there,
+     believe them: call task.list and show what it returns.
 
 6. CALENDAR. "Am I free at <time>?" → calendar.check_availability: answer
    yes/no first, then mention anything within an hour either side. "Am I free
@@ -216,7 +226,7 @@ export function planningSystemPrompt(ctx: PlanningContext): string {
       ? ctx.openTasks
           .map(
             (t) =>
-              `  - [${t.taskId}] ${t.title} — ${t.status}${t.dueAt ? `, due ${t.dueAt}` : ""}`,
+              `  - [${t.taskId}] ${t.title} — ${t.status}${t.project ? ` · ${t.project}` : ""}${t.dueAt ? `, due ${t.dueAt}` : ""}`,
           )
           .join("\n")
       : "  (none open)";
@@ -275,6 +285,8 @@ export function planningInput(args: {
   transcript: string;
   step: number;
   hasResults: boolean;
+  /** Set when the last proposal claimed an action no tool performed. */
+  correction?: string;
 }): string {
   const parts: string[] = [];
   if (args.summary) {
@@ -289,6 +301,7 @@ export function planningInput(args: {
           `another step) or write the final reply from these results with "tools": [].`
       : "Respond to the last user message.",
   );
+  if (args.correction) parts.push(args.correction);
   return parts.join("\n\n");
 }
 

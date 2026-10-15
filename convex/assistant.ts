@@ -36,6 +36,7 @@ import {
 } from "./lib/prompts/assistant";
 import { renderOutcomes } from "./lib/tools/outcomes";
 import { guardReply, wantsFullEmail } from "./lib/scope";
+import { CLAIM_CORRECTION, CLAIM_FALLBACK, unbackedClaim } from "./lib/assistant/claims";
 import { relevantSkillNames } from "./lib/skills";
 import { CALLBACK_PREFIX } from "./notify";
 import { AllProvidersFailed } from "./ai/types";
@@ -302,6 +303,8 @@ export async function converseDetailed(
   const allRejected: RejectedCall[] = [];
   let seenEmails: EmailRefItem[] = [];
   let finalPlan: ToolPlan | null = null;
+  let correction: string | undefined;
+  let corrected = false;
 
   for (let step = 1; step <= MAX_STEPS; step++) {
     const hasResults = allOutcomes.length > 0 || allRejected.length > 0;
@@ -320,12 +323,13 @@ export async function converseDetailed(
 
     const proposal = await runTask("PLAN_TOOLS", {
       system,
-      input: planningInput({ summary: summary?.summary, transcript, step, hasResults }),
+      input: planningInput({ summary: summary?.summary, transcript, step, hasResults, correction }),
       untrusted,
       maxOutputTokens: 1500,
       json: true,
     });
 
+    correction = undefined;
     const plan = parseToolPlan(proposal.text);
     plan.reply = guardReply(plan.reply);
 
@@ -343,6 +347,14 @@ export async function converseDetailed(
     // Done: no more tools, or out of steps. The last step's tools are NOT
     // run — there would be no step left to read their results.
     if (plan.calls.length === 0 || step === MAX_STEPS) {
+      // A reply that claims a write no tool performed gets ONE chance to
+      // either do it or retract it. See lib/assistant/claims.ts.
+      if (plan.calls.length === 0 && !corrected && step < MAX_STEPS && unbackedClaim(plan.reply, allOutcomes)) {
+        console.warn(`unbacked_claim step=${step}: ${plan.reply.slice(0, 120)}`);
+        correction = CLAIM_CORRECTION;
+        corrected = true;
+        continue;
+      }
       finalPlan = plan;
       break;
     }
@@ -362,6 +374,16 @@ export async function converseDetailed(
 
   const plan = finalPlan ?? { reply: "", calls: [], rejected: [] };
   let out = plan.reply.trim();
+
+  // Still claiming something nothing did, with no step left: say what
+  // actually happened instead. The tool outcomes are the truth.
+  if (out && unbackedClaim(out, allOutcomes)) {
+    console.warn(`unbacked_claim_final: ${out.slice(0, 120)}`);
+    out =
+      allOutcomes.length > 0 || allRejected.length > 0
+        ? renderOutcomes("", allOutcomes, allRejected, timezone)
+        : CLAIM_FALLBACK;
+  }
 
   // The parts that must be EXACT are emitted by code, never retyped by a
   // model: the full body of an email the user asked to read in full.

@@ -312,9 +312,42 @@ export const TOOL_SCHEMAS = {
     dueAt: INSTANT.optional(),
   }),
   "task.list": z.object({
-    status: TASK_STATUS.optional(),
+    status: TASK_STATUS.optional().describe(
+      "only this status; omit for every OPEN task (Backlog, Todo and In Progress together)",
+    ),
+    projectName: z
+      .string()
+      .optional()
+      .describe('only tasks in this project, e.g. "Migrants Shopping"'),
+    noProject: z.boolean().optional().describe("only tasks that are in no project"),
     teamKey: TEAM_KEY.optional(),
-    limit: z.number().int().min(1).max(25).optional().describe("default 15"),
+    includeDone: z.boolean().optional().describe("also list Done and Canceled tasks"),
+    // Clamped, not rejected: "list everything" asking for 100 is a correct
+    // request in the wrong number, and rejecting it showed the user a Zod
+    // error instead of their tasks (2026-10-15).
+    limit: z
+      .preprocess(
+        (v) => (typeof v === "number" ? Math.max(1, Math.min(100, Math.round(v))) : v),
+        z.number().int().min(1).max(100),
+      )
+      .optional()
+      .describe("default 50"),
+  }),
+  "task.bulk_update": z.object({
+    toStatus: TASK_STATUS.describe("where every matched task should end up, e.g. COMPLETED"),
+    stateName: z
+      .string()
+      .optional()
+      .describe('the exact column the user named, e.g. "Done" — only when they named one'),
+    fromStatus: TASK_STATUS.optional().describe("only tasks currently in this status; omit for every open task"),
+    projectName: z.string().optional().describe("only tasks in this project"),
+    noProject: z.boolean().optional().describe("only tasks that are in no project"),
+    teamKey: TEAM_KEY.optional(),
+    taskIds: z
+      .array(z.string().min(1))
+      .max(100)
+      .optional()
+      .describe('exact tasks, e.g. ["THE-89","THE-90"] — omit to match by the filters above'),
   }),
   "task.update": z
     .object({
@@ -888,7 +921,21 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     requiresAccountId: false,
   },
   "task.list": {
-    description: "List tasks, optionally filtered by status.",
+    description:
+      "List tasks. With no filters it returns EVERY open task across all " +
+      "projects (and tasks in no project), with a total count — use this " +
+      "before saying anything about how many tasks exist. Filter by project " +
+      "with projectName.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "task.bulk_update": {
+    description:
+      "Change the status of MANY tasks at once: 'move everything to done', " +
+      "'clear my backlog', 'close all the Migrants Shopping tasks'. Finds " +
+      "every matching task itself (all pages, all projects) and shows the " +
+      "user one card listing them with an Apply button. Nothing changes " +
+      "until they tap Apply, so say so — never say it is done.",
     consequential: false,
     requiresAccountId: false,
   },

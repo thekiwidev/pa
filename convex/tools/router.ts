@@ -55,6 +55,7 @@ import {
   matchLabels,
   resolveStateForStatus,
   resolveStateByName,
+  stateTypesForFilter,
   statusForStateType,
   linearPriorityForInternal,
   linearDueDate,
@@ -85,6 +86,8 @@ import {
 import { open } from "../security/crypto";
 import {
   listIssues,
+  listAllIssues,
+  OPEN_STATE_TYPES,
   getIssue,
   listWorkflowStates,
   applyChangeset,
@@ -530,21 +533,107 @@ async function dispatch(
       const { backend } = await taskBackend(ctx, userId);
       if (backend === "linear") {
         const apiKey = await linearApiKey(ctx, userId);
-        const issues = await listIssues(apiKey, {
+        const limit = (a.limit as number | undefined) ?? 50;
+        const { issues, truncated, matchedBy } = await findLinearIssues(apiKey, {
+          status: a.status as TaskStatus | undefined,
+          includeDone: a.includeDone === true,
+          projectName: a.projectName as string | undefined,
+          noProject: a.noProject === true,
           teamKey: a.teamKey as string | undefined,
-          limit: (a.limit as number | undefined) ?? 15,
         });
-        const status = a.status as TaskStatus | undefined;
         const rows = issues.map(summarizeLinearIssue);
-        return status ? rows.filter((r) => r.status === status) : rows;
+        return {
+          backend: "linear",
+          total: rows.length,
+          // "at least" — more exist than were fetched. Never "all".
+          truncated,
+          matchedBy,
+          tasks: rows.slice(0, limit),
+          shown: Math.min(limit, rows.length),
+        };
       }
 
       const tasks = await ctx.runQuery(internal.model.tasks.list, {
         userId,
         status: a.status as string | undefined,
-        limit: (a.limit as number | undefined) ?? 15,
+        limit: Math.min((a.limit as number | undefined) ?? 15, 50),
       });
       return tasks.map(summarizeTask(timezone));
+    }
+
+    case "task.bulk_update": {
+      const { backend } = await taskBackend(ctx, userId);
+      if (backend !== "linear") {
+        throw new Error("bulk changes are only supported on the Linear task board");
+      }
+      const apiKey = await linearApiKey(ctx, userId);
+
+      let issues: LinearIssueSummary[];
+      let truncated = false;
+      if (Array.isArray(a.taskIds) && a.taskIds.length > 0) {
+        issues = [];
+        for (const ref of a.taskIds as string[]) {
+          const found = await getIssue(apiKey, ref);
+          if (!found) throw new Error(`no Linear issue "${ref}"`);
+          issues.push(found);
+        }
+      } else {
+        const found = await findLinearIssues(apiKey, {
+          status: a.fromStatus as TaskStatus | undefined,
+          projectName: a.projectName as string | undefined,
+          noProject: a.noProject === true,
+          teamKey: a.teamKey as string | undefined,
+        });
+        issues = found.issues;
+        truncated = found.truncated;
+      }
+
+      const toStatus = a.toStatus as TaskStatus;
+      const statesByTeam = new Map<string, Awaited<ReturnType<typeof listWorkflowStates>>>();
+      const entries: ChangesetEntry[] = [];
+      const displays: string[] = [];
+      const skipped: string[] = [];
+      for (const issue of issues) {
+        const teamKey = issue.team?.key ?? issue.identifier.split("-")[0] ?? "";
+        let states = statesByTeam.get(teamKey);
+        if (!states) {
+          states = await listWorkflowStates(apiKey, teamKey);
+          statesByTeam.set(teamKey, states);
+        }
+        const named =
+          typeof a.stateName === "string" && a.stateName ? resolveStateByName(states, a.stateName) : null;
+        const target = named ?? resolveStateForStatus(states, toStatus);
+        if (!target) throw new Error(`${teamKey} has no workflow state for ${toStatus}`);
+        if (target.id === issue.state.id) {
+          skipped.push(issue.identifier);
+          continue;
+        }
+        entries.push({ op: "update", issueId: issue.id, stateId: target.id });
+        const where = issue.project?.name ? ` (${issue.project.name})` : "";
+        displays.push(`${issue.identifier} ${issue.title}${where}: ${issue.state.name} → ${target.name}`);
+      }
+
+      if (entries.length === 0) {
+        return { matched: issues.length, toChange: 0, skipped, awaitingApproval: false };
+      }
+
+      const opened = await openChangesetApproval(
+        ctx,
+        userId,
+        timezone,
+        entries,
+        displays,
+        `move ${entries.length} task${entries.length === 1 ? "" : "s"}`,
+      );
+      return {
+        matched: issues.length,
+        toChange: entries.length,
+        skipped,
+        truncated,
+        awaitingApproval: true,
+        approvalExpiresAt: opened.approvalExpiresAt,
+        changes: displays,
+      };
     }
 
     case "task.update": {
@@ -1328,8 +1417,18 @@ async function dispatch(
       }
 
       const created = await createIssues(apiKey, creates);
-      const results = await applyChangeset(apiKey, updates);
-      return { created, results };
+      const results: Awaited<ReturnType<typeof applyChangeset>> = [];
+      // Linear accepts ~50 aliased mutations comfortably; 25 keeps one
+      // request well inside its complexity budget for a big bulk change.
+      for (let i = 0; i < updates.length; i += 25) {
+        results.push(...(await applyChangeset(apiKey, updates.slice(i, i + 25))));
+      }
+
+      // Read the board back. "success: true" from a mutation is Linear's
+      // word; the state on the board afterwards is the fact the user cares
+      // about, and the reply must be built from that, not from the request.
+      const verification = await verifyStates(apiKey, updates);
+      return { created, results, verification };
     }
 
     case "note.save": {
@@ -2209,18 +2308,63 @@ export async function listOpenLinearIssues(
   ctx: ActionCtx,
   userId: Id<"users">,
   limit = 15,
-): Promise<{ taskId: string; title: string; status: string; dueAt?: string }[]> {
+): Promise<{ taskId: string; title: string; status: string; project?: string; dueAt?: string }[]> {
   const apiKey = await linearApiKey(ctx, userId);
-  const issues = await listIssues(apiKey, { limit: limit * 2 });
+  const { issues } = await listAllIssues(apiKey, { stateTypes: OPEN_STATE_TYPES }, limit);
+  return issues.map((i) => ({
+    taskId: i.identifier,
+    title: i.title,
+    status: i.state.name,
+    ...(i.project?.name ? { project: i.project.name } : {}),
+  }));
+}
 
-  return issues
-    .filter((i) => i.state.type !== "completed" && i.state.type !== "canceled")
-    .slice(0, limit)
-    .map((i) => ({
-      taskId: i.identifier,
-      title: i.title,
-      status: i.state.name,
-    }));
+/**
+ * Every Linear issue matching a task-level filter, all pages.
+ *
+ * A project name is tried as a Linear Project first, then as a label —
+ * the owner has used both for "project" over time, and a filter that only
+ * knew one of them would report an empty project that is not empty.
+ */
+async function findLinearIssues(
+  apiKey: string,
+  filter: {
+    status?: TaskStatus;
+    includeDone?: boolean;
+    projectName?: string;
+    noProject?: boolean;
+    teamKey?: string;
+  },
+): Promise<{ issues: LinearIssueSummary[]; truncated: boolean; matchedBy?: "project" | "label" }> {
+  const stateTypes = stateTypesForFilter(filter.status, filter.includeDone === true);
+  const base = { teamKey: filter.teamKey, ...(stateTypes ? { stateTypes } : {}) };
+
+  if (filter.projectName) {
+    const byProject = await listAllIssues(apiKey, { ...base, projectName: filter.projectName });
+    if (byProject.issues.length > 0) return { ...byProject, matchedBy: "project" };
+    const byLabel = await listAllIssues(apiKey, { ...base, labelName: filter.projectName });
+    return { ...byLabel, matchedBy: byLabel.issues.length > 0 ? "label" : undefined };
+  }
+  return await listAllIssues(apiKey, { ...base, noProject: filter.noProject });
+}
+
+/** Re-read each updated issue and compare its state with what was asked. */
+async function verifyStates(
+  apiKey: string,
+  updates: LinearIssueChange[],
+): Promise<{ checked: number; matched: number; mismatched: { identifier: string; state: string }[] }> {
+  const wanted = updates.filter((u) => u.stateId !== undefined);
+  if (wanted.length === 0) return { checked: 0, matched: 0, mismatched: [] };
+  const { issues } = await listAllIssues(apiKey, { ids: wanted.map((u) => u.issueId) }, 250);
+  const byId = new Map(issues.map((i) => [i.id, i]));
+  const mismatched: { identifier: string; state: string }[] = [];
+  for (const u of wanted) {
+    const now = byId.get(u.issueId);
+    if (!now || now.state.id !== u.stateId) {
+      mismatched.push({ identifier: now?.identifier ?? u.issueId, state: now?.state.name ?? "not found" });
+    }
+  }
+  return { checked: wanted.length, matched: wanted.length - mismatched.length, mismatched };
 }
 
 /**
@@ -2236,10 +2380,7 @@ export async function listOpenLinearIssuesWithDescriptions(
   limit = 25,
 ): Promise<{ identifier: string; title: string; description?: string | null }[]> {
   const apiKey = await linearApiKey(ctx, userId);
-  const issues = await listIssues(apiKey, { limit });
-  const open = issues.filter(
-    (i) => i.state.type !== "completed" && i.state.type !== "canceled",
-  );
+  const { issues: open } = await listAllIssues(apiKey, { stateTypes: OPEN_STATE_TYPES }, limit);
 
   const out: { identifier: string; title: string; description?: string | null }[] = [];
   for (const issue of open) {
@@ -2691,6 +2832,7 @@ function summarizeLinearIssue(issue: LinearIssueSummary) {
     title: issue.title,
     status: statusForStateType(issue.state.type ?? ""),
     stateName: issue.state.name,
+    ...(issue.project?.name ? { project: issue.project.name } : {}),
     priority: issue.priority,
     url: issue.url,
   };
