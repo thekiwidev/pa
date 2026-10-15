@@ -12,7 +12,7 @@ If you are already on `cleanup/assistant-behaviour`, pull the latest bundle
 git status --short                              # should show nothing tracked
 git pull --ff-only ./cleanup.bundle cleanup/assistant-behaviour
 bun install
-bun run typecheck && bun test                   # expect 743 pass, 0 fail
+bun run typecheck && bun test                   # expect 745 pass, 0 fail
 ```
 
 First time only, from `main`:
@@ -90,14 +90,29 @@ Delete any rule that contradicts the new voice (e.g. "always use headings",
 
 ## 7. Linear
 
-If tasks error with "Linear is connected but marked …":
+The bot does not read `LINEAR_API_KEY` directly. `debug:connectLinear` seals
+a copy into the database, and that sealed copy is what the bot uses. So a new
+key needs both commands:
 
 ```bash
-bunx convex env set LINEAR_API_KEY lin_api_...
+bunx convex env set LINEAR_API_KEY 'lin_api_...'     # Linear → Settings → Security & access → Personal API keys
 bunx convex run debug:connectLinear '{}'
 ```
 
-There is no fallback to the local task list any more; that is deliberate.
+`connectLinear` now tests the key against Linear before saving it. Success
+prints your team keys (e.g. `THE — Thekiwidev`). A 401 means Linear itself
+rejected the key, so make a fresh one. There is no fallback to the local task
+list; that is deliberate.
+
+## 7b. Changing the OpenAI key
+
+```bash
+bunx convex env set OPENAI_API_KEY 'sk-...'
+bunx convex run debug:pingAI '{"task":"PLAN_TOOLS"}'
+```
+
+It is read on every call, so no redeploy or restart is needed. Revoke the old
+key in the OpenAI dashboard afterwards.
 
 ## 8. Test script (send these to the dev bot)
 

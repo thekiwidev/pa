@@ -96,7 +96,9 @@ import {
   type LinearIssueCreate,
   type LinearIssueSummary,
   type LinearIssueChange,
+  LinearApiError,
 } from "../connectors/linear/client";
+import { cleanLinearKey, LINEAR_RECONNECT_HINT } from "../lib/linear/apiKey";
 import { payloadHash } from "../security/hash";
 import { runTask } from "../ai/registry";
 import type { ToolOutcome } from "../lib/tools/outcomes";
@@ -202,7 +204,12 @@ export async function executeToolCall(
     await audit(ctx, call, "ok", startedAt);
     return { name: call.name, ok: true, result };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message =
+      error instanceof LinearApiError && error.isAuthFailure
+        ? LINEAR_RECONNECT_HINT
+        : error instanceof Error
+          ? error.message
+          : String(error);
     await audit(ctx, call, "error", startedAt, message);
     return { name: call.name, ok: false, result: { error: message } };
   }
@@ -2116,11 +2123,14 @@ async function linearApiKey(ctx: ActionCtx, userId: Id<"users">): Promise<string
         "Re-run `bunx convex run debug:connectLinear '{}'` with a fresh LINEAR_API_KEY.",
     );
   }
-  return await open({
-    ciphertext: account.encryptedCredentials,
-    iv: account.credentialIv,
-    authTag: account.credentialAuthTag,
-  });
+  // Keys sealed before 2026-10-15 were not cleaned; a stray newline is a 401.
+  return cleanLinearKey(
+    await open({
+      ciphertext: account.encryptedCredentials,
+      iv: account.credentialIv,
+      authTag: account.credentialAuthTag,
+    }),
+  );
 }
 
 /**

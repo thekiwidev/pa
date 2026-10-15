@@ -29,6 +29,9 @@ Newest first. Date each entry — vendor behaviour rots.
   tell "your transfer" from "a transfer to you".
 - **Skills edited in the DB shadow code defaults.** A changed default does
   nothing until the DB copy is reset (`debug:resetSkill`).
+- **Linear's key lives in the DB, not the env.** `connectLinear` seals
+  `LINEAR_API_KEY` into connectedAccounts; changing the env var alone does
+  nothing until it is re-run. That is why a rotated key still 401'd.
 - **All-day events are context, never conflicts**, otherwise every birthday
   made the day look booked.
 

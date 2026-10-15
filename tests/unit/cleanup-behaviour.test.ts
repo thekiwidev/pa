@@ -15,6 +15,7 @@ import {
   type CalendarItem,
 } from "../../convex/lib/calendar/availability";
 import { dateWindow, resolveWindow } from "../../convex/lib/calendar/window";
+import { cleanLinearKey, looksLikeLinearKey } from "../../convex/lib/linear/apiKey";
 import { formatClock, formatDayTime, formatInstant, formatWhen } from "../../convex/lib/time";
 import { backendForAccounts } from "../../convex/lib/tasks/backend";
 import { parseToolPlan } from "../../convex/lib/tools/plan";
@@ -224,5 +225,17 @@ describe("date formatting does not depend on the runtime's ICU version", () => {
   });
   test("midnight is 00:00, never 24:00", () => {
     expect(formatClock(at("2026-10-14T23:00:00Z"), TZ)).toBe("00:00");
+  });
+});
+
+describe("Linear API key hygiene", () => {
+  test("strips whitespace and surrounding quotes", () => {
+    expect(cleanLinearKey('  "lin_api_abc123"\n')).toBe("lin_api_abc123");
+    expect(cleanLinearKey("'lin_api_abc123'")).toBe("lin_api_abc123");
+  });
+  test("recognises a personal key and rejects other secrets", () => {
+    expect(looksLikeLinearKey("lin_api_abc123")).toBe(true);
+    expect(looksLikeLinearKey("Bearer lin_api_abc123")).toBe(false);
+    expect(looksLikeLinearKey("lin_oauth_abc")).toBe(false);
   });
 });

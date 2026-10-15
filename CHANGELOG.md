@@ -38,6 +38,13 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 - Draft-a-reply button now drafts (it said "isn't built yet").
 - Debug: `debug:skillOverrides`, `debug:resetSkill` for skills edited in the DB.
 
+### Fixed — Linear 401 looked like "not connected" with no way forward
+
+`debug:connectLinear` now strips quotes and whitespace from
+`LINEAR_API_KEY`, checks it starts `lin_api_`, and calls Linear before
+sealing it, so a dead key is refused instead of saved. A 401 during a task
+now tells the user exactly which two commands to run.
+
 ### Fixed — dates read differently depending on the runtime
 
 `formatDayTime`, `formatInstant` and `formatDay` now assemble their text

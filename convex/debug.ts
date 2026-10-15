@@ -13,7 +13,8 @@ import { resolveProviderChain } from "./lib/ai/resolve";
 import { TASKS, modelEnvVar, type TaskName } from "./lib/ai/tiers";
 import { backendForAccounts } from "./lib/tasks/backend";
 import { listOpenLinearIssues } from "./tools/router";
-import { listTeams, listLabels, listWorkflowStates } from "./connectors/linear/client";
+import { listTeams, listLabels, listWorkflowStates, LinearApiError } from "./connectors/linear/client";
+import { cleanLinearKey, looksLikeLinearKey } from "./lib/linear/apiKey";
 
 /**
  * Operator tools. Internal only — there is no URL for these, so they are
@@ -231,8 +232,27 @@ export const planOnly = internalAction({
 export const connectLinear = internalAction({
   args: {},
   handler: async (ctx): Promise<Record<string, unknown>> => {
-    const apiKey = process.env.LINEAR_API_KEY;
-    if (!apiKey) throw new Error("LINEAR_API_KEY is not set on this deployment");
+    const raw = process.env.LINEAR_API_KEY;
+    if (!raw) throw new Error("LINEAR_API_KEY is not set on this deployment");
+    const apiKey = cleanLinearKey(raw);
+    if (!looksLikeLinearKey(apiKey)) {
+      throw new Error(
+        "LINEAR_API_KEY does not look like a Linear personal API key (it should start lin_api_). " +
+          "Set it again without quotes.",
+      );
+    }
+
+    // Prove the key works BEFORE sealing it. Sealing a dead key is how the
+    // bot ended up "connected" and answering every task request with a 401.
+    let teams: { key: string; name: string }[];
+    try {
+      teams = await listTeams(apiKey);
+    } catch (error) {
+      if (error instanceof LinearApiError && error.isAuthFailure) {
+        throw new Error("Linear rejected this key (401). Make a new personal API key in Linear and set it again.");
+      }
+      throw error;
+    }
 
     const telegramId = process.env.TELEGRAM_OWNER_ID;
     if (!telegramId) throw new Error("TELEGRAM_OWNER_ID is not set");
@@ -260,7 +280,11 @@ export const connectLinear = internalAction({
       relabel: true,
     });
 
-    return { accountId: result.accountId, created: result.created };
+    return {
+      accountId: result.accountId,
+      created: result.created,
+      teams: teams.map((t) => `${t.key} — ${t.name}`),
+    };
   },
 });
 
