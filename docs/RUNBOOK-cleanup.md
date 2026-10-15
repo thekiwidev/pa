@@ -46,9 +46,10 @@ git log --oneline -4
 
 - The first `git status` lists only `?? cleanup.bundle` and `?? docs/status-and-social-ingest-plan.md`.
 - The pull says `Fast-forward`.
-- The log starts like this:
+- The log starts like this (the top line is the latest runbook edit):
 
 ```
+xxxxxxx docs(runbook): … (this file; its id varies)
 6ff02b1 feat(saved): read every post link in full, keep it, find it later, add to Notion lists
 65c1626 feat(ops): Telegram alerts on failures, daily connection check, /health, heartbeat
 87f6078 fix(linear): list every open issue across projects; verified bulk moves; no unbacked "done"
