@@ -1,6 +1,7 @@
 import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { reportIncident } from "./ops";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
@@ -442,8 +443,18 @@ export const deliver = internalAction({
     const user = await ctx.runQuery(internal.model.users.get, { userId: args.userId });
     if (!user) return;
 
-    const text = await gatherAndCompose(ctx, args.userId);
-    const outboundId = await sendMessage(user.telegramId, text);
+    let text: string;
+    let outboundId: string;
+    try {
+      text = await gatherAndCompose(ctx, args.userId);
+      outboundId = await sendMessage(user.telegramId, text);
+    } catch (error) {
+      // The check-in silently not arriving is the failure the owner would
+      // otherwise only notice at lunch. Report, then rethrow so the
+      // ensureScheduled sweep still repairs the chain.
+      await reportIncident(ctx, { source: "brief.deliver", error, severity: "critical" });
+      throw error;
+    }
 
     await ctx.runMutation(internal.model.messages.record, {
       userId: args.userId,

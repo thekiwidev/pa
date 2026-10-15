@@ -431,6 +431,30 @@ export default defineSchema({
     revisedAt: v.optional(v.number()),
   }).index("by_user_date", ["userId", "date"]),
 
+  // ── Ops — failures the owner hears about (2026-10-15) ─────────
+  /**
+   * One row per distinct failure (fingerprint = source + normalised
+   * message). Occurrences bump `count`; the Telegram alert is rate-limited
+   * by `lastAlertAt` and silenced by `mutedUntil`. Rows are kept: they are
+   * the history /health reads.
+   */
+  opsIncidents: defineTable({
+    fingerprint: v.string(),
+    source: v.string(),
+    severity: v.string(), // critical | warn
+    sample: v.string(), // scrubbed, capped message
+    count: v.number(),
+    /** Occurrences since the last digest, for the evening summary. */
+    countSinceDigest: v.number(),
+    firstAt: v.number(),
+    lastAt: v.number(),
+    lastAlertAt: v.optional(v.number()),
+    mutedUntil: v.optional(v.number()),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_fingerprint", ["fingerprint"])
+    .index("by_last", ["lastAt"]),
+
   // ── Phase 17 — ONLY past the measured trigger ──────────────
   memories: defineTable({
     userId: v.id("users"),

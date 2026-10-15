@@ -1,4 +1,5 @@
 import { internalAction } from "./_generated/server";
+import { reportIncident, runConnectionChecks } from "./ops";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
 import { geminiProvider } from "./ai/providers/gemini";
@@ -610,5 +611,32 @@ export const resetSkill = internalMutation({
       removed: mine.length,
       oldContent: mine.map((r) => r.content),
     };
+  },
+});
+
+/**
+ * Every connection, checked now, without paging anyone.
+ * `bunx convex run debug:health '{}'`
+ */
+export const health = internalAction({
+  args: {},
+  handler: async (ctx): Promise<unknown> => {
+    return await runConnectionChecks(ctx, false);
+  },
+});
+
+/**
+ * Send one test alert to Telegram, to prove the alert path end to end.
+ * `bunx convex run debug:testAlert '{}'`
+ */
+export const testAlert = internalAction({
+  args: {},
+  handler: async (ctx): Promise<string> => {
+    await reportIncident(ctx, {
+      source: "health:test",
+      error: `Test alert at ${new Date().toISOString()} — if you can read this on Telegram, alerts work.`,
+      severity: "critical",
+    });
+    return "sent (unless an identical test alert went out in the last hour)";
   },
 });

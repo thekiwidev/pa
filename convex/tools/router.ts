@@ -214,6 +214,18 @@ export async function executeToolCall(
           ? error.message
           : String(error);
     await audit(ctx, call, "error", startedAt, message);
+    // Connection-level failures are the owner's to fix and do not heal on
+    // their own, so they page (rate-limited) on top of the inline reply.
+    // Ordinary "no such issue" errors do not.
+    const connectionFailure =
+      (error instanceof LinearApiError && (error.isAuthFailure || error.status >= 500)) ||
+      error instanceof NotionUnavailable;
+    if (connectionFailure) {
+      await ctx.scheduler.runAfter(0, internal.ops.report, {
+        source: call.name.startsWith("note.") ? "notion" : `linear:${call.name}`,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
     return { name: call.name, ok: false, result: { error: message } };
   }
 }
@@ -2206,7 +2218,7 @@ function summarizeTask(timezone: string) {
  *  renderer, and four strings are cheaper than the coupling. */
 const LINEAR_PRIORITY_NAMES = ["No priority", "Urgent", "High", "Medium", "Low"];
 
-async function linearApiKey(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+export async function linearApiKey(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
   const account = accounts.find((a) => a.provider === "linear");
   if (!account) {

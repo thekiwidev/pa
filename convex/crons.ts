@@ -38,6 +38,15 @@ crons.cron("renew gmail watches", "0 5 * * *", internal.gmail.watchAll, {});
  */
 crons.cron("meeting nudges", "*/5 5-21 * * *", internal.reminders.nudgeUpcoming, {});
 
+/**
+ * Ops (2026-10-15). Connection check at 06:30 WAT (05:30 UTC) so a dead
+ * token is reported before the 07:00 check-in needs it. Heartbeat every 10
+ * minutes for the outside watchdog. Warning digest at 19:00 WAT (18:00 UTC).
+ */
+crons.cron("connection check", "30 5 * * *", internal.ops.checkConnections, {});
+crons.interval("heartbeat", { minutes: 10 }, internal.ops.heartbeat, {});
+crons.cron("ops digest", "0 18 * * *", internal.ops.digest, {});
+
 // Phase 12 adds: evening brief 0 19 * * *
 
 export default crons;

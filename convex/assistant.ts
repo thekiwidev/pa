@@ -37,6 +37,8 @@ import {
 import { renderOutcomes } from "./lib/tools/outcomes";
 import { guardReply, wantsFullEmail } from "./lib/scope";
 import { CLAIM_CORRECTION, CLAIM_FALLBACK, unbackedClaim } from "./lib/assistant/claims";
+import { reportIncident, healthText } from "./ops";
+import { scrubSecrets } from "./lib/ops/incident";
 import { relevantSkillNames } from "./lib/skills";
 import { CALLBACK_PREFIX } from "./notify";
 import { AllProvidersFailed } from "./ai/types";
@@ -110,6 +112,8 @@ export const handleMessage = internalAction({
         errorMessage: detail.slice(0, 500),
         latencyMs: Date.now() - startedAt,
       });
+      // Shown to the user inline already, so it is logged, not paged.
+      await reportIncident(ctx, { source: "assistant.message", error, severity: "warn" });
       reply = { text: userFacingError(error, detail) };
     }
 
@@ -585,6 +589,7 @@ async function handleCommand(
         "/skills — list every skill",
         "/skill <name> — show one skill's full content",
         "/status — providers, models, timezone",
+        "/health — is every connection working, and what failed recently",
         "/tasks — open tasks",
         "/blocked — what I'm waiting on, and on whom",
         "/reminders — what's scheduled",
@@ -596,6 +601,8 @@ async function handleCommand(
       return `You are the configured owner: ${process.env.TELEGRAM_OWNER_ID}`;
     case "/status":
       return status();
+    case "/health":
+      return await healthText(ctx);
     case "/tasks":
       return await tasksCommand(ctx, userId);
     case "/blocked":
@@ -751,7 +758,7 @@ function userFacingError(error: unknown, detail: string): string {
   if (error instanceof AllProvidersFailed && error.quotaExhausted) {
     return "I'm out of AI quota for the moment. Try again in a few minutes — nothing was lost.";
   }
-  return `Something broke handling that: ${detail.slice(0, 300)}`;
+  return `That broke on my side, and I've logged it: ${scrubSecrets(detail).slice(0, 300)}`;
 }
 
 const TRANSCRIBE_SYSTEM = `You transcribe audio. Output ONLY the verbatim
@@ -964,6 +971,8 @@ async function readImagesAndConverse(
       errorMessage: detail.slice(0, 500),
       latencyMs: Date.now() - startedAt,
     });
+      // Shown to the user inline already, so it is logged, not paged.
+      await reportIncident(ctx, { source: "assistant.photo", error, severity: "warn" });
     reply = userFacingError(error, detail);
   }
 
@@ -1081,6 +1090,8 @@ export const handleDocument = internalAction({
         errorMessage: detail.slice(0, 500),
         latencyMs: Date.now() - startedAt,
       });
+      // Shown to the user inline already, so it is logged, not paged.
+      await reportIncident(ctx, { source: "assistant.document", error, severity: "warn" });
       reply = userFacingError(error, detail);
     }
 
@@ -1158,6 +1169,8 @@ export const handleVoice = internalAction({
         errorMessage: detail.slice(0, 500),
         latencyMs: Date.now() - startedAt,
       });
+      // Shown to the user inline already, so it is logged, not paged.
+      await reportIncident(ctx, { source: "assistant.voice", error, severity: "warn" });
       reply = userFacingError(error, detail);
     }
 
@@ -1421,6 +1434,18 @@ export const handleCallback = internalAction({
       // Phase 6's draft buttons carry their own prefixes and are not
       // CALLBACK_PREFIX values, so they are matched before the switch.
       // These helpers return their reply text rather than sending it.
+      if (args.data.startsWith("opsmute:")) {
+        const muted = await ctx.runMutation(internal.model.ops.mute, {
+          fingerprint: args.data.slice("opsmute:".length),
+          hours: 24,
+        });
+        await sendMessage(args.chatId, muted.muted ? "🔕 Muted for 24 hours." : "That alert is gone already.");
+        return;
+      }
+      if (args.data.startsWith("opshealth:")) {
+        await sendMessage(args.chatId, await healthText(ctx));
+        return;
+      }
       if (args.data.startsWith("senddraft:")) {
         const text = await sendDraftCommand(ctx, userId, args.data.slice("senddraft:".length));
         await sendMessage(args.chatId, text);
@@ -1517,6 +1542,8 @@ export const handleCallback = internalAction({
         result: "error",
         errorMessage: detail.slice(0, 500),
       });
+      // Shown to the user inline already, so it is logged, not paged.
+      await reportIncident(ctx, { source: "assistant.callback", error, severity: "warn" });
       await sendMessage(args.chatId, userFacingError(error, detail));
     }
   },

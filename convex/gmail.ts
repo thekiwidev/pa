@@ -1,6 +1,7 @@
 import { internalAction, internalQuery } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { reportIncident } from "./ops";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { seal, open } from "./security/crypto";
@@ -847,6 +848,7 @@ export const syncAll = internalAction({
               error instanceof Error ? error.message : String(error)
             }`,
           );
+          await reportIncident(ctx, { source: `gmail.sync:${account.label}`, error });
         }
       }),
     );
@@ -871,7 +873,8 @@ async function notifyNeedsReauth(
   await sendMessage(
     user.telegramId,
     `⚠️ ${accountEmail} needs re-authorizing — Google rejected the saved token.\n` +
-      `This happens every 7 days while the app is in Testing mode.\n\n` +
+      `Google does this every 7 days while the OAuth app is in Testing mode. ` +
+      `Publishing it to production (runbook step 6) stops it.\n\n` +
       `Send: /reconnect ${accountEmail}\n` +
       `It stays labelled "${label}".`,
   );
