@@ -3,14 +3,21 @@
 Everything below needs you: a key, a console, or your Telegram. Run from the
 repo root. Nothing here touches production.
 
-## 1. Get the code
+## 1. Get the code onto a branch
+
+The changed files are already in your folder. This puts them on the branch
+with history, so `main` stays as it was:
 
 ```bash
 git fetch ./cleanup.bundle cleanup/assistant-behaviour:cleanup/assistant-behaviour
-git checkout cleanup/assistant-behaviour
+git diff --stat cleanup/assistant-behaviour    # should print nothing
+git checkout -f cleanup/assistant-behaviour
 bun install
-bun run typecheck && bun test        # expect 740 pass, 0 fail
+bun run typecheck && bun test                  # expect 740 pass, 0 fail
 ```
+
+If `git diff` prints anything, stop: something in the folder changed after
+the copy. `-f` is safe otherwise, since the branch already holds every change.
 
 ## 2. OpenAI key and models (free daily tier)
 
