@@ -47,6 +47,19 @@ function buildInput(req: AIRequest): unknown {
   ];
 }
 
+/**
+ * GPT-5 and o-series models reason before answering, and that reasoning is
+ * billed against `max_output_tokens`. Without headroom a planner asked for
+ * 1,500 tokens can spend all of them thinking and return nothing — the same
+ * trap MEMORY.md records for Gemini 3.x. Effort is pinned low: the planner
+ * picks tools from a list, it does not need to deliberate.
+ */
+export function isReasoningModel(model: string): boolean {
+  return /^(gpt-5|o\d)/.test(model);
+}
+
+const REASONING_RESERVE = 2048;
+
 export const openaiProvider: AIProvider = {
   id: "openai",
 
@@ -61,7 +74,12 @@ export const openaiProvider: AIProvider = {
         model,
         instructions: req.system,
         input: buildInput(req),
-        max_output_tokens: req.maxOutputTokens ?? 1024,
+        max_output_tokens:
+          (req.maxOutputTokens ?? 1024) + (isReasoningModel(model) ? REASONING_RESERVE : 0),
+        ...(isReasoningModel(model) ? { reasoning: { effort: "low" } } : {}),
+        // json_object requires the word "JSON" somewhere in the prompt; every
+        // caller that sets `json` already says "Reply with a single JSON object".
+        ...(req.json ? { text: { format: { type: "json_object" } } } : {}),
       }),
     });
 

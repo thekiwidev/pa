@@ -528,7 +528,7 @@ async function classifyMessage(
   accountLabel?: string,
 ): Promise<ClassificationResult> {
   try {
-    const [isNoise, person, projects, rules] = await Promise.all([
+    const [isNoise, person, projects, rules, ownerContext] = await Promise.all([
       ctx.runQuery(internal.model.noiseSenders.matches, {
         userId,
         fromAddress: normalized.fromAddress,
@@ -539,6 +539,7 @@ async function classifyMessage(
       }),
       ctx.runQuery(internal.model.projects.listActive, { userId, limit: 25 }),
       ctx.runQuery(internal.model.emailRules.listForMatching, { userId }),
+      ctx.runQuery(internal.model.userContext.list, { userId }),
     ]);
 
     const haystack = `${normalized.subject ?? ""} ${normalized.bodyText ?? ""}`.toLowerCase();
@@ -599,6 +600,7 @@ async function classifyMessage(
         dmarc: normalized.authResults?.dmarc,
         senderImportance: person?.importance,
         knownProjects: projectNames,
+        ownerFacts: ownerContext.map((c) => c.text),
       }),
       // The body reaches the model ONLY here — never merged into `input`.
       untrusted: [{ label: "email_body", content: normalized.bodyText ?? "(no body)" }],
@@ -926,6 +928,7 @@ async function deliverIfDue(
     importance: classified.importance,
     whyItMatters: classified.whyItMatters,
     deadlineMentioned: classified.deadlineMentioned ?? undefined,
+    receivedAt: normalized.receivedAt,
   });
 }
 

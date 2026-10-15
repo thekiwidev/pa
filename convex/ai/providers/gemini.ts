@@ -112,6 +112,7 @@ export const geminiProvider: AIProvider = {
         generationConfig: {
           maxOutputTokens: answerTokens + THINKING_RESERVE[req.tier],
           thinkingConfig: { thinkingLevel: THINKING_LEVEL[req.tier] },
+          ...(req.json ? { responseMimeType: "application/json" } : {}),
         },
       }),
     });

@@ -61,6 +61,8 @@ export interface CalendarEvent {
   description?: string;
   location?: string;
   htmlLink?: string;
+  /** Google Meet link, when the event has one. */
+  hangoutLink?: string;
   status?: string;
   start: CalendarWhen;
   end: CalendarWhen;

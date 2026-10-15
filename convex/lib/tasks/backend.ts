@@ -19,6 +19,22 @@ export function pickBackend(hasLinearAccount: boolean): TaskBackend {
 }
 
 /**
+ * The backend for a set of connected accounts.
+ *
+ * Linear owns tasks as soon as a Linear account EXISTS — in any status. It
+ * used to require status ACTIVE, so a lapsed key silently flipped every task
+ * read and write over to the Convex table: tasks created that week landed in
+ * a list the owner never looks at, and "update THE-89" found nothing. Now a
+ * broken Linear connection is an error the owner sees, never a quiet switch.
+ * See docs/BEHAVIOUR.md §7.
+ */
+export function backendForAccounts(
+  accounts: readonly { provider: string; status: string }[],
+): TaskBackend {
+  return pickBackend(accounts.some((a) => a.provider === "linear"));
+}
+
+/**
  * The internal status vocabulary — the one in the `tasks` table, in the
  * catalogue's TASK_STATUS enum, and in every prompt.
  */

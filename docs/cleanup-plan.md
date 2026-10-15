@@ -92,3 +92,25 @@ Each step gets tests in `tests/unit` before code, plus a `CHANGELOG.md` / `MEMOR
 ## 5. Recommended first step
 
 Commit the current working tree to a checkpoint branch, then write `docs/BEHAVIOUR.md` (Phase A.1). Every prompt rewrite and code change after that is checked against it.
+
+---
+
+## 6. Status — 2026-10-15
+
+Implemented on branch `cleanup/assistant-behaviour`. What you must run is in
+`docs/RUNBOOK-cleanup.md`.
+
+| # | Status | Notes |
+|---|---|---|
+| A.1 BEHAVIOUR.md | Done | The spec every change below is checked against. |
+| A.2 ARCHITECTURE.md refresh | Not done | Left for after you have tested the behaviour. |
+| A.3 Prompts | Done | Planner SCOPE is 9 numbered rules; morning check-in ≤ 5 lines; classifier v2 rubric. |
+| 1 Conversation context | Done | reply_to_message, `messages.ref`, email in focus. |
+| 2 Planner loop | Done, differently | 3-step JSON loop with E-labels instead of native tool calling, so Gemini and OpenAI behave the same. Native tools can come later. |
+| 3 One best match | Done | "next" uses results already in the conversation. |
+| 4 Alerts | Done | "Not important" already taught a sender rule. |
+| 5 Linear only | Mostly | No silent fallback; updates apply at once. **No Undo button yet**, and blockers still live in issue descriptions rather than labels. |
+| 6 Morning check-in | Done | Calendar + ranked tasks. |
+| 7 Calendar everywhere | Done | All Google accounts; weekday → date by the model; ±60 min near-misses. |
+| 8 Nudges | Done | 5-min cron, once per event. **No end-of-day check-in.** |
+| 9 Memory | Done, differently | Rolling summary + 20-turn window. `context.set` and `instruction.add` stay separate; the prompt says when to use each. |

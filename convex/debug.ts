@@ -4,14 +4,14 @@ import { runTask } from "./ai/registry";
 import { geminiProvider } from "./ai/providers/gemini";
 import { seal, open } from "./security/crypto";
 import { NotionUnavailable, checkAccess } from "./connectors/notion/client";
-import { internalQuery } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { parseToolPlan } from "./lib/tools/plan";
 import { planningSystemPrompt, tldrOnlySystemPrompt } from "./lib/prompts/assistant";
 import { converse } from "./assistant";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { TASKS, modelEnvVar, type TaskName } from "./lib/ai/tiers";
-import { pickBackend } from "./lib/tasks/backend";
+import { backendForAccounts } from "./lib/tasks/backend";
 import { listOpenLinearIssues } from "./tools/router";
 import { listTeams, listLabels, listWorkflowStates } from "./connectors/linear/client";
 
@@ -141,9 +141,7 @@ export const planOnly = internalAction({
 
     // Mirror converse()'s backend choice, or this tool prints a prompt the
     // assistant never sees — which is the one thing it exists not to do.
-    const taskBackend = pickBackend(
-      accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
-    );
+    const taskBackend = backendForAccounts(accounts);
     const openTasks =
       taskBackend === "linear"
         ? await listOpenLinearIssues(ctx, user._id)
@@ -384,9 +382,7 @@ export const accounts = internalAction({
       mailboxLabels: rows
         .filter((a) => a.provider === "gmail" && a.status === "ACTIVE")
         .map((a) => a.label),
-      taskBackend: pickBackend(
-        rows.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
-      ),
+      taskBackend: backendForAccounts(rows),
       linearTeamKey: process.env.LINEAR_TEAM_KEY ?? "(unset — uses the only team, or asks)",
       gmailPush: process.env.GOOGLE_PUBSUB_TOPIC
         ? {
@@ -550,5 +546,45 @@ export const tldrFor = internalAction({
     });
 
     return { found: true, subject: message.subject, tldr: result.text };
+  },
+});
+
+/**
+ * Skills you edited in chat are stored in the database and SHADOW the
+ * defaults in lib/skills.ts (MEMORY.md, 2026-08-21). After the 2026-10-15
+ * cleanup the defaults changed — so an old edited copy of morning_brief or
+ * check_email would keep the old behaviour. This lists which ones are yours.
+ *
+ *   bunx convex run debug:skillOverrides '{}'
+ */
+export const skillOverrides = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db.query("skills").take(50);
+    return rows.map((r) => ({
+      name: r.name,
+      title: r.title,
+      chars: r.content.length,
+      preview: r.content.slice(0, 300),
+    }));
+  },
+});
+
+/**
+ * Drop YOUR edited copy of one skill so the new default applies. Prints the
+ * old content first so nothing is lost — copy it somewhere if you want it.
+ *
+ *   bunx convex run debug:resetSkill '{"name":"morning_brief"}'
+ */
+export const resetSkill = internalMutation({
+  args: { name: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db.query("skills").take(50);
+    const mine = rows.filter((r) => r.name === args.name);
+    for (const row of mine) await ctx.db.delete("skills", row._id);
+    return {
+      removed: mine.length,
+      oldContent: mine.map((r) => r.content),
+    };
   },
 });

@@ -20,7 +20,13 @@ export const TASKS = {
   // every single inbound message, which is what exhausted the free-tier quota
   // after two or three messages. CHEAP_STRUCTURED is both what the work
   // actually is and a different per-model quota bucket.
-  PLAN_TOOLS:          { tier: "CHEAP_STRUCTURED" },  // Phase 2
+  //
+  // Moved back to REASON on 2026-10-15. On flash-lite it read context badly:
+  // "when did this come in?" under an alert became a mailbox search. It is
+  // the one call that decides everything else, so it gets the better model;
+  // route it to a provider whose REASON tier fits the free quota (see
+  // docs/RUNBOOK-cleanup.md) rather than starving it.
+  PLAN_TOOLS:          { tier: "REASON" },
   // The second pass, run ONLY when a skill matched this message and tools
   // actually executed. Deliberately DRAFT tier, not REASON: this is "prose
   // you will read", which is exactly what the tier is for, and it keeps the
@@ -42,6 +48,8 @@ export const TASKS = {
   EXTRACT_COMMITMENTS: { tier: "REASON" },
   SUMMARIZE_MEETING:   { tier: "DRAFT" },             // the personal TL;DR
   COMPOSE_BRIEF:       { tier: "DRAFT" },             // Phase 12
+  // Folds older chat turns into a short running summary — memory.
+  SUMMARIZE_CONVERSATION: { tier: "CHEAP_STRUCTURED" },
 } as const satisfies Record<string, { tier: Tier }>;
 
 export type TaskName = keyof typeof TASKS;

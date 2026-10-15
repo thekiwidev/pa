@@ -64,6 +64,12 @@ const IMPORTANCE = z
   .preprocess(normalizeEnum, z.enum(["CRITICAL", "HIGH", "NORMAL", "LOW"]))
   .describe("CRITICAL|HIGH|NORMAL|LOW");
 
+/** One specific day — "Thursday", "the 24th" — resolved by the model to a date. */
+const CALENDAR_DATE = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "use YYYY-MM-DD")
+  .describe('a specific day as YYYY-MM-DD, e.g. "2026-10-22" for "Thursday" — use instead of window for any named day');
+
 const TIME_OF_DAY = z
   .string()
   .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "use 24-hour HH:MM, e.g. 07:00")
@@ -391,6 +397,7 @@ export const TOOL_SCHEMAS = {
     }),
   "calendar.list_events": z.object({
     window: CALENDAR_WINDOW.optional(),
+    date: CALENDAR_DATE.optional(),
     query: z.string().optional().describe("only events whose text matches this"),
     limit: z.number().int().min(1).max(50).optional().describe("default 25"),
   }),
@@ -436,7 +443,19 @@ export const TOOL_SCHEMAS = {
       .max(480)
       .describe("how long a gap you need"),
     window: CALENDAR_WINDOW.optional(),
+    date: CALENDAR_DATE.optional(),
     limit: z.number().int().min(1).max(10).optional().describe("default 5"),
+  }),
+  "calendar.check_availability": z.object({
+    startsAt: INSTANT.describe("start of the time being asked about, ISO 8601 local time"),
+    endsAt: INSTANT.optional().describe("end of it — omit and give durationMinutes instead"),
+    durationMinutes: z
+      .number()
+      .int()
+      .min(5)
+      .max(1440)
+      .optional()
+      .describe("how long, when there is no explicit end. Default 60"),
   }),
 
   "drive.search_files": z
@@ -942,8 +961,9 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "calendar.list_events": {
     description:
-      "The user's schedule for a window of time. Read-only. Use this for " +
-      '"what\'s my day", "am I free Thursday", "what\'s on this week".',
+      "The user's schedule across EVERY connected calendar, for a window or " +
+      'one date. Read-only. Use for "what\'s my day", "am I free Thursday" ' +
+      '(a whole day), "what\'s on this week".',
     consequential: false,
     requiresAccountId: true,
     contentIsUnknowable: true,
@@ -971,10 +991,19 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     consequential: true,
     requiresAccountId: true,
   },
+  "calendar.check_availability": {
+    description:
+      'Is the user free at a specific time? Checks EVERY connected calendar. ' +
+      'Returns free/busy, what clashes, and anything within an hour either ' +
+      'side — use for "am I free Thursday at 3", "can I take a call at 2".',
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
   "calendar.find_free_slots": {
     description:
-      "Gaps of at least N minutes in working hours that are not already " +
-      "booked. Read-only. Use before proposing a time to anyone.",
+      "Gaps of at least N minutes in working hours that are not booked on " +
+      "ANY connected calendar. Read-only. Use before proposing a time to anyone.",
     consequential: false,
     requiresAccountId: true,
     contentIsUnknowable: true,
@@ -1335,8 +1364,20 @@ function descriptionOf(field: z.ZodType): string | undefined {
  * The catalog as the model sees it — names, argument TYPES, and descriptions.
  * The types are the point; see the note at the top of this file.
  */
+/**
+ * Tools the planner is not shown. Still valid if proposed (an older skill may
+ * name one), but the model is steered to ONE way of doing each job: task.*
+ * owns Linear issues, so the parallel linear.* batch tools only invited the
+ * model to pick the wrong one — see docs/BEHAVIOUR.md §7.
+ */
+export const HIDDEN_FROM_PLANNER: ReadonlySet<string> = new Set([
+  "linear.list_issues",
+  "linear.propose_changeset",
+  "linear.apply_changeset",
+]);
+
 export function describeCatalog(): string {
-  return TOOL_NAMES.map((name) => {
+  return TOOL_NAMES.filter((name) => !HIDDEN_FROM_PLANNER.has(name)).map((name) => {
     const args = Object.entries(shapeOf(TOOL_SCHEMAS[name]))
       .map(([key, field]) => {
         const optional = field.safeParse(undefined).success;

@@ -31,6 +31,13 @@ crons.cron("ensure brief scheduled", "0 7 * * *", internal.briefs.ensureSchedule
  * GOOGLE_PUBSUB_TOPIC is unset, so this is harmless before Pub/Sub exists.
  */
 crons.cron("renew gmail watches", "0 5 * * *", internal.gmail.watchAll, {});
-// Phase 12 adds: morning brief 0 6 * * *  /  evening brief 0 19 * * *
+/**
+ * Meeting nudges — "standup in 30 min". Every 5 minutes, 06:00-22:59 WAT
+ * (05-21 UTC), so nobody is paged overnight about an all-night calendar.
+ * Each event is nudged once; see reminders.nudgeUpcoming.
+ */
+crons.cron("meeting nudges", "*/5 5-21 * * *", internal.reminders.nudgeUpcoming, {});
+
+// Phase 12 adds: evening brief 0 19 * * *
 
 export default crons;

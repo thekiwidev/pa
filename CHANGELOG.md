@@ -9,6 +9,35 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Changed — the assistant behaves like a PA (2026-10-15 cleanup, `docs/BEHAVIOUR.md`)
+
+- **Email in focus.** Replying to an alert (or any email the bot showed)
+  makes that email the subject. "When did this come in?" is answered from
+  its metadata, not by a search. Alerts, briefs, nudges and TL;DRs are now
+  recorded in the conversation with a reference to what they were about.
+- **One best answer.** Email search returns the single best match plus "N
+  others — say next or show all". The planner runs a loop of up to 3 steps
+  and can point at emails by short labels (E0, E1…) that code swaps for real
+  ids, so it never guesses which "Polaris" email was meant.
+- **Alert cards.** Sender · mailbox · when it arrived, one PA sentence, the
+  subject in italics, the deadline if any. Classifier v2 has an explicit
+  rubric: receipts for things you did yourself are NORMAL, never a ping, and
+  it now knows facts about the owner.
+- **Morning check-in.** At most 5 lines: good morning, today's calendar
+  across every account, and the single first thing to do. "What else?" gets
+  the rest.
+- **Calendar.** Every connected Google calendar is read and merged.
+  `calendar.check_availability` answers "am I free at 3 on Thursday?" with
+  yes/no plus anything within an hour either side. New 5-minute cron sends
+  "📅 X in 30 min" nudges, once per event.
+- **Tasks live in Linear only** when Linear is connected — no silent fallback
+  to the local table. Update / complete / block / unblock apply immediately;
+  creating several still waits for one Apply tap.
+- **Memory.** Conversation window raised to 20 turns, with a rolling summary
+  of older turns. The prompt names when to save a fact, a rule or a note.
+- Draft-a-reply button now drafts (it said "isn't built yet").
+- Debug: `debug:skillOverrides`, `debug:resetSkill` for skills edited in the DB.
+
 ### Added — social posts: every slide, then one tap to save the lot
 
 `capture.propose` / `capture.apply`. An instruction that would create more

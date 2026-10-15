@@ -136,5 +136,5 @@ describe("applyFloor", () => {
 });
 
 test("classifierVersion is stamped so a re-run is comparable", () => {
-  expect(CLASSIFIER_VERSION).toBe("v1");
+  expect(CLASSIFIER_VERSION).toBe("v2");
 });

@@ -2,6 +2,9 @@ import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { sendMessage } from "./channels/telegram";
+import { allCalendarEvents } from "./tools/router";
+import { whenToMs, isAllDay } from "./lib/calendar/events";
+import { nudgeText } from "./lib/calendar/availability";
 
 /**
  * The scheduler's target. Not a poll — Convex invokes this at the instant the
@@ -61,6 +64,76 @@ export const reconcile = internalAction({
         action: "reminder.reconcile",
         args: { recovered: missed.length },
         result: "ok",
+      });
+    }
+  },
+});
+
+/**
+ * "Standup in 30 min" — the assistant speaking first, without being asked
+ * (docs/BEHAVIOUR.md §6). Polled every 5 minutes by crons.ts during waking
+ * hours; each event is nudged exactly once (calendarNudges, check-then-insert
+ * in one mutation). MEETING_NUDGE_MINUTES sets the lead time; "0" turns
+ * nudges off.
+ */
+export const nudgeUpcoming = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const ownerId = process.env.TELEGRAM_OWNER_ID;
+    if (!ownerId) return;
+    const leadMinutes = Number(process.env.MEETING_NUDGE_MINUTES ?? "30");
+    if (!Number.isFinite(leadMinutes) || leadMinutes <= 0) return;
+
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: ownerId });
+    if (!user) return;
+
+    const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+    const nowMs = Date.now();
+    const leadMs = leadMinutes * 60_000;
+
+    let found;
+    try {
+      found = await allCalendarEvents(
+        ctx,
+        user._id,
+        { startMs: nowMs, endMs: nowMs + leadMs + 60_000 },
+        { limit: 10 },
+      );
+    } catch {
+      // No calendar connected (or no calendar scope yet): nothing to nudge.
+      return;
+    }
+
+    for (const { event, calendarOf } of found.events) {
+      const startMs = whenToMs(event.start, timezone);
+      if (startMs === null || isAllDay(event.start)) continue;
+      if (startMs <= nowMs || startMs > nowMs + leadMs) continue;
+
+      const claimed = await ctx.runMutation(internal.model.messages.claimNudge, {
+        userId: user._id,
+        key: `${calendarOf}:${event.id}:${startMs}`,
+      });
+      if (!claimed) continue;
+
+      const text = nudgeText(
+        {
+          title: event.summary ?? "(no title)",
+          startMs,
+          link: event.hangoutLink,
+          location: event.location,
+        },
+        nowMs,
+        timezone,
+      );
+      const channelMessageId = await sendMessage(user.telegramId, text);
+      await ctx.runMutation(internal.model.messages.record, {
+        userId: user._id,
+        channel: "telegram",
+        direction: "out",
+        channelMessageId,
+        kind: "nudge",
+        text,
+        ref: { kind: "event", id: event.id },
       });
     }
   },

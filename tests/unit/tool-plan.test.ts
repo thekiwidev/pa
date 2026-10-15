@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseToolPlan } from "../../convex/lib/tools/plan";
-import { describeCatalog, TOOL_NAMES, TOOL_META } from "../../convex/lib/tools/catalog";
+import { describeCatalog, TOOL_NAMES, TOOL_META, HIDDEN_FROM_PLANNER } from "../../convex/lib/tools/catalog";
 
 describe("parseToolPlan", () => {
   test("parses a clean plan", () => {
@@ -141,9 +141,12 @@ describe("catalog", () => {
     }
   });
 
-  test("the rendered catalog names every tool", () => {
+  test("the rendered catalog names every tool except the deliberately hidden ones", () => {
     const rendered = describeCatalog();
-    for (const name of TOOL_NAMES) expect(rendered).toContain(name);
+    for (const name of TOOL_NAMES) {
+      if (HIDDEN_FROM_PLANNER.has(name)) expect(rendered).not.toContain(`- ${name}(`);
+      else expect(rendered).toContain(name);
+    }
   });
 
   test("required and optional arguments render distinctly", () => {

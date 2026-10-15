@@ -67,6 +67,21 @@ names get retired without notice.
 Re-probe a ladder before trusting it — `bunx convex run debug:pingAI
 '{"model":"gemini-3.5-flash"}'` hits one model directly.
 
+## Assistant behaviour (2026-10-15 cleanup)
+
+| Variable | Default | What it does |
+|---|---|---|
+| `MEETING_NUDGE_MINUTES` | `30` | Minutes before an event the "📅 X in 30 min" nudge fires. `0` turns nudges off. Checked every 5 min, 06:00–22:59 Lagos. |
+| `OPENAI_API_KEY` | unset | Presence alone makes OpenAI a configured provider. |
+| `OPENAI_MODEL_REASON` / `_DRAFT` / `_CHEAP_STRUCTURED` | unset | Fallback ladders, like Gemini's. Keep to models in OpenAI's free daily tier (see `docs/RUNBOOK-cleanup.md`). |
+| `AI_PROVIDER_PRIORITY` | `gemini` | e.g. `openai,gemini` — first configured provider wins; the next is the fallback. |
+| `AI_ROUTE_<TASK>` | unset | Pin one task to one provider, e.g. `AI_ROUTE_CLASSIFY_IMPORTANCE=gemini`, `AI_ROUTE_TRANSCRIBE_VOICE=gemini`. |
+
+`PLAN_TOOLS` now runs on the **REASON** tier (it was CHEAP_STRUCTURED): the
+planner is the assistant's whole brain, and the cheap tier was why it answered
+"when did this come in?" with a search. `SUMMARIZE_CONVERSATION` is new and
+runs on CHEAP_STRUCTURED.
+
 ## Never an environment variable
 
 Per-mailbox OAuth **refresh tokens** (Gmail, Zoho, Outlook). They are encrypted

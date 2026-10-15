@@ -179,6 +179,8 @@ http.route({
       displayName: message.displayName,
       channelMessageId: message.channelMessageId,
       text: message.text,
+      replyToChannelMessageId: message.replyToChannelMessageId,
+      replyToText: message.replyToText,
     });
 
     return new Response(null, { status: 200 });
@@ -191,6 +193,10 @@ interface ParsedTextMessage {
   displayName: string;
   channelMessageId: string;
   text: string;
+  /** Set when the owner used Telegram's Reply on one of OUR messages. */
+  replyToChannelMessageId?: string;
+  /** The text of the message replied to, as Telegram echoes it back. */
+  replyToText?: string;
 }
 
 /**
@@ -208,6 +214,7 @@ function parseTextMessage(update: unknown): ParsedTextMessage | null {
     text?: unknown;
     chat?: unknown;
     from?: unknown;
+    reply_to_message?: unknown;
   };
 
   if (typeof m.text !== "string" || m.text.length === 0) return null;
@@ -224,6 +231,23 @@ function parseTextMessage(update: unknown): ParsedTextMessage | null {
     displayName: typeof from.first_name === "string" ? from.first_name : "unknown",
     channelMessageId: String(m.message_id),
     text: m.text,
+    ...parseReplyTo(m.reply_to_message),
+  };
+}
+
+/**
+ * Telegram includes the replied-to message inline. Without reading it, "when
+ * did this come in?" sent as a Reply to an alert card arrived with no idea
+ * which email "this" was — so the planner searched, and pasted the search.
+ */
+function parseReplyTo(raw: unknown): { replyToChannelMessageId?: string; replyToText?: string } {
+  if (typeof raw !== "object" || raw === null) return {};
+  const r = raw as { message_id?: unknown; text?: unknown; caption?: unknown };
+  if (typeof r.message_id !== "number") return {};
+  const text = typeof r.text === "string" ? r.text : typeof r.caption === "string" ? r.caption : undefined;
+  return {
+    replyToChannelMessageId: String(r.message_id),
+    replyToText: text?.slice(0, 2000),
   };
 }
 

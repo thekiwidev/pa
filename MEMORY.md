@@ -9,6 +9,29 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-15 — The cleanup: decisions and why
+
+- **PLAN_TOOLS moved to REASON.** On the cheap tier the planner treated every
+  question as a fresh search ("when did this come in?" → a search). The planner
+  is the whole assistant; it is the last place to save tokens.
+- **A 3-step loop replaced the deterministic list renderer.** The renderer
+  pasted every search result because it had no way to judge "the one". The
+  model now sees results and answers; E-labels keep ids out of its hands, and
+  the router still validates every substituted id.
+- **Linear updates are immediate, creates are batched.** Changing an issue's
+  state is reversible and was the thing the user said "never happens" — the
+  approval tap was the reason. Creating many issues is not, so it keeps the tap.
+- **No Convex fallback when Linear is connected but inactive.** A silent
+  fallback is how tasks ended up split across two places. It now errors and
+  says to reconnect.
+- **Classifier v2.** Self-initiated receipts were paging as HIGH. The rubric
+  says NORMAL; the user's own facts (name, accounts) are passed in so it can
+  tell "your transfer" from "a transfer to you".
+- **Skills edited in the DB shadow code defaults.** A changed default does
+  nothing until the DB copy is reset (`debug:resetSkill`).
+- **All-day events are context, never conflicts**, otherwise every birthday
+  made the day look booked.
+
 ## 2026-09-07 — "Is this possible?" is a research task with a real answer, and the answer was no
 
 The WhatsApp requirement was specific and reasonable: watch the main personal

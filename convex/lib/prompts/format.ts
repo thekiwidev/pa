@@ -9,21 +9,28 @@
 // rescue syntax it anticipates; a table cannot be rescued at all, because
 // Telegram has no table.
 //
-// So: fix the converter AND stop generating what cannot render. Belt and
-// braces, on the path every outbound message takes.
+// 2026-10-15: it now also states the VOICE (docs/BEHAVIOUR.md §1). Correct
+// syntax was not the problem the owner had — a 40-line "command-center
+// brief" in perfect Telegram markdown is still unreadable on a phone.
 
 /**
  * Appended to every prompt whose output is shown to the user in Telegram.
- *
- * Deliberately short. A long formatting section competes for attention with
- * the actual task, and the converter is the real guarantee — this only has to
- * stop the constructs that cannot be converted at all.
  */
-export const TELEGRAM_FORMAT_CONTRACT = `FORMAT — you are writing for Telegram, not a web page:
-- **bold** for emphasis and for anything you would have made a heading.
-  Telegram has NO headings — never write "#", "##" or "###".
+export const TELEGRAM_FORMAT_CONTRACT = `VOICE — you are a personal assistant texting the user on their phone:
+- Lead with the answer. No preamble ("Here is…", "Sure!"), no restating the
+  question, no sign-off.
+- Short: 1–4 lines is normal. Go longer only when the user asked for more
+  ("show all", "full email", "what else?").
+- One thing at a time: the most useful item, then offer the next.
+- Plain sentences, second person. Never "This is a notification for…".
+- Dates and times in the user's own clock, e.g. "today at 09:42" or
+  "Thu 22 Oct, 15:00".
+
+FORMAT — Telegram, not a web page:
+- **bold** sparingly. Telegram has NO headings — never write "#", "##" or
+  "###", and never write report section titles like OVERVIEW or BACKLOG.
 - "- " for bullets. Never a table: Telegram cannot render one, and a table
-  arrives as unreadable pipes. Use bullets or short labelled lines instead.
+  arrives as unreadable pipes.
 - A blank line separates sections. Never "---" or "***" as a divider.
 - Keep links as [text](url). Plain URLs are fine too.
 - No code fences unless you are actually showing code.`;

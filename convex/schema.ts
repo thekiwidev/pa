@@ -53,7 +53,30 @@ export default defineSchema({
     ),
     transcript: v.optional(v.string()), // Phase 9
     transcriptConfidence: v.optional(v.number()), // Phase 9
+    // What this message is ABOUT — the email an alert announced, the event a
+    // nudge was for. A reply to that message, or "when did this come in?"
+    // right after it, is answered from this object rather than a new search.
+    ref: v.optional(v.object({ kind: v.string(), id: v.string() })),
+  })
+    .index("by_user", ["userId"])
+    .index("by_user_channel_message", ["userId", "channelMessageId"]),
+
+  // Rolling summary of the conversation older than the live window, so the
+  // assistant remembers what was said an hour ago without a 100-turn prompt.
+  conversationSummaries: defineTable({
+    userId: v.id("users"),
+    summary: v.string(),
+    /** _creationTime of the newest message folded into `summary`. */
+    coveredThrough: v.number(),
+    updatedAt: v.number(),
   }).index("by_user", ["userId"]),
+
+  // One row per calendar event already nudged, so a 5-minute poll pings once.
+  calendarNudges: defineTable({
+    userId: v.id("users"),
+    key: v.string(), // `${calendarOwner}:${eventId}:${startMs}`
+    sentAt: v.number(),
+  }).index("by_user_key", ["userId", "key"]),
 
   // ── Phase 2 ────────────────────────────────────────────────
   projects: defineTable({

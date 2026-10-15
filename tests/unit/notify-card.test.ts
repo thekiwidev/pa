@@ -15,14 +15,34 @@ const base: CardEmail = {
 };
 
 describe("composeCard", () => {
-  test("renders the CRITICAL + SPAM badge card from the source mock", () => {
+  test("reads like a PA: who, mailbox, spam badge, then the one sentence", () => {
     const card = composeCard(base, "Africa/Lagos");
-    expect(card.text).toContain("🔴 CRITICAL");
-    expect(card.text).toContain("recruiting");
-    expect(card.text).toContain("⚠️ found in SPAM");
-    expect(card.text).toContain("Sarah Chen");
-    expect(card.text).toContain("Why it matters:");
-    expect(card.text).toContain("Deadline mentioned:");
+    const [head, sentence] = card.text.split("\n");
+    expect(head).toContain("🔴");
+    expect(head).toContain("Sarah Chen");
+    expect(head).toContain("recruiting");
+    expect(head).toContain("⚠️ found in SPAM");
+    expect(sentence).toBe(base.whyItMatters!);
+    expect(card.text).toContain("⏰ Deadline:");
+    // The old form-style labels are gone — docs/BEHAVIOUR.md §2.
+    expect(card.text).not.toContain("Why it matters:");
+    expect(card.text).not.toContain("From:");
+  });
+
+  test("says WHEN the email arrived, in the owner's clock", () => {
+    // 08:42Z is 09:42 in Lagos.
+    const receivedAt = Date.parse("2026-10-15T08:42:00Z");
+    const now = Date.parse("2026-10-15T10:00:00Z");
+    const card = composeCard({ ...base, receivedAt }, "Africa/Lagos", now);
+    expect(card.text.split("\n")[0]).toContain("today 09:42");
+
+    const older = composeCard({ ...base, receivedAt }, "Africa/Lagos", now + 3 * 86_400_000);
+    expect(older.text.split("\n")[0]).toContain("Thu 15 Oct, 09:42");
+  });
+
+  test("keeps the subject, small, so the email can be recognised", () => {
+    const card = composeCard(base, "Africa/Lagos");
+    expect(card.text).toContain("<i>Interview availability — Senior Frontend Engineer</i>");
   });
 
   test("omits the SPAM badge when the message is not in spam", () => {
@@ -47,13 +67,13 @@ describe("composeCard", () => {
     expect(card.text).toContain("10:00");
   });
 
-  test("omits the why-it-matters and deadline sections when absent", () => {
+  test("falls back to the sender when there is no sentence, and omits an absent deadline", () => {
     const card = composeCard(
       { ...base, whyItMatters: undefined, deadlineMentioned: undefined },
       "Africa/Lagos",
     );
-    expect(card.text).not.toContain("Why it matters:");
-    expect(card.text).not.toContain("Deadline mentioned:");
+    expect(card.text.split("\n")[1]).toContain("From Sarah Chen");
+    expect(card.text).not.toContain("Deadline");
   });
 
   test("wires all four buttons to the right emailMessageId, using CALLBACK_PREFIX", () => {
@@ -109,7 +129,7 @@ describe("composeCard — every special character is escaped", () => {
 
     // The card's OWN tags are the only markup. Strip them, and nothing
     // resembling a tag may remain — that residue would be sender-controlled.
-    const withoutOwnTags = card.text.replaceAll(/<\/?b>/g, "");
+    const withoutOwnTags = card.text.replaceAll(/<\/?[bi]>/g, "");
     expect(withoutOwnTags).not.toContain("<");
     expect(withoutOwnTags).not.toContain(">");
 

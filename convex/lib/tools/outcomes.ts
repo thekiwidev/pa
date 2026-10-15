@@ -224,6 +224,19 @@ const WINDOW_WORDS: Record<string, string> = {
   next_week: "next week",
 };
 
+/** "today", "next week", or "on 2026-10-22" for a specific date. */
+function windowWords(window: string | undefined): string {
+  const w = window ?? "today";
+  return WINDOW_WORDS[w] ?? `on ${w}`;
+}
+
+/** A calendar that could not be read is said out loud, never silently skipped. */
+function couldNotRead(r: unknown): string {
+  const rows = field(r, "couldNotRead");
+  if (!Array.isArray(rows) || rows.length === 0) return "";
+  return `\n\n⚠️ Couldn't read: ${rows.join("; ")}`;
+}
+
 function renderOne(outcome: ToolOutcome, timezone: string): string {
   // "Waiting for your tap" is not a failure, even though the outcome is
   // ok:false — executeToolCall marks a consequential call ok:false precisely
@@ -255,18 +268,22 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       return `✅ Task created: ${str(r, "title") ?? "(untitled)"}`;
 
     case "task.complete":
+      if (field(r, "applied") === true) return `✅ ${str(r, "change") ?? "closed"}`;
       if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "close"}`;
       return `✅ Completed: ${str(r, "title") ?? "task"}`;
 
     case "task.update":
+      if (field(r, "applied") === true) return `✅ ${str(r, "change") ?? "updated"}`;
       if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "update"}`;
       return "✏️ Task updated.";
 
     case "task.block":
+      if (field(r, "applied") === true) return `🚧 ${str(r, "change") ?? "blocked"}`;
       if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "block"}`;
       return "🚧 Marked blocked.";
 
     case "task.unblock":
+      if (field(r, "applied") === true) return `▶️ ${str(r, "change") ?? "unblocked"}`;
       if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "unblock"}`;
       return "▶️ Unblocked — status is now RESUMED.";
 
@@ -334,8 +351,9 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "calendar.list_events": {
       const rows = field(r, "events");
       const events = Array.isArray(rows) ? rows : [];
-      const when = WINDOW_WORDS[str(r, "window") ?? "today"] ?? "that window";
-      if (events.length === 0) return `Nothing on your calendar ${when}.`;
+      const when = windowWords(str(r, "window"));
+      const unread = couldNotRead(r);
+      if (events.length === 0) return `Nothing on your calendar ${when}.${unread}`;
 
       const lines = events.map((e) => {
         const guests = field(e, "guests");
@@ -350,12 +368,13 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
           guestCount > 0
             ? `👥 ${guestCount === 1 ? (guests as string[])[0] : `${guestCount} guests`}`
             : "",
+          str(e, "calendarOf") ? `🗓 ${str(e, "calendarOf")}` : "",
         ]
           .filter(Boolean)
           .join("\n");
       });
 
-      return [`**Your calendar — ${when}**`, ...lines].join("\n\n");
+      return [`**Your calendar — ${when}**`, ...lines].join("\n\n") + unread;
     }
 
     case "calendar.get_event": {
@@ -380,7 +399,7 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "calendar.find_free_slots": {
       const rows = field(r, "slots");
       const slots = Array.isArray(rows) ? rows : [];
-      const when = WINDOW_WORDS[str(r, "window") ?? "today"] ?? "that window";
+      const when = windowWords(str(r, "window"));
       const mins = field(r, "durationMinutes");
       if (slots.length === 0) {
         return `No ${typeof mins === "number" ? `${mins}-minute ` : ""}gap ${when}.`;
@@ -389,6 +408,26 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
         `**Free ${typeof mins === "number" ? `for ${mins} min ` : ""}${when}**`,
         ...slots.map((sl) => `• ${str(sl, "startsAt") ?? "?"} → ${str(sl, "endsAt") ?? "?"}`),
       ].join("\n");
+    }
+
+    case "calendar.check_availability": {
+      const show = (e: unknown) =>
+        `${str(e, "title") ?? "(no title)"} — ${field(e, "allDay") === true ? "all day" : `${str(e, "startsAt") ?? "?"} → ${str(e, "endsAt") ?? "?"}`}${
+          str(e, "calendarOf") ? ` (${str(e, "calendarOf")})` : ""
+        }`;
+      const list = (key: string) => {
+        const rows = field(r, key);
+        return Array.isArray(rows) ? rows : [];
+      };
+      const conflicts = list("conflicts");
+      const nearby = list("nearby");
+      return [
+        `Asked about: ${str(r, "askedAbout") ?? "?"}`,
+        field(r, "free") === true ? "FREE — nothing booked then." : "BUSY — clashes with:",
+        ...conflicts.map((e) => `- ${show(e)}`),
+        nearby.length ? "Within an hour either side:" : "Nothing else within an hour either side.",
+        ...nearby.map((e) => `- ${show(e)}`),
+      ].join("\n") + couldNotRead(r);
     }
 
     case "calendar.create_event": {

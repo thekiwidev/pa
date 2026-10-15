@@ -31,6 +31,13 @@ export interface AIRequest {
    */
   media?: MediaPart[];
   maxOutputTokens?: number;
+  /**
+   * Ask the provider for a JSON object (OpenAI json_object, Gemini
+   * responseMimeType). A hint that makes the planner's output parse far more
+   * reliably; parseToolPlan still validates everything, so a provider that
+   * ignores it loses nothing.
+   */
+  json?: boolean;
 }
 
 export interface AIResult {

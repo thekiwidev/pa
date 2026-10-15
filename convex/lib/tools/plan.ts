@@ -21,6 +21,8 @@ export interface ToolPlan {
   reply: string;
   calls: ToolCall[];
   rejected: RejectedCall[];
+  /** The E-label of the email the reply is about ("E2"), when it names one. */
+  focus?: string;
 }
 
 export function parseToolPlan(raw: string): ToolPlan {
@@ -30,8 +32,12 @@ export function parseToolPlan(raw: string): ToolPlan {
   const parsed = parseJsonObject(raw);
   if (parsed === null) return { reply: raw.trim(), calls: [], rejected: [] };
 
-  const obj = parsed as { reply?: unknown; tools?: unknown };
+  const obj = parsed as { reply?: unknown; tools?: unknown; focus?: unknown };
   const reply = typeof obj.reply === "string" ? obj.reply.trim() : "";
+  const focus =
+    typeof obj.focus === "string" && /^E\d+$/i.test(obj.focus.trim())
+      ? obj.focus.trim().toUpperCase()
+      : undefined;
 
   const calls: ToolCall[] = [];
   const rejected: RejectedCall[] = [];
@@ -65,5 +71,5 @@ export function parseToolPlan(raw: string): ToolPlan {
     }
   }
 
-  return { reply, calls, rejected };
+  return focus ? { reply, calls, rejected, focus } : { reply, calls, rejected };
 }

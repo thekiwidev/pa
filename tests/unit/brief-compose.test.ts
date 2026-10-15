@@ -109,7 +109,7 @@ const baseFacts: BriefFactsInput = {
 describe("renderBriefFacts", () => {
   test("marks every empty section (none) rather than omitting the label", () => {
     const out = renderBriefFacts(baseFacts);
-    expect(out).toContain("OPEN TASKS\n  (none)");
+    expect(out).toContain("OPEN TASKS (most urgent first)\n  (none)");
     expect(out).toContain("BLOCKED\n  (none)");
     expect(out).toContain("IMPORTANT EMAIL");
   });

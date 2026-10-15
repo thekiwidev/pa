@@ -22,6 +22,7 @@ export interface RunTaskArgs {
   untrusted?: UntrustedBlock[];
   media?: MediaPart[];
   maxOutputTokens?: number;
+  json?: boolean;
 }
 
 /**

@@ -8,10 +8,17 @@ import { sendMessage } from "./channels/telegram";
 import { formatInstant, toEpochMs } from "./lib/time";
 import { nextOccurrenceOf } from "./model/briefConfig";
 import { TELEGRAM_FORMAT_CONTRACT } from "./lib/prompts/format";
+import { MORNING_CHECKIN } from "./lib/prompts/brief";
 import { buildKnowledgeBlock } from "./lib/prompts/knowledge";
 import { normalizeCategory } from "./lib/userContext";
-import { pickBackend } from "./lib/tasks/backend";
-import { listOpenLinearIssues } from "./tools/router";
+import { backendForAccounts, hasBlockerNote, blockerReason } from "./lib/tasks/backend";
+import {
+  allCalendarEvents,
+  listOpenLinearIssues,
+  listOpenLinearIssuesWithDescriptions,
+  toCalendarItems,
+} from "./tools/router";
+import { dayWindow } from "./lib/calendar/window";
 
 /* ── Pure: gathering + formatting. No ctx, no fetch — bun test runs this
    with no Convex runtime, same boundary as everything in convex/lib/. ── */
@@ -97,6 +104,34 @@ export interface BriefFactsInput {
   reminders: BriefReminder[];
   projects: BriefProject[];
   emails: BriefEmail[];
+  /** Today's events across every connected calendar. */
+  calendar?: BriefEvent[];
+  /** Set when the calendar could not be read, so the brief says so. */
+  calendarNote?: string;
+  /** ms-epoch of "now", so overdue and due-today can be told apart. */
+  nowMs?: number;
+}
+
+export interface BriefEvent {
+  title: string;
+  startMs: number;
+  endMs: number;
+  allDay?: boolean;
+}
+
+/**
+ * Order tasks the way the "first thing" is chosen (docs/BEHAVIOUR.md §5):
+ * overdue, then due today, then in progress, then everything else.
+ */
+export function rankBriefTasks(tasks: BriefTask[], nowMs: number, endOfTodayMs: number): BriefTask[] {
+  const rank = (t: BriefTask) => {
+    if (t.dueAt !== undefined && t.dueAt < nowMs) return 0;
+    if (t.dueAt !== undefined && t.dueAt < endOfTodayMs) return 1;
+    if (t.status === "IN_PROGRESS" || t.status === "RESUMED") return 2;
+    if (t.status === "BLOCKED") return 4;
+    return 3;
+  };
+  return [...tasks].sort((a, b) => rank(a) - rank(b) || (a.dueAt ?? Infinity) - (b.dueAt ?? Infinity));
 }
 
 /**
@@ -111,7 +146,24 @@ export function renderBriefFacts(facts: BriefFactsInput): string {
   );
   const lines: string[] = [];
 
-  lines.push("OPEN TASKS");
+  if (facts.calendar !== undefined || facts.calendarNote) {
+    lines.push("TODAY'S CALENDAR (every connected calendar)");
+    const events = facts.calendar ?? [];
+    lines.push(
+      events.length === 0
+        ? `  ${facts.calendarNote ?? "(nothing scheduled)"}`
+        : events
+            .map((e) =>
+              e.allDay
+                ? `  - all day — ${e.title}`
+                : `  - ${formatInstant(e.startMs, facts.timezone)} → ${formatInstant(e.endMs, facts.timezone)} — ${e.title}`,
+            )
+            .join("\n") + (facts.calendarNote ? `\n  (${facts.calendarNote})` : ""),
+    );
+    lines.push("");
+  }
+
+  lines.push("OPEN TASKS (most urgent first)");
   lines.push(
     open.length === 0
       ? "  (none)"
@@ -183,66 +235,22 @@ export function renderBriefFacts(facts: BriefFactsInput): string {
 
 /* ── Actions: real data, the model call, delivery. ── */
 
-const COMPOSE_FALLBACK = `You write Adedotun's daily morning brief for Telegram.
-
-Turn the structured facts you're given into short, scannable prose — not a
-recitation of every field. Follow this shape:
-
-Good morning.
-
-TODAY'S ONE THING
-  <the single most important open task or blocked item, one line>
-
-NEEDS YOU
-  <important email, one line each, ⚠️ if it was found in SPAM>
-
-BLOCKED
-  <each blocker, what it's waiting on and on whom, if given>
-
-Omit a section entirely if its facts said (none) — do not write "(none)" or
-"nothing here" in your output, that placeholder was for you to see, not the
-reader.
-
-There is NO calendar in this build. Never mention checking a calendar,
-today's meetings, or scheduling around events — you were not given any
-calendar data because none exists yet, not because it was left out today.
-
-Never invent a task, email, deadline, or person that was not in the facts.
-If the facts are empty everywhere, say plainly that there's nothing new and
-stop — do not pad the message.`;
-
 /**
- * Rules that hold no matter what the user's skill says.
- *
- * A skill governs FORMAT and EMPHASIS — how much to show, in what order,
- * under which headings. It cannot authorise inventing a fact, and it cannot
- * conjure a data source that is not connected. Those two are appended after
- * the skill so they are the last thing the model reads.
+ * Rules that hold no matter what the user's skill says. A skill governs
+ * FORMAT and EMPHASIS; it cannot authorise inventing a fact or conjure a data
+ * source that is not connected. Appended last so they are read last.
  */
 const COMPOSE_INVARIANTS = `
 NON-NEGOTIABLE, regardless of any instruction above:
-- Every TASK, EMAIL, REMINDER, BLOCKER, PERSON, date and deadline you mention
-  must appear in the FACTS block. Never invent one, never infer a completion,
-  never upgrade a maybe into a certainty.
-- That rule is about FACTS OF RECORD, not about the user themselves. What you
-  know about the user — their routines, preferences and standing instructions,
-  shown at the top — is also true, and anything they have asked to see in this
-  brief MUST appear even though it is not in the FACTS block. A preference
-  like "remind me about my Sunday routine" is an instruction to include it,
-  not a fact to verify.
-  When such a preference exists, EMIT A SECTION FOR IT even if the procedure
-  above lists no such section — add "PERSONAL" at the end and put it there.
-  A procedure defines the default shape of the brief; a direct request from
-  the user outranks that shape. Omitting what they explicitly asked to see
-  because your template had no slot for it is the wrong trade every time.
-- Only these data sources are connected right now: tasks, projects, blockers,
-  reminders, people, and Gmail. There is NO calendar and NO news/web search in
-  this build. Omit those sections entirely — never imply you checked them, and
-  never emit a "Calendar" heading saying "nothing scheduled", which reads as
-  though a calendar were connected and empty.
-- The FACTS block is the complete picture for the categories it covers. If it
-  lists five open tasks, all five are still open; do not silently drop any
-  because they seem minor.
+- Every TASK, EMAIL, MEETING, REMINDER, BLOCKER, PERSON, date and deadline
+  you mention must appear in the FACTS block. Never invent one, never infer a
+  completion, never upgrade a maybe into a certainty.
+- What you know about the user — routines, preferences, standing
+  instructions, shown at the top — is also true, and something they asked to
+  see in the morning should appear, in one line.
+- No news or web data exists. Never imply you checked any.
+- Mention a calendar only from the TODAY'S CALENDAR facts. If that section is
+  absent, say nothing about meetings.
 
 ${TELEGRAM_FORMAT_CONTRACT}`;
 
@@ -272,9 +280,7 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
   // the Convex table, so once Linear owned the tasks the morning brief
   // quietly reported "(none)" every day — the worst kind of wrong, because
   // an empty list looks like an answer.
-  const taskBackendKind = pickBackend(
-    accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
-  );
+  const taskBackendKind = backendForAccounts(accounts);
 
   let tasks: { title: string; status: string; dueAt?: number }[] = tasksRaw.map((t) => ({
     title: t.title,
@@ -282,16 +288,56 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     dueAt: t.dueAt,
   }));
 
+  let blockers: BriefBlocker[] = blockersRaw.flatMap(({ task, blockers: bs }) =>
+    bs.map((b) => ({ taskTitle: task.title, description: b.description, expectedAt: b.expectedAt })),
+  );
+
   if (taskBackendKind === "linear") {
     try {
       const issues = await listOpenLinearIssues(ctx, userId, 25);
       tasks = issues.map((i) => ({ title: `${i.taskId} ${i.title}`, status: i.status }));
+      // Blockers on Linear live in the issue description, not the Convex
+      // table — the brief used to read the table and show stale blockers.
+      const described = await listOpenLinearIssuesWithDescriptions(ctx, userId, 25);
+      blockers = described
+        .filter((i) => hasBlockerNote(i.description))
+        .map((i) => ({
+          taskTitle: `${i.identifier} ${i.title}`,
+          description: blockerReason(i.description) ?? "blocked",
+        }));
     } catch (error) {
       // A Linear outage must not silently render as an empty board — say it.
       console.warn(`brief_linear_load_failed: ${String(error)}`);
       tasks = [{ title: "(could not reach Linear — board not shown)", status: "UNKNOWN" }];
+      blockers = [];
     }
   }
+
+  // Today's calendar, every connected account. A failure is reported in the
+  // brief, never silently rendered as "nothing scheduled".
+  let calendar: BriefEvent[] | undefined;
+  let calendarNote: string | undefined;
+  try {
+    const today = dayWindow(untilMs, timezone);
+    const found = await allCalendarEvents(ctx, userId, today, { limit: 25 });
+    calendar = toCalendarItems(found.events, timezone).map((e) => ({
+      title: e.title,
+      startMs: e.startMs,
+      endMs: e.endMs,
+      allDay: e.allDay,
+    }));
+    if (found.failures.length > 0) {
+      calendarNote = `could not read ${found.failures.length} calendar(s)`;
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    calendarNote = detail.includes("Calendar access")
+      ? "calendar not connected yet — reconnect the mailbox to include it"
+      : "calendar could not be read this morning";
+  }
+
+  const endOfToday = dayWindow(untilMs, timezone).endMs;
+  tasks = rankBriefTasks(tasks, untilMs, endOfToday);
 
   const accountIds = accounts.filter((a) => a.status === "ACTIVE").map((a) => a._id);
   // limit:50, not 25 — this is filtered by TIME after fetching, so it must
@@ -318,14 +364,11 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     timezone,
     sinceMs,
     notes: config.notes,
-    tasks,
-    blockers: blockersRaw.flatMap(({ task, blockers }) =>
-      blockers.map((b) => ({
-        taskTitle: task.title,
-        description: b.description,
-        expectedAt: b.expectedAt,
-      })),
-    ),
+    tasks: tasks.slice(0, 12),
+    blockers,
+    calendar,
+    calendarNote,
+    nowMs: untilMs,
     reminders: reminders.map((r) => ({ message: r.message, scheduledAt: r.scheduledAt })),
     projects: projects.map((p) => ({ name: p.name, status: p.status })),
     emails: filterBriefEmails(
@@ -366,9 +409,9 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
   });
 
   const result = await runTask("COMPOSE_BRIEF", {
-    system: `${knowledge}\n\n${skill?.content ?? COMPOSE_FALLBACK}\n${COMPOSE_INVARIANTS}`,
+    system: `${knowledge}\n\n${skill?.content ?? MORNING_CHECKIN}\n${COMPOSE_INVARIANTS}`,
     input: renderBriefFacts(facts),
-    maxOutputTokens: 3000,
+    maxOutputTokens: 800,
   });
 
   return result.text.trim();

@@ -7,7 +7,17 @@ import { runTask } from "./ai/registry";
 import { sendMessage, downloadFile } from "./channels/telegram";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { modelEnvVar } from "./lib/ai/tiers";
-import { parseToolPlan } from "./lib/tools/plan";
+import { parseToolPlan, type ToolPlan, type RejectedCall } from "./lib/tools/plan";
+import {
+  collectEmailRefs,
+  renderEmailRef,
+  renderEmailRefs,
+  resolveFocus,
+  substituteRefs,
+  type EmailRefItem,
+} from "./lib/assistant/refs";
+import type { UntrustedBlock } from "./lib/ai/prompt";
+import type { Doc } from "./_generated/dataModel";
 import {
   executeToolCall,
   flushStagedWrites,
@@ -16,16 +26,15 @@ import {
   type ToolContext,
   type ToolOutcome,
 } from "./tools/router";
-import { pickBackend, mentionsTasks, hasBlockerNote, blockerReason } from "./lib/tasks/backend";
+import { backendForAccounts, hasBlockerNote, blockerReason } from "./lib/tasks/backend";
 import {
   planningSystemPrompt,
-  skillComposeSystemPrompt,
+  planningInput,
   tldrOnlySystemPrompt,
-  listSummarySystemPrompt,
   renderConversation,
+  SUMMARY_SYSTEM_PROMPT,
 } from "./lib/prompts/assistant";
 import { renderOutcomes } from "./lib/tools/outcomes";
-import { returnsUnknowableContent } from "./lib/tools/catalog";
 import { guardReply, wantsFullEmail } from "./lib/scope";
 import { relevantSkillNames } from "./lib/skills";
 import { CALLBACK_PREFIX } from "./notify";
@@ -33,7 +42,14 @@ import { AllProvidersFailed } from "./ai/types";
 import { formatInstant } from "./lib/time";
 import { normalizeCategory } from "./lib/userContext";
 
-const CONVERSATION_TURNS = 10;
+/** Verbatim turns in the prompt. Older turns live on in the running summary. */
+const CONVERSATION_TURNS = 20;
+
+/** Planner steps per message: propose → see results → (propose → see) → reply. */
+const MAX_STEPS = 3;
+
+/** When this many messages sit outside the live window, fold them into the summary. */
+const SUMMARY_BATCH = 20;
 
 /**
  * The one place that decides what happens to a message. An internalAction
@@ -50,6 +66,9 @@ export const handleMessage = internalAction({
     displayName: v.string(),
     channelMessageId: v.string(),
     text: v.string(),
+    /** Telegram's reply_to_message: what "this" means. */
+    replyToChannelMessageId: v.optional(v.string()),
+    replyToText: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const startedAt = Date.now();
@@ -70,11 +89,14 @@ export const handleMessage = internalAction({
     });
 
     // 2. Decide. Commands are deterministic and never reach a model.
-    let reply: string;
+    let reply: ConverseResult;
     try {
       reply = args.text.startsWith("/")
-        ? await handleCommand(ctx, userId, args.text)
-        : await converse(ctx, userId, args.displayName, args.text);
+        ? { text: await handleCommand(ctx, userId, args.text) }
+        : await converseDetailed(ctx, userId, args.displayName, args.text, undefined, {
+            replyToChannelMessageId: args.replyToChannelMessageId,
+            replyToText: args.replyToText,
+          });
     } catch (error) {
       // A failure here must still reach the phone. Silence is the one
       // outcome that makes the assistant untrustworthy.
@@ -87,11 +109,12 @@ export const handleMessage = internalAction({
         errorMessage: detail.slice(0, 500),
         latencyMs: Date.now() - startedAt,
       });
-      reply = userFacingError(error, detail);
+      reply = { text: userFacingError(error, detail) };
     }
 
-    // 3. Respond, then persist what we said.
-    const outboundId = await sendMessage(args.chatId, reply);
+    // 3. Respond, then persist what we said — with what it was ABOUT, so the
+    //    next "when did this come in?" has an answer without a search.
+    const outboundId = await sendMessage(args.chatId, reply.text);
 
     await ctx.runMutation(internal.model.messages.record, {
       userId,
@@ -99,80 +122,93 @@ export const handleMessage = internalAction({
       direction: "out",
       channelMessageId: outboundId,
       kind: "text",
-      text: reply,
+      text: reply.text,
+      ref: reply.ref,
     });
+
+    // 4. Keep the long-term summary current. Scheduled, so the reply above
+    //    never waits on it.
+    await ctx.scheduler.runAfter(0, internal.assistant.summarizeConversation, { userId });
   },
 });
 
-/**
- * Two passes, because the model has to see what its own tool calls returned
- * before it can tell the user what happened.
- *
- *   pass 1  message + context  → { reply, tools }   (a PROPOSAL)
- *   router  validate, execute, audit                (the DISPOSAL)
- *   pass 2  tool results as data → final prose
- *
- * When the plan calls no tools, pass 2 is skipped — chat costs one model call,
- * not two.
- */
+export interface ConverseResult {
+  text: string;
+  /** What the reply is about, stored on the outbound message. */
+  ref?: { kind: string; id: string };
+}
+
+/** Compatibility wrapper: the image, document and voice paths want a string. */
 export async function converse(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  displayName: string,
+  text: string,
+  intentText?: string,
+): Promise<string> {
+  return (await converseDetailed(ctx, userId, displayName, text, intentText)).text;
+}
+
+/**
+ * A short planning loop, because the model has to see what its tools
+ * returned before it can say anything true about them.
+ *
+ *   step 1   message + context            → { reply, tools }   (a PROPOSAL)
+ *   router   validate, execute, audit                          (the DISPOSAL)
+ *   step 2   same prompt + results         → { reply, tools: [] } or more tools
+ *   step 3   (only if step 2 asked for more) → final reply
+ *
+ * Before 2026-10-15 the model got ONE shot and the results were then printed
+ * by a deterministic renderer. That is why a search pasted every hit: nothing
+ * downstream of the search was allowed to choose. Now the model writes the
+ * reply with the results in front of it (as untrusted data), and the parts
+ * that must be exact — a full email body, an approval card — are still
+ * emitted by code.
+ *
+ * A message answerable from context (the email in focus, the conversation)
+ * still costs exactly one call.
+ */
+export async function converseDetailed(
   ctx: ActionCtx,
   userId: Id<"users">,
   displayName: string,
   text: string,
   /**
    * What the USER actually asked, when `text` also carries attached content
-   * (an image transcription, a document, a meeting transcript).
-   *
-   * Skill selection is keyword-matched against this and never against the
-   * attachment. Observed 2026-08-23: a meeting transcript containing the word
-   * "email" — inside an injected instruction, no less — pulled the
-   * check_email procedure into the prompt and it rewrote the meeting output.
-   * Untrusted content must not get to choose which procedure runs. It cannot
-   * make the assistant ACT (the router gates that), but it should not steer
-   * it either.
+   * (an image transcription, a document, a meeting transcript). Skill
+   * selection is keyword-matched against this and never against the
+   * attachment — untrusted content must not get to choose which procedure
+   * runs. See MEMORY.md 2026-08-23.
    */
   intentText?: string,
-): Promise<string> {
+  reply?: { replyToChannelMessageId?: string; replyToText?: string; focusEmailId?: string },
+): Promise<ConverseResult> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
-  const [history, projects, localTasks, pending, accounts, instructions, userContext] =
+  const [history, summary, projects, localTasks, pending, accounts, instructions, userContext] =
     await Promise.all([
-    ctx.runQuery(internal.model.messages.recentForUser, {
-      userId,
-      limit: CONVERSATION_TURNS,
-    }),
-    ctx.runQuery(internal.model.projects.listActive, { userId, limit: 15 }),
-    ctx.runQuery(internal.model.tasks.list, { userId, limit: 15 }),
-    ctx.runQuery(internal.model.reminders.listPending, { userId }),
-    ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
-    ctx.runQuery(internal.model.instructions.list, { userId }),
-    ctx.runQuery(internal.model.userContext.list, { userId }),
-  ]);
+      ctx.runQuery(internal.model.messages.recentForUser, { userId, limit: CONVERSATION_TURNS }),
+      ctx.runQuery(internal.model.messages.getSummary, { userId }),
+      ctx.runQuery(internal.model.projects.listActive, { userId, limit: 15 }),
+      ctx.runQuery(internal.model.tasks.list, { userId, limit: 15 }),
+      ctx.runQuery(internal.model.reminders.listPending, { userId }),
+      ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId }),
+      ctx.runQuery(internal.model.instructions.list, { userId }),
+      ctx.runQuery(internal.model.userContext.list, { userId }),
+    ]);
 
-  // Which store owns tasks is a fact about `accounts`, which is already
-  // loaded — so deciding costs nothing extra. FETCHING from Linear does cost
-  // a GraphQL round trip, so it happens only when the message looks
-  // task-shaped; see mentionsTasks.
-  const taskBackend = pickBackend(
-    accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
-  );
-  const wantsTasks = mentionsTasks(intentText ?? text);
-
+  // ── Tasks: Linear is the list whenever a Linear account exists ──────────
+  const taskBackend = backendForAccounts(accounts);
   let openTasks: { taskId: string; title: string; status: string; dueAt?: string }[] = [];
   let tasksNotLoaded = false;
 
   if (taskBackend === "linear") {
-    if (wantsTasks) {
-      // A failure here must not take the whole turn down: the model can still
-      // answer, and task.list will report the outage properly if it is asked.
-      try {
-        openTasks = await listOpenLinearIssues(ctx, userId);
-      } catch (error) {
-        console.warn(`linear_task_prompt_load_failed: ${String(error)}`);
-        tasksNotLoaded = true;
-      }
-    } else {
+    // Always loaded now. It used to load only when the message contained a
+    // task keyword, so "move the checkout one to done" found no board.
+    try {
+      openTasks = await listOpenLinearIssues(ctx, userId);
+    } catch (error) {
+      console.warn(`linear_task_prompt_load_failed: ${String(error)}`);
       tasksNotLoaded = true;
     }
   } else {
@@ -186,14 +222,17 @@ export async function converse(
       }));
   }
 
-  // Deterministic keyword match, no model call spent deciding — a turn with
-  // no email/brief/draft language pays nothing for skills existing at all.
+  // Deterministic keyword match, no model call spent deciding.
   const skillNames = relevantSkillNames(intentText ?? text);
   const activeSkills = [];
   for (const name of skillNames) {
     const found = await ctx.runQuery(internal.model.skills.getEffective, { userId, name });
     if (found) activeSkills.push(found);
   }
+
+  const mailboxes = accounts
+    .filter((a) => a.provider === "gmail")
+    .map((a) => ({ label: a.label, email: a.accountEmail, status: a.status }));
 
   const system = planningSystemPrompt({
     displayName,
@@ -208,224 +247,243 @@ export async function converse(
       message: r.message,
       scheduledFor: formatInstant(r.scheduledAt, timezone),
     })),
-    connectedAccounts: accounts.map((a) => ({
-      label: a.label,
-      email: a.accountEmail,
-      status: a.status,
-    })),
+    connectedAccounts: mailboxes,
     customInstructions: instructions.map((i) => i.text),
     activeSkills,
     userContext: userContext.map((c) => ({ category: c.category, text: c.text })),
   });
 
+  // ── What "this" means ──────────────────────────────────────────────────
+  // 1. the message the user pressed Reply on, if it carried a ref;
+  // 2. otherwise the newest outbound message in the window that did.
+  // The inbound message just recorded is the last history row, so it is
+  // excluded from the search.
+  let replied: Doc<"messages"> | null = null;
+  if (reply?.replyToChannelMessageId) {
+    replied = await ctx.runQuery(internal.model.messages.findByChannelMessageId, {
+      userId,
+      channelMessageId: reply.replyToChannelMessageId,
+    });
+  }
+  const focusRef =
+    (reply?.focusEmailId ? { kind: "email", id: reply.focusEmailId } : undefined) ??
+    (replied?.ref?.kind === "email" ? replied.ref : undefined) ??
+    [...history].reverse().find((m) => m.direction === "out" && m.ref?.kind === "email")?.ref;
+
+  const refs = new Map<string, string>();
+  const untrustedContext: UntrustedBlock[] = [];
+  let focusItem: EmailRefItem | undefined;
+
+  if (focusRef) {
+    focusItem = await loadFocusEmail(ctx, userId, focusRef.id, accounts);
+    if (focusItem) {
+      refs.set("E0", focusItem.id);
+      untrustedContext.push({
+        label: "email_in_focus",
+        content: `EMAIL IN FOCUS:\n${renderEmailRef(focusItem, timezone)}`,
+      });
+    }
+  }
+  if (reply?.replyToText) {
+    untrustedContext.push({
+      label: "replying_to",
+      content: `REPLYING TO (the message the user pressed Reply on):\n${reply.replyToText}`,
+    });
+  }
+
   const transcript = renderConversation(
     history.map((m) => ({ direction: m.direction, text: m.text ?? "" })),
   );
 
-  const proposal = await runTask("PLAN_TOOLS", {
-    system,
-    input: `Conversation so far:\n${transcript}\n\nRespond to the last user message.`,
-    maxOutputTokens: 1500,
-  });
-
-  const plan = { ...parseToolPlan(proposal.text) };
-  plan.reply = guardReply(plan.reply);
-
-  // A rejection is the guard working, but it is ALSO an action the user asked
-  // for that did not happen. It is audited here and reported below.
-  for (const rejection of plan.rejected) {
-    console.warn(`tool_rejected: ${rejection.name} — ${rejection.reason}`);
-    await ctx.runMutation(internal.model.audit.record, {
-      actor: "llm_proposed",
-      action: `rejected:${rejection.name}`,
-      args: { reason: rejection.reason },
-      result: "denied",
-    });
-  }
-
-  if (plan.calls.length === 0 && plan.rejected.length === 0) {
-    return plan.reply || "I didn't follow that. Say it another way?";
-  }
-
-  // One ToolContext for the whole turn, because task.* on the Linear backend
-  // STAGES its writes onto it rather than performing them — so the batch has
-  // to survive across calls and be flushed once. See ToolContext.staged.
+  // One ToolContext for the whole turn: task.create on the Linear backend
+  // STAGES onto it, and the batch is flushed once at the end.
   const toolCtx: ToolContext = { userId, timezone };
+  const allOutcomes: ToolOutcome[] = [];
+  const allRejected: RejectedCall[] = [];
+  let seenEmails: EmailRefItem[] = [];
+  let finalPlan: ToolPlan | null = null;
 
-  const outcomes: ToolOutcome[] = [];
-  for (const call of plan.calls) {
-    outcomes.push(await executeToolCall(ctx, toolCtx, call));
+  for (let step = 1; step <= MAX_STEPS; step++) {
+    const hasResults = allOutcomes.length > 0 || allRejected.length > 0;
+    const untrusted: UntrustedBlock[] = [...untrustedContext];
+    if (hasResults) {
+      untrusted.push({
+        label: "tool_results",
+        content: renderOutcomes("", allOutcomes, allRejected, timezone),
+      });
+      if (seenEmails.length > 0) {
+        untrusted.push({ label: "emails_seen", content: renderEmailRefs(seenEmails, timezone) });
+      }
+      const bodies = await hydrateBodies(ctx, userId, allOutcomes);
+      if (bodies) untrusted.push({ label: "full_email_bodies", content: bodies });
+    }
+
+    const proposal = await runTask("PLAN_TOOLS", {
+      system,
+      input: planningInput({ summary: summary?.summary, transcript, step, hasResults }),
+      untrusted,
+      maxOutputTokens: 1500,
+      json: true,
+    });
+
+    const plan = parseToolPlan(proposal.text);
+    plan.reply = guardReply(plan.reply);
+
+    for (const rejection of plan.rejected) {
+      console.warn(`tool_rejected: ${rejection.name} — ${rejection.reason}`);
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "llm_proposed",
+        action: `rejected:${rejection.name}`,
+        args: { reason: rejection.reason },
+        result: "denied",
+      });
+    }
+    allRejected.push(...plan.rejected);
+
+    // Done: no more tools, or out of steps. The last step's tools are NOT
+    // run — there would be no step left to read their results.
+    if (plan.calls.length === 0 || step === MAX_STEPS) {
+      finalPlan = plan;
+      break;
+    }
+
+    for (const call of substituteRefs(plan.calls, refs)) {
+      allOutcomes.push(await executeToolCall(ctx, toolCtx, call));
+    }
+
+    // Label every email the tools returned, continuing after any already seen.
+    const fresh = collectEmailRefs(allOutcomes, 1);
+    seenEmails = fresh;
+    for (const item of fresh) refs.set(item.ref, item.id);
   }
 
-  // Everything task.* staged becomes ONE approval card. "Add three tasks and
-  // close ENG-12" is a single intention, so it costs a single tap.
+  // Everything task.create staged becomes ONE approval card.
   await flushStagedWrites(ctx, toolCtx);
 
-  let deterministic = renderOutcomes(plan.reply, outcomes, plan.rejected, timezone);
+  const plan = finalPlan ?? { reply: "", calls: [], rejected: [] };
+  let out = plan.reply.trim();
 
-  // ── The follow-up round ──────────────────────────────────────────────
-  //
-  // You get ONE batch of tool calls per message, and that batch is chosen
-  // BEFORE any tool has run. So "read this link and save it to my notes" was
-  // structurally impossible: the planner spent its batch on link.read, and by
-  // the time the caption existed the turn was over. The user saw the post and
-  // no note — with nothing announcing that half their request had been
-  // dropped.
-  //
-  // This has been patched per-tool three times now (create_draft resolving an
-  // email, note.get resolving a title, meeting.ingest doing its own work).
-  // Those fixes each removed the need for a lookup FIRST; none of them helps
-  // when the second step depends on content the first step fetched.
-  //
-  // So: exactly one more planning pass, given what the tools actually
-  // returned. Bounded hard at one — no third round, ever, no loop.
-  const fetchedContent = outcomes.some((o) => o.ok && returnsUnknowableContent(o.name));
-  if (fetchedContent) {
-    const followUp = await planFollowUp(ctx, {
-      userId,
-      timezone,
-      system,
-      text,
-      results: deterministic,
-    });
-    if (followUp) {
-      deterministic = `${deterministic}\n${followUp}`;
-      // A follow-up that produced nothing is the common case ("just read this
-      // link"), and costs one call. That is the price of the other case
-      // working at all.
-    }
-  }
-
-  // ONE model call per message by default — the deterministic render is free
-  // and cannot soften a failure or invent a due date the way a model
-  // retelling results can. That default stands for every ordinary turn.
-  //
-  // The exception, and the ONLY one: a skill matched this message and tools
-  // actually ran. A skill is a procedure for how to PRESENT something ("give
-  // a TL;DR", "summarize rather than dumping the body", "always carry the
-  // date through") and the planning pass writes its reply before any tool
-  // executes — so without this second pass those rules are unimplementable,
-  // not merely unfollowed. Bounded on purpose: email/brief/draft turns pay
-  // two calls, everything else still pays one.
-  if (activeSkills.length === 0) return deterministic;
-
-  // This pass writes the words the user actually reads, so it needs to know
-  // who they are just as much as the planning pass does. It did not until
-  // 2026-08-23 — see MEMORY.md; the reader test in assistant-prompt.test.ts
-  // now asserts every prompt builder carries this.
-  const knowledge = {
-    userContext: userContext.map((c) => ({
-      category: normalizeCategory(c.category),
-      text: c.text,
-    })),
-    customInstructions: instructions.map((i) => i.text),
-  };
-
-  // The same roster the planning pass got. Without it, this pass could be
-  // handed a result labelled "primary" with no idea which address that is.
-  const mailboxes = accounts.map((a) => ({
-    label: a.label,
-    email: a.accountEmail,
-    status: a.status,
-  }));
-
-  // Did the user ask for an email's FULL content? Then the body must reach
-  // them byte-for-byte, so it is emitted by the deterministic renderer and
-  // the model only appends a TL;DR beneath it. Handing a long body to a
-  // model to "reproduce verbatim" does not work — measured, it summarizes
-  // instead — so this is enforced structurally, not by asking nicely.
-  const fetchedAnEmail = outcomes.some((o) => o.name === "email.get_message" && o.ok);
-  const modelSaidFull = outcomes.some(
+  // The parts that must be EXACT are emitted by code, never retyped by a
+  // model: the full body of an email the user asked to read in full.
+  // Measured on gemini-3.5-flash: asked to reproduce a body verbatim, it
+  // summarized it anyway.
+  const fullBody = allOutcomes.find(
     (o) =>
       o.name === "email.get_message" &&
       o.ok &&
-      typeof o.result === "object" &&
-      o.result !== null &&
-      (o.result as { mode?: string }).mode === "full",
+      ((o.result as { mode?: string } | null)?.mode === "full" || wantsFullEmail(intentText ?? text)),
   );
-  // The model's `mode` is a hint; the user's own words are authoritative.
-  // wantsFullEmail() exists because flash-lite sets mode inconsistently, and
-  // "show me the full email" answered with a summary is the exact failure
-  // this whole pass is meant to eliminate.
-  const wantsFullBody = fetchedAnEmail && (modelSaidFull || wantsFullEmail(text));
-
-  if (wantsFullBody) {
+  if (fullBody) {
+    const body = renderOutcomes("", [fullBody], [], timezone);
+    const knowledge = {
+      userContext: userContext.map((c) => ({ category: normalizeCategory(c.category), text: c.text })),
+      customInstructions: instructions.map((i) => i.text),
+    };
     const tldr = await runTask("COMPOSE_REPLY", {
       system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone, knowledge, mailboxes),
       input: "Write the TL;DR for the email below.",
-      untrusted: [{ label: "email", content: deterministic }],
+      untrusted: [{ label: "email", content: body }],
+      maxOutputTokens: 400,
+    });
+    const tldrText = tldr.text.trim();
+    out = tldrText ? `${body}\n\nTL;DR:\n${tldrText}` : body;
+  }
+
+  if (!out) {
+    // The model ran out of steps or returned nothing: fall back to the
+    // deterministic render so the user still sees what happened.
+    out =
+      allOutcomes.length > 0 || allRejected.length > 0
+        ? renderOutcomes("", allOutcomes, allRejected, timezone)
+        : "I didn't follow that. Say it another way?";
+  }
+
+  // What the reply is about: the email the model named, else the single
+  // email it fetched, else whatever was already in focus.
+  const named = resolveFocus(plan.focus, plan.focus === "E0" && focusItem ? [focusItem] : seenEmails);
+  const onlyOne = seenEmails.length === 1 ? seenEmails[0] : undefined;
+  const about = named ?? onlyOne ?? (plan.focus === "E0" ? focusItem : undefined);
+
+  return { text: out, ref: about ? { kind: "email", id: about.id } : focusRef };
+}
+
+/** The focus email, ownership-checked, as a labelled item. */
+async function loadFocusEmail(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  emailMessageId: string,
+  accounts: { _id: Id<"connectedAccounts">; label: string; userId: Id<"users"> }[],
+): Promise<EmailRefItem | undefined> {
+  const normalized = await ctx.runQuery(internal.model.emailMessages.normalize, { id: emailMessageId });
+  if (!normalized) return undefined;
+  const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+    emailMessageId: normalized,
+  });
+  if (!message) return undefined;
+  const account = accounts.find((a) => a._id === message.accountId);
+  // An id is never proof of access, even one this process stored.
+  if (!account || account.userId !== userId) return undefined;
+
+  return {
+    ref: "E0",
+    kind: "email",
+    id: message._id,
+    from: message.fromName ? `${message.fromName} <${message.fromAddress}>` : message.fromAddress,
+    subject: message.subject ?? "(no subject)",
+    receivedAtMs: message.receivedAt,
+    accountLabel: account.label,
+    importance: message.importance,
+    spam: message.labelIds.includes("SPAM"),
+    snippet: message.snippet,
+  };
+}
+
+/**
+ * Fold the conversation that has scrolled out of the live window into a
+ * short running summary — what makes "remember what I said this morning"
+ * work without a 100-turn prompt. Runs after a reply is sent, and only does
+ * work once SUMMARY_BATCH messages have accumulated outside the window.
+ */
+export const summarizeConversation = internalAction({
+  args: { userId: v.id("users") },
+  handler: async (ctx, { userId }) => {
+    const [recent, existing] = await Promise.all([
+      ctx.runQuery(internal.model.messages.recentForUser, { userId, limit: CONVERSATION_TURNS }),
+      ctx.runQuery(internal.model.messages.getSummary, { userId }),
+    ]);
+    const oldestLive = recent[0];
+    if (!oldestLive) return;
+
+    const outside = await ctx.runQuery(internal.model.messages.between, {
+      userId,
+      afterTime: existing?.coveredThrough ?? 0,
+      beforeTime: oldestLive._creationTime,
+      limit: 60,
+    });
+    if (outside.length < SUMMARY_BATCH) return;
+
+    const transcript = renderConversation(
+      outside.map((m) => ({ direction: m.direction, text: (m.text ?? "").slice(0, 600) })),
+    );
+    const result = await runTask("SUMMARIZE_CONVERSATION", {
+      system: SUMMARY_SYSTEM_PROMPT,
+      input:
+        `Summary so far:\n${existing?.summary ?? "(none yet)"}\n\n` +
+        `New conversation to fold in:\n${transcript}\n\nWrite the updated summary.`,
       maxOutputTokens: 600,
     });
-    const summary = tldr.text.trim();
-    return summary ? `${deterministic}\n\n---\nTL;DR:\n${summary}` : deterministic;
-  }
+    const text = result.text.trim();
+    if (!text) return;
 
-  // A LISTING gets the same treatment as a full body, and for the same
-  // reason: the layout must be exact, and a model asked to reproduce one
-  // will not reproduce it.
-  //
-  // renderEmailList emits the sender, subject, date, mailbox and importance
-  // of each result in a fixed shape. Handing that to COMPOSE_REPLY as
-  // untrusted input let the model re-format it freely, so the same request
-  // came back differently every time — dates dropped from one reply, the
-  // mailbox from the next, entries run together in a third. The list is
-  // FACTS, and facts do not need a second author.
-  //
-  // The model still earns its call: it reads the hydrated bodies and writes
-  // a short "what stands out" beneath the list. Interpretation is what it is
-  // good at; typesetting is not.
-  const listedEmails = outcomes.some(
-    (o) => (o.name === "email.search" || o.name === "email.list_recent") && o.ok,
-  );
-
-  // A list/search result carries Gmail's ~200-character SNIPPET, not the
-  // message. Measured on a real FairMoney webinar mail: the snippet ended
-  // before "Date: Friday, 31st July / Time: 1:00 PM / Platform: X Spaces"
-  // and the Schedule Live link, so the summary said "no action required"
-  // about an email that plainly required one. The skill already said "never
-  // answer from a snippet alone" — the model simply had nothing else.
-  //
-  // So hydrate: for a SMALL result set, fetch the real bodies and give them
-  // to the compose model. Bounded to HYDRATE_LIMIT because this costs one
-  // database read per message and exists to make a handful of emails
-  // answerable, not to bulk-load an inbox.
-  const bodies = await hydrateBodies(ctx, userId, outcomes);
-
-  if (listedEmails) {
-    const summary = await runTask("COMPOSE_REPLY", {
-      system: listSummarySystemPrompt(activeSkills, Date.now(), timezone, knowledge, mailboxes),
-      input: `The user said: ${text}`,
-      untrusted: [
-        { label: "tool_results", content: deterministic },
-        ...(bodies ? [{ label: "full_email_bodies", content: bodies }] : []),
-      ],
-      maxOutputTokens: 700,
+    const last = outside[outside.length - 1];
+    if (!last) return;
+    await ctx.runMutation(internal.model.messages.saveSummary, {
+      userId,
+      summary: text.slice(0, 2500),
+      coveredThrough: last._creationTime,
     });
-    const note = summary.text.trim();
-    return note ? `${deterministic}\n\n---\n${note}` : deterministic;
-  }
-
-  const composed = await runTask("COMPOSE_REPLY", {
-    system: skillComposeSystemPrompt(
-      displayName,
-      activeSkills,
-      Date.now(),
-      timezone,
-      knowledge,
-      mailboxes,
-    ),
-    input: `The user said: ${text}`,
-    // The rendered facts include email bodies — attacker-controlled content,
-    // so it enters through the untrusted channel, never the instruction.
-    untrusted: [
-      { label: "tool_results", content: deterministic },
-      ...(bodies ? [{ label: "full_email_bodies", content: bodies }] : []),
-    ],
-    maxOutputTokens: 2000,
-  });
-
-  return composed.text.trim() || deterministic;
-}
+  },
+});
 
 /** How many listed emails are worth fetching in full for one reply. */
 const HYDRATE_LIMIT = 5;
@@ -558,7 +616,7 @@ function status(): string {
 /** Which store owns tasks, from the accounts already in the database. */
 async function backendFor(ctx: ActionCtx, userId: Id<"users">) {
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
-  return pickBackend(accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"));
+  return backendForAccounts(accounts);
 }
 
 async function tasksCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
@@ -640,59 +698,6 @@ async function remindersCommand(ctx: ActionCtx, userId: Id<"users">): Promise<st
  * crash. One sentence naming the limitation costs nothing and tells you
  * exactly where you are in the build.
  */
-/**
- * The second planning round. Sees the tool results; may call more tools.
- *
- * SECURITY: the results block contains fetched external content — an
- * Instagram caption, an email body. It enters as `untrusted`, and the same
- * SCOPE and approval rules apply because this reuses the planning prompt
- * verbatim. An injected "email everyone" still cannot send: email.send_reply
- * is consequential and the gate is unchanged. The realistic exposure is a
- * junk note or a junk task, which is recoverable and visible.
- */
-async function planFollowUp(
-  ctx: ActionCtx,
-  args: {
-    userId: Id<"users">;
-    timezone: string;
-    system: string;
-    text: string;
-    results: string;
-  },
-): Promise<string | null> {
-  const proposal = await runTask("PLAN_TOOLS", {
-    system: args.system,
-    input:
-      `The user said: ${args.text}\n\n` +
-      `Tools have ALREADY run for this message and their results are in the ` +
-      `untrusted block below. Do the part of the request that has NOT been ` +
-      `done yet — for example, if they asked you to read something and then ` +
-      `save it, the reading is done and the saving is not.\n\n` +
-      `Do NOT call the same read tool again; you already have its result. ` +
-      `If everything they asked for is already done, return an empty "tools" ` +
-      `array and an empty "reply" — that is the normal outcome and costs ` +
-      `nothing.`,
-    untrusted: [{ label: "tool_results", content: args.results }],
-    maxOutputTokens: 1200,
-  });
-
-  const plan = parseToolPlan(proposal.text);
-  if (plan.calls.length === 0) return null;
-
-  const toolCtx: ToolContext = { userId: args.userId, timezone: args.timezone };
-
-  const outcomes: ToolOutcome[] = [];
-  for (const call of plan.calls) {
-    outcomes.push(await executeToolCall(ctx, toolCtx, call));
-  }
-
-  await flushStagedWrites(ctx, toolCtx);
-
-  // plan.reply is dropped: this pass has the results in front of it, so its
-  // prose would restate what the deterministic render above already said.
-  return renderOutcomes("", outcomes, plan.rejected, args.timezone);
-}
-
 export const handleUnsupported = internalAction({
   args: { chatId: v.string(), kind: v.string() },
   handler: async (_ctx, args) => {
@@ -1453,18 +1458,28 @@ export const handleCallback = internalAction({
 
       switch (prefix) {
         case CALLBACK_PREFIX.TLDR:
-          await replyWithSummary(ctx, args.chatId, emailMessageId);
+          await replyWithSummary(ctx, userId, args.chatId, emailMessageId);
           return;
         case CALLBACK_PREFIX.FULL:
-          await replyWithFullMessage(ctx, args.chatId, emailMessageId);
+          await replyWithFullMessage(ctx, userId, args.chatId, emailMessageId);
           return;
-        case CALLBACK_PREFIX.DRAFT:
-          await sendMessage(
-            args.chatId,
-            "Drafting replies isn't built yet -- Phase 6 adds it. This button is here " +
-              "so the card is complete; it does nothing until then.",
+        case CALLBACK_PREFIX.DRAFT: {
+          // This button said "isn't built yet -- Phase 6 adds it" for weeks
+          // after Phase 6 shipped. It now runs the ordinary drafting path
+          // with the card's email in focus, so the draft, its [Send] card and
+          // the mailbox it goes out from are exactly what chat would produce.
+          const user = await ctx.runQuery(internal.model.users.get, { userId });
+          const result = await converseDetailed(
+            ctx,
+            userId,
+            user?.displayName ?? "owner",
+            "Draft a reply to this email.",
+            undefined,
+            { focusEmailId: emailMessageId },
           );
+          await sendAndRecord(ctx, userId, args.chatId, result.text, result.ref);
           return;
+        }
         case CALLBACK_PREFIX.NOT_IMPORTANT:
           await markNotImportant(ctx, userId, args.chatId, emailMessageId);
           return;
@@ -1485,8 +1500,29 @@ export const handleCallback = internalAction({
   },
 });
 
+/** Send a reply and put it in the conversation, with what it is about. */
+async function sendAndRecord(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  chatId: string,
+  text: string,
+  ref?: { kind: string; id: string },
+): Promise<void> {
+  const channelMessageId = await sendMessage(chatId, text);
+  await ctx.runMutation(internal.model.messages.record, {
+    userId,
+    channel: "telegram",
+    direction: "out",
+    channelMessageId,
+    kind: "text",
+    text,
+    ref,
+  });
+}
+
 async function replyWithSummary(
   ctx: ActionCtx,
+  userId: Id<"users">,
   chatId: string,
   emailMessageId: string,
 ): Promise<void> {
@@ -1510,11 +1546,15 @@ async function replyWithSummary(
     maxOutputTokens: 300,
   });
 
-  await sendMessage(chatId, summary.text.trim());
+  await sendAndRecord(ctx, userId, chatId, summary.text.trim(), {
+    kind: "email",
+    id: message._id,
+  });
 }
 
 async function replyWithFullMessage(
   ctx: ActionCtx,
+  userId: Id<"users">,
   chatId: string,
   emailMessageId: string,
 ): Promise<void> {
@@ -1531,10 +1571,21 @@ async function replyWithFullMessage(
     : message.fromAddress;
   const body = message.bodyText ?? message.snippet ?? "(no body)";
 
-  await sendMessage(
+  const channelMessageId = await sendMessage(
     chatId,
     `From: ${from}\nSubject: ${message.subject ?? "(no subject)"}\n\n${body}`,
   );
+  // History gets a short marker, not the whole body: the body is already one
+  // tool call away, and a long email would push real conversation out.
+  await ctx.runMutation(internal.model.messages.record, {
+    userId,
+    channel: "telegram",
+    direction: "out",
+    channelMessageId,
+    kind: "text",
+    text: `[Showed the full email from ${from}, subject "${message.subject ?? "(no subject)"}"]`,
+    ref: { kind: "email", id: message._id },
+  });
 }
 
 async function markNotImportant(

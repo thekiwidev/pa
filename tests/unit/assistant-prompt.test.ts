@@ -3,10 +3,10 @@ import { TELEGRAM_FORMAT_CONTRACT } from "../../convex/lib/prompts/format";
 import { KNOWLEDGE_HEADING, buildKnowledgeBlock } from "../../convex/lib/prompts/knowledge";
 import {
   planningSystemPrompt,
-  skillComposeSystemPrompt,
+  planningInput,
   tldrOnlySystemPrompt,
-  listSummarySystemPrompt,
   renderConversation,
+  SUMMARY_SYSTEM_PROMPT,
 } from "../../convex/lib/prompts/assistant";
 
 const base = {
@@ -97,7 +97,7 @@ describe("planningSystemPrompt", () => {
     expect(prompt).toContain("DRIVE is real, and READ-ONLY");
     // The rule that keeps Drive safe must survive any rewording of the rest.
     expect(prompt).toContain("You NARROW; the user CHOOSES");
-    expect(prompt).toContain("You CAN also read and update Linear issues");
+    expect(prompt).toContain("task.update / complete / block / unblock");
     expect(prompt).toContain('Never say "I am checking / investigating');
   });
 
@@ -138,53 +138,18 @@ describe("planningSystemPrompt — custom instructions", () => {
   });
 });
 
-describe("skillComposeSystemPrompt", () => {
-  const skills = [{ title: "Check email", content: "Always append a TL;DR." }];
-  const NOW = Date.UTC(2026, 7, 21, 9, 0);
-
-  test("embeds the active skill's procedure verbatim", () => {
-    const out = skillComposeSystemPrompt("Adedotun", skills, NOW, "Africa/Lagos");
-    expect(out).toContain("Always append a TL;DR.");
-    expect(out).toContain("Check email");
-  });
-
-  test("instructs verbatim copying for full-content, not paraphrase", () => {
-    const out = skillComposeSystemPrompt("Adedotun", skills, NOW, "Africa/Lagos");
-    expect(out).toContain("COPY THAT TEXT");
-    expect(out).toContain("do not paraphrase");
-  });
-
-  test("forbids inventing dates/times that are not in the results", () => {
-    const out = skillComposeSystemPrompt("Adedotun", skills, NOW, "Africa/Lagos");
-    expect(out).toContain("carry it through exactly as written");
-  });
-});
-
-describe("compose prompts — deadlines and snippets", () => {
+describe("tldrOnlySystemPrompt — deadlines", () => {
   const skills = [{ title: "Check email", content: "Append a TL;DR." }];
   const NOW = Date.UTC(2026, 7, 21, 9, 0);
 
   test("states the current date so a passed deadline can be recognised", () => {
-    expect(skillComposeSystemPrompt("A", skills, NOW, "Africa/Lagos")).toContain("Current date and time:");
     expect(tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos")).toContain("Current date and time:");
   });
 
   test("treats an event or booking link as an action, not 'no action required'", () => {
-    for (const p of [
-      skillComposeSystemPrompt("A", skills, NOW, "Africa/Lagos"),
-      tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos"),
-    ]) {
-      expect(p).toContain("IS an action");
-      // Wording wraps differently between the two prompts; assert on the
-      // concept, not on a phrase that happens to survive a line break.
-      expect(p.replace(/\s+/g, " ")).toContain("has already passed");
-    }
-  });
-
-  test("warns the compose model that snippets truncate", () => {
-    const p = skillComposeSystemPrompt("A", skills, NOW, "Africa/Lagos");
-    expect(p).toContain("full_email_bodies");
-    expect(p.replace(/\s+/g, " ")).toContain("cuts off before the important part");
+    const p = tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos");
+    expect(p).toContain("IS an action");
+    expect(p.replace(/\s+/g, " ")).toContain("has already passed");
   });
 });
 
@@ -278,10 +243,6 @@ describe("user-taught knowledge reaches every user-facing prompt", () => {
         customInstructions: knowledge.customInstructions,
       }),
     ],
-    [
-      "skillComposeSystemPrompt",
-      skillComposeSystemPrompt("Ade", skills, nowMs, "Africa/Lagos", knowledge),
-    ],
     ["tldrOnlySystemPrompt", tldrOnlySystemPrompt(skills, nowMs, "Africa/Lagos", knowledge)],
   ];
 
@@ -321,9 +282,7 @@ describe("format contract reaches every user-facing prompt", () => {
 
   const builders: [string, string][] = [
     ["planningSystemPrompt", planningSystemPrompt(base)],
-    ["skillComposeSystemPrompt", skillComposeSystemPrompt("Ade", skills, nowMs, "Africa/Lagos")],
     ["tldrOnlySystemPrompt", tldrOnlySystemPrompt(skills, nowMs, "Africa/Lagos")],
-    ["listSummarySystemPrompt", listSummarySystemPrompt(skills, nowMs, "Africa/Lagos")],
   ];
 
   for (const [name, prompt] of builders) {
@@ -342,7 +301,7 @@ describe("SCOPE tells the truth about where notes live", () => {
   // and both are the model answering from itself instead of looking:
   // claiming to recall a note, and claiming none exists.
   test("says notes must be searched, not recalled", () => {
-    const prompt = planningSystemPrompt(base);
+    const prompt = planningSystemPrompt(base).replace(/\s+/g, " ");
     expect(prompt).toContain("note.search");
     expect(prompt).toContain("never answer from what you happen to recall");
   });
@@ -366,16 +325,8 @@ describe("every user-facing prompt knows which mailbox is which", () => {
 
   const builders: [string, string][] = [
     [
-      "skillComposeSystemPrompt",
-      skillComposeSystemPrompt("Ade", skills, NOW, "Africa/Lagos", undefined, mailboxes),
-    ],
-    [
       "tldrOnlySystemPrompt",
       tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos", undefined, mailboxes),
-    ],
-    [
-      "listSummarySystemPrompt",
-      listSummarySystemPrompt(skills, NOW, "Africa/Lagos", undefined, mailboxes),
     ],
   ];
 
@@ -388,35 +339,51 @@ describe("every user-facing prompt knows which mailbox is which", () => {
 
   test("with no mailboxes, every prompt says so rather than going silent", () => {
     for (const build of [
-      () => skillComposeSystemPrompt("Ade", skills, NOW, "Africa/Lagos"),
       () => tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos"),
-      () => listSummarySystemPrompt(skills, NOW, "Africa/Lagos"),
     ]) {
       expect(build()).toContain("(none connected");
     }
   });
 });
 
-describe("listSummarySystemPrompt — the list is not the model's to rewrite", () => {
-  const NOW = Date.UTC(2026, 7, 21, 9, 0);
-  const skills = [{ title: "Check email", content: "Append a TL;DR." }];
-  const prompt = listSummarySystemPrompt(skills, NOW, "Africa/Lagos");
+describe("planningSystemPrompt — assistant behaviour (docs/BEHAVIOUR.md)", () => {
+  const flat = () => planningSystemPrompt(base).replace(/\s+/g, " ");
 
-  test("says the list has already been shown, so it is never re-listed", () => {
-    const flat = prompt.replace(/\s+/g, " ");
-    expect(flat).toContain("ALREADY been shown");
-    expect(flat).toContain("Do NOT reproduce it");
+  test("explains the E-label references and the email in focus", () => {
+    expect(flat()).toContain("E0");
+    expect(flat()).toContain("focus");
   });
 
-  test("tells the model to reference results by number", () => {
-    expect(prompt.replace(/\s+/g, " ")).toContain("by its NUMBER");
+  test("tells the model to give ONE best answer to a search", () => {
+    expect(flat().toLowerCase()).toContain("one best");
+  });
+});
+
+describe("planningInput", () => {
+  test("carries the transcript and the step", () => {
+    const out = planningInput({ transcript: "User: hi", step: 1, hasResults: false });
+    expect(out).toContain("User: hi");
   });
 
-  test("still treats a dated event as an action", () => {
-    expect(prompt).toContain("IS an action");
+  test("includes the rolling summary when there is one", () => {
+    const out = planningInput({
+      summary: "They are waiting on the visa letter.",
+      transcript: "User: any news?",
+      step: 1,
+      hasResults: false,
+    });
+    expect(out).toContain("They are waiting on the visa letter.");
   });
 
-  test("writes nothing at all when the result was empty", () => {
-    expect(prompt.replace(/\s+/g, " ")).toContain("If the result was empty, add nothing");
+  test("tells a later step that results are in", () => {
+    const first = planningInput({ transcript: "User: x", step: 1, hasResults: false });
+    const later = planningInput({ transcript: "User: x", step: 2, hasResults: true });
+    expect(later).not.toEqual(first);
+  });
+});
+
+describe("SUMMARY_SYSTEM_PROMPT", () => {
+  test("is non-empty and asks for a summary", () => {
+    expect(SUMMARY_SYSTEM_PROMPT.toLowerCase()).toContain("summar");
   });
 });

@@ -21,7 +21,12 @@ import {
   createEvent,
   type CalendarEvent,
 } from "../connectors/gcal/client";
-import { namedWindow, type WindowName } from "../lib/calendar/window";
+import { resolveWindow } from "../lib/calendar/window";
+import {
+  checkAvailability,
+  NEARBY_MARGIN_MS,
+  type CalendarItem,
+} from "../lib/calendar/availability";
 import {
   searchFiles,
   getFile,
@@ -46,7 +51,7 @@ import {
   findFreeSlots,
 } from "../lib/calendar/events";
 import {
-  pickBackend,
+  backendForAccounts,
   matchLabels,
   resolveStateForStatus,
   resolveStateByName,
@@ -733,53 +738,47 @@ async function dispatch(
     }
 
     case "calendar.list_events": {
-      const { accessToken, account } = await googleAccountFor(ctx, userId, CALENDAR_READ_SCOPE);
-      const win = namedWindow(
-        (a.window as WindowName | undefined) ?? "today",
-        Date.now(),
-        timezone,
-      );
-      const events = await listEvents(accessToken, {
-        timeMinIso: new Date(win.startMs).toISOString(),
-        timeMaxIso: new Date(win.endMs).toISOString(),
-        limit: (a.limit as number | undefined) ?? 25,
+      const win = resolveWindow(a as { window?: string; date?: string }, Date.now(), timezone);
+      const found = await allCalendarEvents(ctx, userId, win, {
         query: a.query as string | undefined,
+        limit: (a.limit as number | undefined) ?? 25,
       });
       return {
-        window: (a.window as string | undefined) ?? "today",
-        calendarOf: account.accountEmail,
-        events: events.map((e) => summarizeEvent(e, timezone, [account.accountEmail])),
+        window: (a.date as string | undefined) ?? (a.window as string | undefined) ?? "today",
+        calendarsChecked: found.calendars,
+        ...(found.failures.length ? { couldNotRead: found.failures } : {}),
+        events: found.events.map((e) => summarizeEvent(e.event, timezone, found.calendars, e.calendarOf)),
       };
     }
 
     case "calendar.get_event": {
-      const { accessToken, account } = await googleAccountFor(ctx, userId, CALENDAR_READ_SCOPE);
-      const event = await getEvent(accessToken, a.eventId as string);
-      if (!event) return { found: false };
-      return {
-        found: true,
-        ...summarizeEvent(event, timezone, [account.accountEmail]),
-        description: event.description,
-      };
+      // An event id is per-calendar, so try each connected calendar until one
+      // knows it. Ids from list_events are what the model has.
+      const accounts = await googleAccountsFor(ctx, userId, CALENDAR_READ_SCOPE);
+      for (const account of accounts) {
+        const accessToken = await ctx.runAction(internal.gmail.accessTokenForAccount, {
+          accountId: account._id,
+        });
+        const event = await getEvent(accessToken, a.eventId as string);
+        if (event) {
+          return {
+            found: true,
+            ...summarizeEvent(event, timezone, accounts.map((x) => x.accountEmail), account.accountEmail),
+            description: event.description,
+          };
+        }
+      }
+      return { found: false };
     }
 
     case "calendar.find_free_slots": {
-      const { accessToken, account } = await googleAccountFor(ctx, userId, CALENDAR_READ_SCOPE);
-      const win = namedWindow(
-        (a.window as WindowName | undefined) ?? "today",
-        Date.now(),
-        timezone,
-      );
-      const events = await listEvents(accessToken, {
-        timeMinIso: new Date(win.startMs).toISOString(),
-        timeMaxIso: new Date(win.endMs).toISOString(),
-        limit: 100,
-      });
+      const win = resolveWindow(a as { window?: string; date?: string }, Date.now(), timezone);
+      const found = await allCalendarEvents(ctx, userId, win, { limit: 100 });
 
-      const busy = events
+      const busy = found.events
         .map((e) => ({
-          startMs: whenToMs(e.start, timezone),
-          endMs: whenToMs(e.end, timezone),
+          startMs: whenToMs(e.event.start, timezone),
+          endMs: whenToMs(e.event.end, timezone),
         }))
         .filter((i): i is { startMs: number; endMs: number } =>
           i.startMs !== null && i.endMs !== null);
@@ -794,14 +793,49 @@ async function dispatch(
       });
 
       return {
-        window: (a.window as string | undefined) ?? "today",
+        window: (a.date as string | undefined) ?? (a.window as string | undefined) ?? "today",
         durationMinutes: a.durationMinutes,
-        calendarOf: account.accountEmail,
+        calendarsChecked: found.calendars,
+        ...(found.failures.length ? { couldNotRead: found.failures } : {}),
         slots: slots.map((sl) => ({
           startsAt: formatInstant(sl.startMs, timezone),
           endsAt: formatInstant(sl.endMs, timezone),
           startMs: sl.startMs,
         })),
+      };
+    }
+
+    case "calendar.check_availability": {
+      const startMs = toEpochMs(a.startsAt as string, timezone);
+      const endMs =
+        typeof a.endsAt === "string"
+          ? toEpochMs(a.endsAt, timezone)
+          : startMs + ((a.durationMinutes as number | undefined) ?? 60) * 60_000;
+      if (endMs <= startMs) throw new Error("that time range ends before it starts");
+
+      // Look an hour either side so near misses are visible.
+      const found = await allCalendarEvents(
+        ctx,
+        userId,
+        { startMs: startMs - NEARBY_MARGIN_MS, endMs: endMs + NEARBY_MARGIN_MS },
+        { limit: 50 },
+      );
+      const answer = checkAvailability({ startMs, endMs, events: toCalendarItems(found.events, timezone) });
+
+      const show = (e: CalendarItem) => ({
+        title: e.title,
+        startsAt: formatInstant(e.startMs, timezone),
+        endsAt: formatInstant(e.endMs, timezone),
+        calendarOf: e.calendarOf,
+        ...(e.allDay ? { allDay: true } : {}),
+      });
+      return {
+        askedAbout: `${formatInstant(startMs, timezone)} to ${formatInstant(endMs, timezone)}`,
+        free: answer.free,
+        conflicts: answer.conflicts.map(show),
+        nearby: answer.nearby.map(show),
+        calendarsChecked: found.calendars,
+        ...(found.failures.length ? { couldNotRead: found.failures } : {}),
       };
     }
 
@@ -2068,11 +2102,18 @@ const LINEAR_PRIORITY_NAMES = ["No priority", "Urgent", "High", "Medium", "Low"]
 
 async function linearApiKey(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
-  const account = accounts.find((a) => a.provider === "linear" && a.status === "ACTIVE");
+  const account = accounts.find((a) => a.provider === "linear");
   if (!account) {
     throw new Error(
       "No Linear account connected. Run `bunx convex run debug:connectLinear` " +
         "once to seal LINEAR_API_KEY into a connectedAccounts row.",
+    );
+  }
+  if (account.status !== "ACTIVE") {
+    // Say it, never fall back: a task written anywhere but Linear is lost.
+    throw new Error(
+      `Linear is connected but marked ${account.status}, so I can't reach your board. ` +
+        "Re-run `bunx convex run debug:connectLinear '{}'` with a fresh LINEAR_API_KEY.",
     );
   }
   return await open({
@@ -2274,6 +2315,99 @@ async function googleAccountFor(ctx: ActionCtx, userId: Id<"users">, scope: stri
   return { accessToken, account: granted };
 }
 
+/**
+ * EVERY active Google account holding `scope`. googleAccountFor above picks
+ * one, which was right for creating an event (it has to live somewhere) and
+ * wrong for reading: "am I free Thursday" answered from one calendar out of
+ * three is a confident wrong answer.
+ */
+async function googleAccountsFor(ctx: ActionCtx, userId: Id<"users">, scope: string) {
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
+  const gmail = accounts.filter((acc) => acc.provider === "gmail" && acc.status === "ACTIVE");
+  if (gmail.length === 0) {
+    throw new Error("No Google account connected. Send /connect <label> to add one.");
+  }
+  const granted = gmail.filter((acc) => acc.scopesGranted.includes(scope));
+  if (granted.length === 0) {
+    throw new Error(
+      "None of your connected Google accounts has Calendar access yet. Send " +
+        "/reconnect <your address> once and it will be included.",
+    );
+  }
+  return granted;
+}
+
+export interface OwnedEvent {
+  event: CalendarEvent;
+  calendarOf: string;
+}
+
+/**
+ * Events in a window from every connected calendar, merged and de-duplicated.
+ * One calendar failing (an expired token) is reported, not fatal — the others
+ * still answer, and the reply says which one could not be read.
+ */
+export async function allCalendarEvents(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  win: { startMs: number; endMs: number },
+  options: { query?: string; limit?: number } = {},
+): Promise<{ events: OwnedEvent[]; calendars: string[]; failures: string[] }> {
+  const accounts = await googleAccountsFor(ctx, userId, CALENDAR_READ_SCOPE);
+  const events: OwnedEvent[] = [];
+  const failures: string[] = [];
+
+  for (const account of accounts) {
+    try {
+      const accessToken = await ctx.runAction(internal.gmail.accessTokenForAccount, {
+        accountId: account._id,
+      });
+      const items = await listEvents(accessToken, {
+        timeMinIso: new Date(win.startMs).toISOString(),
+        timeMaxIso: new Date(win.endMs).toISOString(),
+        limit: options.limit ?? 25,
+        query: options.query,
+      });
+      for (const event of items) events.push({ event, calendarOf: account.accountEmail });
+    } catch (error) {
+      failures.push(`${account.accountEmail}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // The same meeting on two of your calendars is one meeting.
+  const seen = new Set<string>();
+  const unique = events.filter(({ event }) => {
+    const key = `${(event.summary ?? "").trim().toLowerCase()}|${event.start.dateTime ?? event.start.date}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  unique.sort((x, y) =>
+    String(x.event.start.dateTime ?? x.event.start.date).localeCompare(
+      String(y.event.start.dateTime ?? y.event.start.date),
+    ),
+  );
+
+  return { events: unique, calendars: accounts.map((acc) => acc.accountEmail), failures };
+}
+
+export function toCalendarItems(events: OwnedEvent[], timezone: string): CalendarItem[] {
+  const items: CalendarItem[] = [];
+  for (const { event, calendarOf } of events) {
+    const startMs = whenToMs(event.start, timezone);
+    const endMs = displayEndMs(event, timezone);
+    if (startMs === null || endMs === null) continue;
+    items.push({
+      title: event.summary ?? "(no title)",
+      startMs,
+      endMs,
+      calendarOf,
+      allDay: isAllDay(event.start),
+    });
+  }
+  return items;
+}
+
 const DRIVE_READ_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
 /** How much of a document reaches a prompt. Beyond this it is a cost, not
@@ -2305,12 +2439,18 @@ function summarizeFile(file: DriveFile, timezone: string) {
 }
 
 /** One calendar event, in the shape the renderer and the model both want. */
-function summarizeEvent(event: CalendarEvent, timezone: string, selfEmails: string[]) {
+function summarizeEvent(
+  event: CalendarEvent,
+  timezone: string,
+  selfEmails: string[],
+  calendarOf?: string,
+) {
   const startMs = whenToMs(event.start, timezone);
   const endMs = displayEndMs(event, timezone);
 
   return {
     eventId: event.id,
+    ...(calendarOf ? { calendarOf } : {}),
     title: event.summary ?? "(no title)",
     allDay: isAllDay(event.start),
     startsAt: startMs === null ? undefined : formatInstant(startMs, timezone),
@@ -2328,8 +2468,8 @@ function summarizeEvent(event: CalendarEvent, timezone: string, selfEmails: stri
  */
 async function taskBackend(ctx: ActionCtx, userId: Id<"users">) {
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
-  const linear = accounts.find((a) => a.provider === "linear" && a.status === "ACTIVE");
-  return { backend: pickBackend(Boolean(linear)), linear };
+  const linear = accounts.find((a) => a.provider === "linear");
+  return { backend: backendForAccounts(accounts), linear };
 }
 
 /**
@@ -2506,8 +2646,29 @@ async function stageLinearUpdate(
 
   if (parts.length === 0) throw new Error("nothing to change on that issue");
 
+  // Applied NOW, not staged (2026-10-15). An edit to one existing issue on
+  // the owner's own board is reversible and affects nobody else — the same
+  // class as email.archive, which has never needed a tap. Staging it behind
+  // an Apply card meant "mark THE-89 done" silently did nothing whenever the
+  // card scrolled out of view, which is exactly the "it doesn't update my
+  // task" the owner reported. Creates still batch for one tap.
+  const [result] = await applyChangeset(apiKey, [
+    {
+      issueId: issue.id,
+      title: entry.title,
+      description: entry.description,
+      stateId: entry.stateId,
+      priority: entry.priority,
+    },
+  ]);
+  if (!result?.success) {
+    throw new Error(`Linear rejected the change to ${issue.identifier}: ${result?.error ?? "unknown error"}`);
+  }
+
   return {
-    ...stage(toolCtx, entry, `${issue.identifier} — ${parts.join(", ")}`),
+    applied: true,
+    change: `${issue.identifier} — ${parts.join(", ")}`,
+    previousState: issue.state?.name,
     taskId: issue.identifier,
     title: issue.title,
   };

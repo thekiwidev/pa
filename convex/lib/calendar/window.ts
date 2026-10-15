@@ -133,3 +133,22 @@ export function namedWindow(name: WindowName, nowMs: number, timeZone: string): 
       return dayWindow(nowMs, timeZone, 0);
   }
 }
+
+/** One specific local date, "2026-10-22" — what "Thursday" resolves to. */
+export function dateWindow(dateStr: string, timeZone: string): TimeWindow {
+  return {
+    startMs: startOfLocalDay(dateStr, timeZone),
+    endMs: startOfLocalDay(addDays(dateStr, 1), timeZone),
+    dates: [dateStr],
+  };
+}
+
+/** A specific date wins over a named window; neither means today. */
+export function resolveWindow(
+  args: { window?: string; date?: string },
+  nowMs: number,
+  timeZone: string,
+): TimeWindow {
+  if (args.date && /^\d{4}-\d{2}-\d{2}$/.test(args.date)) return dateWindow(args.date, timeZone);
+  return namedWindow((args.window as WindowName | undefined) ?? "today", nowMs, timeZone);
+}

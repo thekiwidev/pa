@@ -111,3 +111,24 @@ export function formatDayTime(atMs: number, timeZone: string): string {
     hour12: false,
   }).format(new Date(atMs));
 }
+
+/**
+ * "today 09:42", "yesterday 21:10", or "Thu 24 Sep, 09:42" — how a person
+ * says when something arrived. Day boundaries are the user's own midnight.
+ */
+export function formatWhen(atMs: number, nowMs: number, timeZone: string): string {
+  const day = (ms: number) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+      new Date(ms),
+    );
+  const clock = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(atMs));
+
+  if (day(atMs) === day(nowMs)) return `today ${clock}`;
+  if (day(atMs) === day(nowMs - 86_400_000)) return `yesterday ${clock}`;
+  return formatDayTime(atMs, timeZone);
+}
