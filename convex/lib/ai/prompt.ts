@@ -37,3 +37,16 @@ export function escapeAttribute(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
+
+/**
+ * OpenAI's json_object mode rejects a request (400) unless the word "json"
+ * appears in the INPUT messages. The system prompt (`instructions`) does not
+ * count, and every caller states its JSON contract there. So the provider
+ * always closes the input with this line when JSON output is requested,
+ * never relying on a caller's wording or on an email happening to say "JSON".
+ */
+export const JSON_REMINDER = "Reply with a single JSON object, as specified above.";
+
+export function withJsonReminder(prompt: string, json: boolean | undefined): string {
+  return json ? `${prompt}\n\n${JSON_REMINDER}` : prompt;
+}

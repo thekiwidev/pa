@@ -38,6 +38,12 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 - Draft-a-reply button now drafts (it said "isn't built yet").
 - Debug: `debug:skillOverrides`, `debug:resetSkill` for skills edited in the DB.
 
+### Fixed — OpenAI 400 on every planner call
+
+OpenAI's `json_object` mode requires the word "json" in the input messages;
+the system prompt does not count. The provider now always ends a JSON
+request's input with a one-line JSON reminder.
+
 ### Fixed — Linear 401 looked like "not connected" with no way forward
 
 `debug:connectLinear` now strips quotes and whitespace from

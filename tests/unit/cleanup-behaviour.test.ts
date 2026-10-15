@@ -16,6 +16,7 @@ import {
 } from "../../convex/lib/calendar/availability";
 import { dateWindow, resolveWindow } from "../../convex/lib/calendar/window";
 import { cleanLinearKey, looksLikeLinearKey } from "../../convex/lib/linear/apiKey";
+import { withJsonReminder } from "../../convex/lib/ai/prompt";
 import { formatClock, formatDayTime, formatInstant, formatWhen } from "../../convex/lib/time";
 import { backendForAccounts } from "../../convex/lib/tasks/backend";
 import { parseToolPlan } from "../../convex/lib/tools/plan";
@@ -237,5 +238,13 @@ describe("Linear API key hygiene", () => {
     expect(looksLikeLinearKey("lin_api_abc123")).toBe(true);
     expect(looksLikeLinearKey("Bearer lin_api_abc123")).toBe(false);
     expect(looksLikeLinearKey("lin_oauth_abc")).toBe(false);
+  });
+});
+
+describe("OpenAI JSON mode always has 'json' in the input", () => {
+  test("appends the reminder only when JSON output is requested", () => {
+    expect(withJsonReminder("User: hi", true).toLowerCase()).toContain("json");
+    expect(withJsonReminder("User: hi", false)).toBe("User: hi");
+    expect(withJsonReminder("User: hi", undefined)).toBe("User: hi");
   });
 });

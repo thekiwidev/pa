@@ -1,6 +1,6 @@
 import type { AIProvider, AIRequest, AIResult } from "../types";
 import { raiseForStatus } from "../types";
-import { buildPrompt } from "../../lib/ai/prompt";
+import { buildPrompt, withJsonReminder } from "../../lib/ai/prompt";
 
 const BASE = "https://api.openai.com/v1";
 
@@ -21,7 +21,7 @@ const BASE = "https://api.openai.com/v1";
  * audio input part and pretending otherwise is what caused the bug.
  */
 function buildInput(req: AIRequest): unknown {
-  const prompt = buildPrompt(req.input, req.untrusted);
+  const prompt = withJsonReminder(buildPrompt(req.input, req.untrusted), req.json);
   const media = (req.media ?? []).filter((m) => !m.mimeType.startsWith("audio/"));
   if (media.length === 0) return prompt;
 
@@ -77,8 +77,8 @@ export const openaiProvider: AIProvider = {
         max_output_tokens:
           (req.maxOutputTokens ?? 1024) + (isReasoningModel(model) ? REASONING_RESERVE : 0),
         ...(isReasoningModel(model) ? { reasoning: { effort: "low" } } : {}),
-        // json_object requires the word "JSON" somewhere in the prompt; every
-        // caller that sets `json` already says "Reply with a single JSON object".
+        // json_object requires the word "json" in the INPUT, not in
+        // instructions; buildInput guarantees it via withJsonReminder.
         ...(req.json ? { text: { format: { type: "json_object" } } } : {}),
       }),
     });
