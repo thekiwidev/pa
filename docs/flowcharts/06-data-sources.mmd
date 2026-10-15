@@ -1,0 +1,32 @@
+%% Which store answers which question — Gmail, Calendar, Drive, Linear, Notion, Convex
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    Ask(["Your question"]) --> Type{"What is it about?"}
+
+    Type -->|"'anything from Paul?'<br/>'archive that one'"| G
+    Type -->|"'what am I working on'<br/>'mark that done'"| L
+    Type -->|"'what did I save about X'"| N
+    Type -->|"'remind me at 4'<br/>'what are my projects'"| C
+    Type -->|"'what's my day'<br/>'when am I free?'"| K
+    Type -->|"'find my CV'<br/>'what does that doc say'"| D
+
+    G["<b>Gmail</b><br/>Recent 2 days are cached locally<br/>— instant. Anything older goes<br/>live with a date window."]
+    L["<b>Linear</b><br/>Live, every time.<br/>Falls back to the local table<br/>if Linear isn't connected."]
+    N["<b>Notion</b><br/>Live, every time.<br/><b>Nothing is copied to Convex</b> —<br/>so it must SEARCH, never recall."]
+    C["<b>Convex database</b><br/>Projects, reminders, people,<br/>facts about you, audit log."]
+    K["<b>Google Calendar</b><br/>Live. Read and create.<br/>Solo events just happen;<br/>invitations wait for your tap."]
+    D["<b>Google Drive</b><br/>Live. <b>Read-only.</b><br/>It narrows, you choose —<br/>it never picks a file for you."]
+
+    G --> Say
+    L --> Say
+    N --> Say
+    C --> Say
+    K --> Say
+    D --> Say
+    Say(["The answer, with its source"])
+
+    classDef live fill:#2a3f5c,stroke:#6f9bc4,color:#fff
+    classDef local fill:#1f4d3a,stroke:#3fa87a,color:#fff
+    class G,L,N,K,D live
+    class C local

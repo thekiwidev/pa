@@ -20,3 +20,7 @@ dist/
 # Run once:  git rm -r --cached .claude/skills .agents/skills
 .claude/skills/
 .agents/skills/
+
+# Local editor and transfer artefacts
+.idea/
+.cleanup-transfer.tgz

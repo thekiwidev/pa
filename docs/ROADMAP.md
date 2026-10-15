@@ -1,5 +1,17 @@
 # Execution roadmap
 
+> ## ⚠️ SUPERSEDED — read [`docs/STATUS.md`](STATUS.md) instead
+>
+> This file was last verified on **21 Aug 2026** and is now wrong in ways that
+> matter. It declares eleven phases "not built — documentation only"; **nine of
+> those have since shipped** (2B, 4, 5, 5B, 6, 7, 16, 21, plus Notion notes and
+> the Linear task backend). It also says "22 tools" where there are now 46.
+>
+> A stale roadmap is worse than no roadmap, because it is the file someone
+> reads to decide what to build next. Kept only for its per-phase
+> prerequisites, which are still accurate. For *what is done* and *what is
+> next*, use `docs/STATUS.md`.
+
 **What this is.** The order to build the remaining phases in, what each one needs from you before it can start, and how you know it worked.
 
 **What this is not.** An implementation plan — those already exist. Every phase below has a complete build document in `docs/build/` with file manifests, full code, and per-step verification. This file answers *"in what order, and what's blocking?"*, nothing else.

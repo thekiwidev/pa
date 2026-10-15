@@ -9,6 +9,9 @@
 // retell a tool result can soften a failure or invent a due date. This cannot.
 
 import { returnsUnknowableContent } from "./catalog";
+import { IMPORTANCE_ICON } from "../email/classification";
+import { nextRung } from "../email/gmailQuery";
+import { formatDay, formatDayTime } from "../time";
 
 export interface ToolOutcome {
   name: string;
@@ -45,8 +48,11 @@ export function renderOutcomes(
   plannedReply: string,
   outcomes: ToolOutcome[],
   rejected: RejectedCall[] = [],
+  /** For rendering instants in the owner's own clock. UTC is a safe default
+   *  for the many callers whose outcomes carry no date at all. */
+  timezone = "UTC",
 ): string {
-  const lines = outcomes.map(renderOne);
+  const lines = outcomes.map((outcome) => renderOne(outcome, timezone));
   const skipped = rejected.map((r) => `⚠️ Couldn't do ${r.name} — ${r.reason}`);
 
   // The planned reply is written BEFORE any tool runs, so it is only ever
@@ -81,32 +87,144 @@ function renderLinearIssueRow(m: unknown): string {
   );
 }
 
-function renderEmailList(r: unknown): string {
+/**
+ * What was actually searched for, in the user's own terms.
+ *
+ * Every empty result has to say this. "Nothing found" without naming the
+ * scope invites the reader to conclude the mail does not exist, when what
+ * actually happened is that a two-day local cache was checked.
+ */
+function describeCriteria(r: unknown): string {
+  const parts: string[] = [];
+  const from = str(r, "from");
+  const subject = str(r, "subject");
+  const query = str(r, "query");
+  const label = str(r, "gmailLabel");
+  if (from) parts.push(`from ${from}`);
+  if (subject) parts.push(`with "${subject}" in the subject`);
+  if (query) parts.push(`matching "${query}"`);
+  if (label) parts.push(`labelled ${label}`);
+  return parts.join(", ");
+}
+
+/** "primary", or "primary and work", or "" when only one mailbox exists. */
+function describeMailboxes(r: unknown): string {
+  const raw = field(r, "searchedMailboxes");
+  const boxes = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  if (boxes.length === 0) return "";
+  if (boxes.length === 1) return boxes[0]!;
+  return `${boxes.slice(0, -1).join(", ")} and ${boxes[boxes.length - 1]}`;
+}
+
+function describeWindow(r: unknown, timezone: string): string {
+  const within = field(r, "withinDays");
+  const after = field(r, "afterDays");
+  const from = field(r, "searchedFrom");
+  const to = field(r, "searchedTo");
+
+  if (typeof from === "number" && typeof to === "number") {
+    const range = `${formatDay(from, timezone)} – ${formatDay(to, timezone)}`;
+    return typeof after === "number" && after > 0
+      ? `${range} (${after}–${String(within)} days ago)`
+      : `${range} (last ${String(within)} days)`;
+  }
+  return `the last ${typeof within === "number" ? within : 2} days`;
+}
+
+/**
+ * The sentence that makes a search resumable.
+ *
+ * Widening used to be the model's problem, and it solved it by throwing away
+ * every filter and asking Gmail for everything — 25 unrelated messages in
+ * answer to "find the one from Paul". Naming the next rung here turns "keep
+ * looking" into a specific, non-overlapping follow-up query instead.
+ */
+function offerNextRung(r: unknown): string {
+  const within = field(r, "withinDays");
+  const current = typeof within === "number" ? within : 2;
+  const next = nextRung(current);
+  if (next === null) {
+    return `That is as far back as I search — ${current} days.`;
+  }
+  return `Want me to keep looking, back to ${next} days?`;
+}
+
+function renderEmailList(r: unknown, timezone: string): string {
   if (field(r, "connected") === false) {
     return "No mailbox connected. I can send you a link to connect one — just ask.";
   }
-  const rows = field(r, "messages");
-  const messages = Array.isArray(rows) ? rows : [];
-  const deep = field(r, "deep") === true;
-  const scope = deep ? "your whole mailbox" : "the last 2 days";
 
-  if (messages.length === 0) {
-    const label = str(r, "gmailLabel");
-    const query = str(r, "query");
-    if (label) return `No emails labelled ${label} in ${scope}.`;
-    if (query) return `Nothing matching "${query}" in ${scope}.`;
-    return `Nothing in ${scope}.`;
+  // "You have no mailbox called that" is a DIFFERENT fact from "you have no
+  // mailbox", and the two used to render identically. Saying "No mailbox
+  // connected" about mailboxes that are connected and syncing is a false
+  // statement about the user's own data, and one they cannot check.
+  const unknownLabel = str(r, "unknownLabel");
+  if (unknownLabel !== undefined) {
+    const raw = field(r, "available");
+    const available = Array.isArray(raw) ? raw.join(", ") : "";
+    return (
+      `You have no mailbox labelled "${unknownLabel}".` +
+      (available ? ` You have: ${available}.` : "")
+    );
   }
 
-  return messages
-    .map((m) => {
-      const flag = field(m, "spam") === true ? " [SPAM]" : "";
-      return `• ${str(m, "from") ?? "?"} — ${str(m, "subject") ?? "(no subject)"}${flag}\n    ${str(m, "snippet") ?? ""}`;
-    })
-    .join("\n");
+  const rows = field(r, "messages");
+  const messages = Array.isArray(rows) ? rows : [];
+  const window = describeWindow(r, timezone);
+  const mailboxes = describeMailboxes(r);
+  const where = mailboxes ? ` in **${mailboxes}**` : "";
+
+  if (messages.length === 0) {
+    const criteria = describeCriteria(r);
+    const what = criteria ? `No mail ${criteria}` : "No mail";
+    return `${what}${where}, ${window}.\n\n${offerNextRung(r)}`;
+  }
+
+  const header =
+    `**${messages.length} email${messages.length === 1 ? "" : "s"}**` +
+    `${mailboxes ? ` · ${mailboxes}` : ""} · ${window}`;
+
+  // A blank line between entries, and the sender, subject, date and mailbox
+  // each on their own line. The old single-line-plus-indent shape ran every
+  // result together, so a ten-message list read as one paragraph of noise.
+  const entries = messages.map((m, index) => {
+    const icon = IMPORTANCE_ICON[str(m, "importance") ?? ""] ?? "";
+    const spam = field(m, "spam") === true ? " ⚠️ SPAM" : "";
+    const receivedAt = field(m, "receivedAtMs");
+    const when =
+      typeof receivedAt === "number" ? formatDayTime(receivedAt, timezone) : str(m, "receivedAt");
+    const box = str(m, "accountLabel");
+    const snippet = (str(m, "snippet") ?? "").trim();
+
+    return [
+      `${icon ? `${icon} ` : ""}**${index + 1}. ${str(m, "from") ?? "?"}**${spam}`,
+      str(m, "subject") ?? "(no subject)",
+      `${when ?? ""}${box ? ` · ${box}` : ""}`,
+      snippet ? snippet.slice(0, SNIPPET_CAP) : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+
+  return [header, ...entries].join("\n\n");
 }
 
-function renderOne(outcome: ToolOutcome): string {
+/** Gmail's own preview is ~200 chars; anything longer is the body leaking. */
+const SNIPPET_CAP = 200;
+
+/** Telegram caps a message at 4096; leave room for the header lines. */
+const DRIVE_RENDER_CAP = 3500;
+
+/** The window enum, in words a sentence can use. */
+const WINDOW_WORDS: Record<string, string> = {
+  today: "today",
+  rest_of_today: "for the rest of today",
+  tomorrow: "tomorrow",
+  week: "this week",
+  next_week: "next week",
+};
+
+function renderOne(outcome: ToolOutcome, timezone: string): string {
   // "Waiting for your tap" is not a failure, even though the outcome is
   // ok:false — executeToolCall marks a consequential call ok:false precisely
   // BECAUSE it did not execute. This early return used to swallow that and
@@ -122,19 +240,34 @@ function renderOne(outcome: ToolOutcome): string {
   const r = outcome.result;
 
   switch (outcome.name) {
+    // On the Linear backend a task tool STAGES rather than writes, so saying
+    // "created" here would be a lie until the card is tapped. The staged
+    // line names what will happen, and the approval card that follows is
+    // what makes it happen.
     case "task.create":
+      if (field(r, "staged") === true) {
+        const created = field(r, "createdLabels");
+        const newLabels = Array.isArray(created) && created.length > 0
+          ? `\n🏷️ New label${created.length === 1 ? "" : "s"}: ${created.join(", ")}`
+          : "";
+        return `📋 Queued: ${str(r, "change") ?? str(r, "title") ?? "new issue"}${newLabels}`;
+      }
       return `✅ Task created: ${str(r, "title") ?? "(untitled)"}`;
 
     case "task.complete":
+      if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "close"}`;
       return `✅ Completed: ${str(r, "title") ?? "task"}`;
 
     case "task.update":
+      if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "update"}`;
       return "✏️ Task updated.";
 
     case "task.block":
+      if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "block"}`;
       return "🚧 Marked blocked.";
 
     case "task.unblock":
+      if (field(r, "staged") === true) return `📋 Queued: ${str(r, "change") ?? "unblock"}`;
       return "▶️ Unblocked — status is now RESUMED.";
 
     case "task.list": {
@@ -143,7 +276,12 @@ function renderOne(outcome: ToolOutcome): string {
       return rows
         .map((t) => {
           const due = str(t, "dueAt");
-          return `• ${str(t, "title") ?? "(untitled)"} — ${str(t, "status") ?? "?"}${
+          // A Linear-backed row carries its identifier and the team's own
+          // word for the column; a local one has neither.
+          const id = str(t, "taskId");
+          const identifier = id && /^[A-Z][A-Z0-9]*-\d+$/.test(id) ? `${id} ` : "";
+          const state = str(t, "stateName") ?? str(t, "status") ?? "?";
+          return `• ${identifier}${str(t, "title") ?? "(untitled)"} — ${state}${
             due ? `, due ${due}` : ""
           }`;
         })
@@ -193,9 +331,196 @@ function renderOne(outcome: ToolOutcome): string {
         "Read-only. The link works once and expires in 10 minutes.",
       ].join("\n");
 
+    case "calendar.list_events": {
+      const rows = field(r, "events");
+      const events = Array.isArray(rows) ? rows : [];
+      const when = WINDOW_WORDS[str(r, "window") ?? "today"] ?? "that window";
+      if (events.length === 0) return `Nothing on your calendar ${when}.`;
+
+      const lines = events.map((e) => {
+        const guests = field(e, "guests");
+        const guestCount = Array.isArray(guests) ? guests.length : 0;
+        const place = str(e, "location");
+        return [
+          `**${field(e, "allDay") === true ? "All day" : (str(e, "startsAt") ?? "?")}** — ${
+            str(e, "title") ?? "(no title)"
+          }`,
+          str(e, "endsAt") && field(e, "allDay") !== true ? `until ${str(e, "endsAt")}` : "",
+          place ? `📍 ${place}` : "",
+          guestCount > 0
+            ? `👥 ${guestCount === 1 ? (guests as string[])[0] : `${guestCount} guests`}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      });
+
+      return [`**Your calendar — ${when}**`, ...lines].join("\n\n");
+    }
+
+    case "calendar.get_event": {
+      if (field(r, "found") !== true) return "No event matching that.";
+      const guests = field(r, "guests");
+      const list = Array.isArray(guests) ? (guests as string[]) : [];
+      const place = str(r, "location");
+      const description = str(r, "description");
+      return [
+        `**${str(r, "title") ?? "(no title)"}**`,
+        field(r, "allDay") === true
+          ? "All day"
+          : `${str(r, "startsAt") ?? "?"} → ${str(r, "endsAt") ?? "?"}`,
+        place ? `📍 ${place}` : "",
+        list.length ? `👥 ${list.join(", ")}` : "",
+        description ? `\n${description.slice(0, 800)}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "calendar.find_free_slots": {
+      const rows = field(r, "slots");
+      const slots = Array.isArray(rows) ? rows : [];
+      const when = WINDOW_WORDS[str(r, "window") ?? "today"] ?? "that window";
+      const mins = field(r, "durationMinutes");
+      if (slots.length === 0) {
+        return `No ${typeof mins === "number" ? `${mins}-minute ` : ""}gap ${when}.`;
+      }
+      return [
+        `**Free ${typeof mins === "number" ? `for ${mins} min ` : ""}${when}**`,
+        ...slots.map((sl) => `• ${str(sl, "startsAt") ?? "?"} → ${str(sl, "endsAt") ?? "?"}`),
+      ].join("\n");
+    }
+
+    case "calendar.create_event": {
+      // An event with guests is HELD, not created. Saying "added" here would
+      // be a lie until the card is tapped — and a confident lie about
+      // somebody else's calendar is the worst kind in this system.
+      if (field(r, "awaitingApproval") === true) {
+        const guests = field(r, "attendees");
+        const list = Array.isArray(guests) ? (guests as string[]) : [];
+        return [
+          `📅 **Not sent yet** — ${str(r, "title") ?? "event"} at ${str(r, "startsAt") ?? "?"}`,
+          `Invites would go to ${list.join(", ")}.`,
+          `Tap **Send invite** on the card to confirm.`,
+        ].join("\n");
+      }
+      return [
+        `📅 Added: **${str(r, "title") ?? "event"}**`,
+        `${str(r, "startsAt") ?? "?"} → ${str(r, "endsAt") ?? "?"}`,
+      ].join("\n");
+    }
+
+    case "calendar.apply_event": {
+      if (field(r, "awaitingApproval") === true) {
+        const expires = str(r, "expiresAt");
+        return expires
+          ? `⏳ Tap Send invite on the card to confirm — expires ${expires}.`
+          : "⏳ Tap Send invite on the card to confirm.";
+      }
+      const guests = field(r, "attendees");
+      const list = Array.isArray(guests) ? (guests as string[]) : [];
+      return [
+        `📅 Invitation sent: **${str(r, "title") ?? "event"}**`,
+        `${str(r, "startsAt") ?? "?"}`,
+        list.length ? `Invited: ${list.join(", ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "drive.search_files": {
+      const rows = field(r, "files");
+      const files = Array.isArray(rows) ? rows : [];
+      const looked = str(r, "name") ?? str(r, "text") ?? str(r, "kind") ?? "that";
+      if (files.length === 0) return `Nothing in your Drive matching "${looked}".`;
+
+      // Numbered and dated, because this is a CHOOSING list. The whole
+      // Drive design is "the model narrows, you choose" — a list you cannot
+      // tell apart is not a choice.
+      const entries = files.map((f, i) =>
+        [
+          `**${i + 1}. ${str(f, "title") ?? "(untitled)"}**`,
+          [str(f, "kind"), str(f, "modifiedAt") ? `edited ${str(f, "modifiedAt")}` : ""]
+            .filter(Boolean)
+            .join(" · "),
+          str(f, "link") ?? "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+
+      return [
+        `**${files.length} file${files.length === 1 ? "" : "s"} matching "${looked}"**`,
+        ...entries,
+      ].join("\n\n");
+    }
+
+    case "drive.get_metadata": {
+      if (field(r, "found") !== true) return "No file matching that.";
+      return [
+        `**${str(r, "title") ?? "(untitled)"}**`,
+        [str(r, "kind"), str(r, "modifiedAt") ? `edited ${str(r, "modifiedAt")}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        str(r, "owner") ? `Owner: ${str(r, "owner")}` : "",
+        str(r, "link") ?? "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "drive.read_content": {
+      if (field(r, "found") !== true) return "No file matching that.";
+      if (field(r, "readable") !== true) {
+        return `I found **${str(r, "title") ?? "that file"}**, but I can't read it — ${
+          str(r, "reason") ?? "unsupported file type"
+        }.`;
+      }
+      const content = str(r, "content") ?? "";
+      return [
+        `**${str(r, "title") ?? "(untitled)"}**`,
+        [str(r, "kind"), str(r, "modifiedAt") ? `edited ${str(r, "modifiedAt")}` : ""]
+          .filter(Boolean)
+          .join(" · "),
+        "",
+        content.slice(0, DRIVE_RENDER_CAP) || "(empty)",
+        content.length > DRIVE_RENDER_CAP
+          ? `\n[…${content.length - DRIVE_RENDER_CAP} more characters]`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "email.archive":
+    case "email.mark_read":
+    case "email.mark_unread":
+    case "email.label": {
+      const what = `**${str(r, "subject") ?? "(no subject)"}** from ${str(r, "from") ?? "?"}`;
+      const box = str(r, "accountLabel");
+      const where = box ? ` · ${box}` : "";
+
+      switch (outcome.name) {
+        case "email.archive":
+          return `📥 Archived ${what}${where}\nStill in All Mail — nothing was deleted.`;
+        case "email.mark_read":
+          return `✅ Marked read: ${what}${where}`;
+        case "email.mark_unread":
+          return `📩 Marked unread: ${what}${where}`;
+        default: {
+          const label = str(r, "label") ?? "label";
+          const verb = field(r, "removed") === true ? "Removed" : "Added";
+          const made = field(r, "createdLabel") === true ? `\n🏷️ Created the "${label}" label.` : "";
+          return `🏷️ ${verb} **${label}** ${
+            field(r, "removed") === true ? "from" : "on"
+          } ${what}${where}${made}`;
+        }
+      }
+    }
+
     case "email.list_recent":
     case "email.search":
-      return renderEmailList(r);
+      return renderEmailList(r, timezone);
 
     case "email.create_draft": {
       // Deliberately does NOT include the body.
@@ -275,15 +600,34 @@ function renderOne(outcome: ToolOutcome): string {
         return `⚠️ Not applied: ${str(r, "error")}`;
       }
 
+      // A batch can hold new issues as well as edits, so both halves report.
+      const madeRows = field(r, "created");
+      const made = Array.isArray(madeRows) ? madeRows : [];
       const rows = field(r, "results");
       const results = Array.isArray(rows) ? rows : [];
-      const okCount = results.filter((x) => field(x, "success") === true).length;
-      const lines = results.map((x) =>
+
+      const createdLines = made.map((x) =>
+        field(x, "success") === true
+          ? `  ✅ ${str(x, "identifier") ?? "?"} — ${str(x, "title") ?? ""}`.trimEnd()
+          : `  ⚠️ "${str(x, "title") ?? "?"}" — ${str(x, "error") ?? "failed"}`,
+      );
+      const updatedLines = results.map((x) =>
         field(x, "success") === true
           ? `  ✅ ${str(x, "identifier") ?? str(x, "issueId")}`
           : `  ⚠️ ${str(x, "issueId") ?? "?"} — ${str(x, "error") ?? "failed"}`,
       );
-      return [`Applied ${okCount}/${results.length} changes to Linear:`, ...lines].join("\n");
+
+      const total = made.length + results.length;
+      const okCount =
+        made.filter((x) => field(x, "success") === true).length +
+        results.filter((x) => field(x, "success") === true).length;
+
+      return [
+        `Applied ${okCount}/${total} change${total === 1 ? "" : "s"} in Linear:`,
+        ...(createdLines.length ? ["  Created:", ...createdLines] : []),
+        ...(updatedLines.length && createdLines.length ? ["  Updated:"] : []),
+        ...updatedLines,
+      ].join("\n");
     }
 
     case "note.save": {
@@ -334,6 +678,61 @@ function renderOne(outcome: ToolOutcome): string {
       return [`📓 **${str(r, "title") ?? "Note"}**`, "", str(r, "markdown") ?? "(empty)"].join("\n");
     }
 
+    case "capture.propose": {
+      const rows = field(r, "items");
+      const items = Array.isArray(rows) ? rows : [];
+      const dupes = field(r, "duplicates");
+      const overflow = field(r, "overflow");
+
+      // The card carries the full list and the buttons. This line exists so
+      // the chat transcript says what is waiting, without duplicating it.
+      return [
+        `📥 Found **${items.length}** ${items.length === 1 ? "item" : "items"}: ${
+          str(r, "title") ?? "a list"
+        }`,
+        typeof dupes === "number" && dupes > 0
+          ? `Skipped ${dupes} duplicate${dupes === 1 ? "" : "s"}.`
+          : "",
+        typeof overflow === "number" && overflow > 0
+          ? `⚠️ ${overflow} more were left out — the cap is 30.`
+          : "",
+        `Tap **Add all ${items.length}** on the card to save them.`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    case "capture.apply": {
+      if (field(r, "awaitingApproval") === true) {
+        const expires = str(r, "expiresAt");
+        return expires
+          ? `⏳ Tap Add on the card to confirm — expires ${expires}.`
+          : "⏳ Tap Add on the card to confirm.";
+      }
+      const count = field(r, "count");
+      const n = typeof count === "number" ? count : 0;
+
+      if (str(r, "destination") === "notes") {
+        return [
+          `✅ Saved **${n}** ${n === 1 ? "item" : "items"} to ${
+            str(r, "category") ?? "your notes"
+          }: ${str(r, "title") ?? ""}`.trimEnd(),
+          str(r, "url") ?? "",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
+      const attempted = field(r, "attempted");
+      const total = typeof attempted === "number" ? attempted : n;
+      // On the Linear backend these are STAGED, not written — saying "added"
+      // before the second tap would be a lie about a shared tracker.
+      if (field(r, "staged") === true) {
+        return `📋 Queued **${n}** task${n === 1 ? "" : "s"} — tap Apply on the card to write them to Linear.`;
+      }
+      return `✅ Created **${n}**${total !== n ? ` of ${total}` : ""} task${n === 1 ? "" : "s"}.`;
+    }
+
     case "link.read": {
       const lines: string[] = [];
       const author = str(r, "authorName");
@@ -360,6 +759,22 @@ function renderOne(outcome: ToolOutcome): string {
       // Say plainly what could NOT be reached. Returning slide 1 as though it
       // were the whole post is the failure worth designing against, and the
       // fix the user can actually apply is screenshots.
+      // How much of the post was actually read. A ten-slide deck where four
+      // were reachable is a different answer from one where ten were, and the
+      // difference has to be visible before anything is built on it.
+      const read = field(r, "imagesRead");
+      const skipped = field(r, "imagesSkipped");
+      if (typeof read === "number" && read > 1) {
+        lines.push("", `_Read ${read} slides._`);
+      }
+      if (typeof skipped === "number" && skipped > 0) {
+        lines.push(
+          "",
+          `⚠️ ${skipped} further slide${skipped === 1 ? "" : "s"} were not read — ` +
+            `the cap is 20 per post.`,
+        );
+      }
+
       if (field(r, "slidesUnavailable") === true) {
         lines.push(
           "",
@@ -502,10 +917,19 @@ function renderOne(outcome: ToolOutcome): string {
       const capped = body.length > BODY_CAP
         ? body.slice(0, BODY_CAP) + `\n\n[…truncated, ${body.length - BODY_CAP} more characters]`
         : body;
+      // Same header vocabulary as a list row, so one email and a list of
+      // them read as the same product rather than two different tools.
+      const icon = IMPORTANCE_ICON[str(r, "importance") ?? ""] ?? "";
+      const receivedAt = field(r, "receivedAtMs");
+      const when =
+        typeof receivedAt === "number" ? formatDayTime(receivedAt, timezone) : str(r, "receivedAt");
+      const box = str(r, "accountLabel");
       return [
-        `From: ${str(r, "from")}`,
-        `Subject: ${str(r, "subject")}`,
-        field(r, "spam") === true ? "(in Spam)" : "",
+        `${icon ? `${icon} ` : ""}**${str(r, "from") ?? "?"}**${
+          field(r, "spam") === true ? " ⚠️ SPAM" : ""
+        }`,
+        `**${str(r, "subject") ?? "(no subject)"}**`,
+        `${when ?? ""}${box ? ` · ${box}` : ""}`,
         "",
         capped || "(no body)",
       ]

@@ -12,6 +12,10 @@ import {
 import {
   GMAIL_READONLY_SCOPES,
   GMAIL_SEND_SCOPES,
+  GMAIL_MODIFY_SCOPES,
+  CALENDAR_SCOPES,
+  DRIVE_SCOPES,
+  GOOGLE_CONNECT_SCOPES,
 } from "../../convex/connectors/gmail/oauth";
 
 const b64url = (s: string) =>
@@ -179,6 +183,53 @@ describe("normalizeMessage", () => {
 });
 
 describe("scopes — least privilege", () => {
+  test("modify is additive on send, and still never full access", () => {
+    expect(GMAIL_MODIFY_SCOPES).toEqual([
+      "https://www.googleapis.com/auth/gmail.readonly",
+      "https://www.googleapis.com/auth/gmail.compose",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/gmail.modify",
+    ]);
+    // modify can trash but cannot permanently delete. mail.google.com can.
+    // There is no undo for a hard delete, so that scope is never requested.
+    for (const scope of GMAIL_MODIFY_SCOPES) {
+      expect(scope).not.toBe("https://mail.google.com/");
+    }
+  });
+
+  test("Drive is read-only — no create, no share, no delete", () => {
+    expect(DRIVE_SCOPES).toEqual(["https://www.googleapis.com/auth/drive.readonly"]);
+    for (const scope of DRIVE_SCOPES) {
+      expect(scope).not.toContain("drive.file");
+      expect(scope).toContain("readonly");
+    }
+  });
+
+  test("Calendar reads and writes events, but asks for no more than that", () => {
+    expect(CALENDAR_SCOPES).toEqual([
+      "https://www.googleapis.com/auth/calendar.readonly",
+      "https://www.googleapis.com/auth/calendar.events",
+    ]);
+    for (const scope of CALENDAR_SCOPES) {
+      // The unrestricted calendar scope also grants calendar SHARING.
+      expect(scope).not.toBe("https://www.googleapis.com/auth/calendar");
+    }
+  });
+
+  test("one grant covers all three, and contains no surprises", () => {
+    const expected = new Set([
+      ...GMAIL_MODIFY_SCOPES,
+      ...CALENDAR_SCOPES,
+      ...DRIVE_SCOPES,
+    ]);
+    expect(new Set(GOOGLE_CONNECT_SCOPES)).toEqual(expected);
+    // Nothing destructive, ever.
+    for (const scope of GOOGLE_CONNECT_SCOPES) {
+      expect(scope).not.toBe("https://mail.google.com/");
+      expect(scope).not.toContain("drive.file");
+    }
+  });
+
   test("Phase 3 requests gmail.readonly and NOTHING else", () => {
     expect(GMAIL_READONLY_SCOPES).toEqual([
       "https://www.googleapis.com/auth/gmail.readonly",

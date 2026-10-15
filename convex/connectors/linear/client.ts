@@ -71,7 +71,7 @@ export interface LinearIssueSummary {
   url: string;
   priority: number; // Linear's own 0-4 scale — see LINEAR_PRIORITY in catalog.ts
   updatedAt: string;
-  state: { id: string; name: string };
+  state: { id: string; name: string; type?: string };
   assignee?: { name: string } | null;
 }
 
@@ -96,7 +96,7 @@ export function buildListIssuesQuery(options: {
             url
             priority
             updatedAt
-            state { id name }
+            state { id name type }
             assignee { name }
           }
         }
@@ -142,7 +142,7 @@ export function buildGetIssueQuery(id: string): { query: string; variables: Reco
           priority
           updatedAt
           description
-          state { id name }
+          state { id name type }
           assignee { name }
           team { id key }
         }
@@ -169,6 +169,16 @@ export async function getIssue(apiKey: string, id: string): Promise<LinearIssueD
 export interface LinearWorkflowState {
   id: string;
   name: string;
+  /**
+   * Linear's OWN category for the state: backlog | unstarted | started |
+   * completed | canceled | triage.
+   *
+   * This, not `name`, is what "move it to done" resolves against. A team can
+   * call its finished column "Shipped", "Live" or "🎉", and matching on the
+   * display name would work on one team's board and silently fail on the
+   * next. The type is the stable handle.
+   */
+  type: string;
 }
 
 /**
@@ -181,7 +191,7 @@ export function buildWorkflowStatesQuery(teamKey: string): { query: string; vari
     query: `
       query WorkflowStates($teamKey: String!) {
         team(id: $teamKey) {
-          states(first: 50) { nodes { id name } }
+          states(first: 50) { nodes { id name type } }
         }
       }
     `,
@@ -272,4 +282,218 @@ export async function applyChangeset(
     const failure = errors?.find((e) => e.path?.[0] === alias);
     return { issueId: change.issueId, success: false, error: failure?.message ?? "update failed" };
   });
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Creating issues, and resolving the things an issue needs to be created.
+//
+// Everything below resolves a NAME to an id in code. The model proposes a
+// team key, a label word, a state word — never a Linear UUID — which is the
+// same rule projectName and taskTitle follow elsewhere. A model-supplied id
+// is a guess wearing the costume of a fact.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface LinearTeam {
+  id: string;
+  key: string;
+  name: string;
+}
+
+/** Pure. */
+export function buildTeamsQuery(): { query: string; variables: Record<string, unknown> } {
+  return {
+    query: `
+      query Teams {
+        teams(first: 50) { nodes { id key name } }
+      }
+    `,
+    variables: {},
+  };
+}
+
+export async function listTeams(apiKey: string): Promise<LinearTeam[]> {
+  const { query, variables } = buildTeamsQuery();
+  const { data } = await linearFetch<{ teams: { nodes: LinearTeam[] } }>(apiKey, query, variables);
+  return data.teams.nodes;
+}
+
+export interface LinearLabel {
+  id: string;
+  name: string;
+}
+
+/** Pure. */
+export function buildLabelsQuery(): { query: string; variables: Record<string, unknown> } {
+  return {
+    query: `
+      query Labels {
+        issueLabels(first: 100) { nodes { id name } }
+      }
+    `,
+    variables: {},
+  };
+}
+
+export async function listLabels(apiKey: string): Promise<LinearLabel[]> {
+  const { query, variables } = buildLabelsQuery();
+  const { data } = await linearFetch<{ issueLabels: { nodes: LinearLabel[] } }>(
+    apiKey,
+    query,
+    variables,
+  );
+  return data.issueLabels.nodes;
+}
+
+/** Pure. */
+export function buildCreateLabelMutation(
+  name: string,
+  teamId: string,
+): { query: string; variables: Record<string, unknown> } {
+  return {
+    query: `
+      mutation CreateLabel($input: IssueLabelCreateInput!) {
+        issueLabelCreate(input: $input) { success issueLabel { id name } }
+      }
+    `,
+    variables: { input: { name, teamId } },
+  };
+}
+
+export async function createLabel(
+  apiKey: string,
+  name: string,
+  teamId: string,
+): Promise<LinearLabel | null> {
+  const { query, variables } = buildCreateLabelMutation(name, teamId);
+  const { data } = await linearFetch<{
+    issueLabelCreate: { success: boolean; issueLabel?: LinearLabel };
+  }>(apiKey, query, variables);
+  return data.issueLabelCreate.success ? (data.issueLabelCreate.issueLabel ?? null) : null;
+}
+
+export interface LinearIssueCreate {
+  teamId: string;
+  title: string;
+  description?: string;
+  /** Resolved ahead of time, same rule as stateId on LinearIssueChange. */
+  stateId?: string;
+  labelIds?: string[];
+  priority?: number;
+  /** Linear wants a plain YYYY-MM-DD for a due date, not a timestamp. */
+  dueDate?: string;
+}
+
+/**
+ * Pure. One `issueCreate` per new issue, ALIASED into a single request —
+ * exactly the shape buildApplyChangesetMutation uses, so a batch of creates
+ * costs one HTTP call and rides one approval.
+ */
+export function buildCreateIssuesMutation(
+  creates: LinearIssueCreate[],
+): { query: string; variables: Record<string, unknown> } {
+  const variables: Record<string, unknown> = {};
+
+  const fields = creates.map((create, i) => {
+    const alias = `n${i}`;
+    variables[`${alias}Input`] = {
+      teamId: create.teamId,
+      title: create.title,
+      ...(create.description !== undefined ? { description: create.description } : {}),
+      ...(create.stateId !== undefined ? { stateId: create.stateId } : {}),
+      ...(create.labelIds?.length ? { labelIds: create.labelIds } : {}),
+      ...(create.priority !== undefined ? { priority: create.priority } : {}),
+      ...(create.dueDate !== undefined ? { dueDate: create.dueDate } : {}),
+    };
+    return `${alias}: issueCreate(input: $${alias}Input) { success issue { id identifier title url } }`;
+  });
+
+  const varDecls = creates.map((_, i) => `$n${i}Input: IssueCreateInput!`).join(", ");
+
+  return {
+    query: `mutation CreateIssues(${varDecls}) {\n  ${fields.join("\n  ")}\n}`,
+    variables,
+  };
+}
+
+export interface LinearCreateResult {
+  success: boolean;
+  id?: string;
+  identifier?: string;
+  title?: string;
+  url?: string;
+  error?: string;
+}
+
+export async function createIssues(
+  apiKey: string,
+  creates: LinearIssueCreate[],
+): Promise<LinearCreateResult[]> {
+  if (creates.length === 0) return [];
+
+  const { query, variables } = buildCreateIssuesMutation(creates);
+  const { data, errors } = await linearFetch<
+    Record<
+      string,
+      { success: boolean; issue?: { id: string; identifier: string; title: string; url: string } } | null
+    >
+  >(apiKey, query, variables);
+
+  // Per-issue, same reasoning as applyChangeset: one rejected create must
+  // not discard the others' results.
+  return creates.map((create, i) => {
+    const alias = `n${i}`;
+    const result = data[alias];
+    if (result?.success && result.issue) {
+      return {
+        success: true,
+        id: result.issue.id,
+        identifier: result.issue.identifier,
+        title: result.issue.title,
+        url: result.issue.url,
+      };
+    }
+    const failure = errors?.find((e) => e.path?.[0] === alias);
+    return { success: false, title: create.title, error: failure?.message ?? "create failed" };
+  });
+}
+
+/** Pure. Linear's own full-text issue search, for resolving "the auth task". */
+export function buildSearchIssuesQuery(
+  term: string,
+  limit = 10,
+): { query: string; variables: Record<string, unknown> } {
+  return {
+    query: `
+      query SearchIssues($term: String!, $first: Int!) {
+        searchIssues(term: $term, first: $first) {
+          nodes {
+            id
+            identifier
+            title
+            url
+            priority
+            updatedAt
+            state { id name type }
+            assignee { name }
+          }
+        }
+      }
+    `,
+    variables: { term, first: limit },
+  };
+}
+
+export async function searchIssues(
+  apiKey: string,
+  term: string,
+  limit = 10,
+): Promise<LinearIssueSummary[]> {
+  const { query, variables } = buildSearchIssuesQuery(term, limit);
+  const { data } = await linearFetch<{ searchIssues: { nodes: LinearIssueSummary[] } }>(
+    apiKey,
+    query,
+    variables,
+  );
+  return data.searchIssues.nodes;
 }

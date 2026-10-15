@@ -6,6 +6,22 @@ import { z } from "zod";
 
 export const CLASSIFIER_VERSION = "v1";
 
+/**
+ * The importance badge, in one place.
+ *
+ * Lives here rather than in notify.ts because the alert card is no longer the
+ * only surface that shows it: a search result renders the same badge, and a
+ * list that disagreed with the card about what 🔴 means would be worse than
+ * no badge at all. notify.ts imports this; lib/ cannot import notify.ts.
+ */
+export const IMPORTANCE_ICON: Record<string, string> = {
+  CRITICAL: "🔴",
+  HIGH: "🟠",
+  NORMAL: "🟡",
+  LOW: "⚪",
+  IGNORE: "⚪",
+};
+
 export const ImportanceSchema = z.object({
   importance: z
     .enum(["CRITICAL", "HIGH", "NORMAL", "LOW", "IGNORE"])

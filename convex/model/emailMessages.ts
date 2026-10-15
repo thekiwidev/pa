@@ -239,3 +239,21 @@ export const normalize = internalQuery({
   args: { id: v.string() },
   handler: async (ctx, args) => ctx.db.normalizeId("emailMessages", args.id),
 });
+
+
+/**
+ * Overwrite a message's labels from Gmail's own response.
+ *
+ * Written from what Gmail SAID the labels now are, never from what we asked
+ * for — a partially-applied modify should leave the cache honest rather than
+ * optimistic, or the next "is this archived?" answers from a wish.
+ */
+export const setLabels = internalMutation({
+  args: {
+    emailMessageId: v.id("emailMessages"),
+    labelIds: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch("emailMessages", args.emailMessageId, { labelIds: args.labelIds });
+  },
+});

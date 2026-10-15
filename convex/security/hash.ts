@@ -54,13 +54,29 @@ function toHex(bytes: Uint8Array): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** One issue's proposed diff, in the shape the hash cares about. */
+/**
+ * One proposed Linear write, in the shape the hash cares about.
+ *
+ * `op` distinguishes an update from a create. A create has no issueId — it
+ * has a teamId and the fields the new issue will be born with — so every one
+ * of those must be in the canonical string too. A field that changes what
+ * gets written and is NOT hashed is a field the user can be shown one value
+ * for and have another applied.
+ */
 export interface ChangesetEntry {
-  issueId: string;
+  /** Absent means "update", so entries written before creates existed still
+   *  hash to the same string they always did. */
+  op?: "create" | "update";
+  /** Required for an update; absent on a create. */
+  issueId?: string;
+  /** Required for a create; absent on an update. */
+  teamId?: string;
   title?: string;
   description?: string;
   stateId?: string;
   priority?: number;
+  labelIds?: string[];
+  dueDate?: string;
 }
 
 /**
@@ -74,9 +90,17 @@ export interface ChangesetEntry {
 export async function changesetPayloadHash(changes: ChangesetEntry[]): Promise<string> {
   const canonical = changes
     .map((c) =>
-      [c.issueId, c.title ?? "", c.description ?? "", c.stateId ?? "", c.priority ?? ""].join(
-        "\u001f",
-      ),
+      [
+        c.op ?? "update",
+        c.issueId ?? "",
+        c.teamId ?? "",
+        c.title ?? "",
+        c.description ?? "",
+        c.stateId ?? "",
+        c.priority ?? "",
+        (c.labelIds ?? []).join(","),
+        c.dueDate ?? "",
+      ].join("\u001f"),
     )
     .join("\u001e");
 
@@ -97,4 +121,76 @@ export async function changesetPayloadHash(changes: ChangesetEntry[]): Promise<s
  */
 export function changesetIdFromHash(hash: string): string {
   return hash.slice(0, 16);
+}
+
+
+/**
+ * A calendar event awaiting approval, in the shape the hash cares about.
+ *
+ * Every field that changes what lands on someone else's calendar, or WHOSE
+ * calendar it lands on, is here. `attendees` especially: the difference
+ * between a solo focus block and a meeting invitation to a client is one
+ * array, and an approval that did not bind it could be shown to you as the
+ * former and applied as the latter.
+ */
+export interface CalendarEventEntry {
+  calendarId: string;
+  summary: string;
+  startIso: string;
+  endIso: string;
+  timeZone: string;
+  description?: string;
+  location?: string;
+  attendees?: string[];
+}
+
+export async function calendarEventPayloadHash(event: CalendarEventEntry): Promise<string> {
+  const canonical = [
+    event.calendarId,
+    event.summary,
+    event.startIso,
+    event.endIso,
+    event.timeZone,
+    event.description ?? "",
+    event.location ?? "",
+    // Sorted: the same guest list in a different order is the same invitation,
+    // and re-proposing it should not produce a different approval.
+    [...(event.attendees ?? [])].map((a) => a.trim().toLowerCase()).sort().join(","),
+  ].join(SEPARATOR);
+
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return toHex(new Uint8Array(digest));
+}
+
+
+/**
+ * A batch of captured items awaiting confirmation.
+ *
+ * Bound the same way a draft and a Linear changeset are: every field that
+ * changes what gets written, in a fixed order. The ITEMS are hashed
+ * individually rather than as a count, because "5 movies" matching is not
+ * the same claim as "these 5 movies" matching — a re-extraction that found a
+ * different fifth film must not satisfy an approval the user gave for the
+ * first one.
+ */
+export interface CaptureBatchEntry {
+  destination: string;
+  category?: string;
+  title: string;
+  items: { title: string; detail?: string }[];
+  sourceUrl?: string;
+}
+
+export async function captureBatchPayloadHash(batch: CaptureBatchEntry): Promise<string> {
+  const canonical = [
+    batch.destination,
+    batch.category ?? "",
+    batch.title,
+    batch.sourceUrl ?? "",
+    // Order is part of the payload: the user saw a numbered list.
+    batch.items.map((i) => `${i.title}\u001d${i.detail ?? ""}`).join("\u001e"),
+  ].join(SEPARATOR);
+
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return toHex(new Uint8Array(digest));
 }

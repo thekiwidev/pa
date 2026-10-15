@@ -4,6 +4,8 @@ import { internal } from "./_generated/api";
 import { checkConfig } from "./lib/config";
 import { authorizeUrl } from "./connectors/gmail/oauth";
 import { answerCallbackQuery } from "./channels/telegram";
+import { verifyGooglePushToken } from "./connectors/google/jwt";
+import { parsePushEnvelope } from "./lib/email/pubsub";
 
 const http = httpRouter();
 
@@ -558,6 +560,11 @@ http.route({
       userId: state.userId,
       label: state.label,
       telegramId: user.telegramId,
+      // A fresh /connect names the mailbox; a /reconnect only refreshes a
+      // credential and must leave the existing label alone. `state.label` is
+      // already the account's own label on the reconnect path, so this is
+      // belt and braces — see the note on connectedAccounts.upsert.
+      relabel: state.reconnectAccountId === undefined,
     });
 
     return page(
@@ -582,6 +589,90 @@ function page(status: number, heading: string, body: string): Response {
   );
 }
 
-// Phase 8 adds: POST /webhooks/gmail
+/**
+ * Gmail push notifications, via Google Cloud Pub/Sub.
+ *
+ * This endpoint is on `.convex.site` and is therefore PUBLIC. Nothing about
+ * the URL is secret and nothing about it can be — so the only thing between
+ * a stranger and "make this deployment sync a mailbox" is the OIDC token
+ * Google attaches to every push, verified below against Google's own keys.
+ *
+ * Three rules this handler follows, all of them about not making things
+ * worse than a missed notification:
+ *
+ *  1. It ALWAYS returns 200, even when it refuses. A non-2xx tells Pub/Sub
+ *     to redeliver, so an unparseable or unauthorised push returned as an
+ *     error becomes an infinite retry loop against this deployment.
+ *  2. The envelope says only WHICH mailbox changed. It never carries message
+ *     content, and none is read from it — the body is fetched from Gmail
+ *     under our own credential, so a forged envelope cannot inject an email.
+ *  3. It schedules and returns. Pub/Sub has an acknowledgement deadline, and
+ *     a sync plus classification is far too slow to hold it open.
+ */
+http.route({
+  path: "/webhooks/gmail",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const ack = () => new Response(null, { status: 200 });
+
+    const audience = process.env.GOOGLE_PUBSUB_AUDIENCE;
+    const serviceAccountEmail = process.env.GOOGLE_PUBSUB_SA_EMAIL;
+    if (!audience || !serviceAccountEmail) {
+      // Unconfigured is not "allow anyone" — it is "this endpoint is closed".
+      console.warn("gmail_push_unconfigured: GOOGLE_PUBSUB_AUDIENCE/SA_EMAIL not set");
+      return ack();
+    }
+
+    const header = request.headers.get("Authorization") ?? "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!token) {
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "gmail.push_rejected",
+        args: { reason: "no bearer token" },
+        result: "denied",
+      });
+      return ack();
+    }
+
+    const verified = await verifyGooglePushToken(token, {
+      audience,
+      serviceAccountEmail,
+      nowMs: Date.now(),
+    });
+    if (!verified.ok) {
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "gmail.push_rejected",
+        args: { reason: verified.reason },
+        result: "denied",
+      });
+      return ack();
+    }
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return ack();
+    }
+
+    const envelope = parsePushEnvelope(body);
+    if (!envelope) return ack();
+
+    const account = await ctx.runQuery(internal.gmail.accountByEmail, {
+      accountEmail: envelope.emailAddress,
+    });
+    // A push for a mailbox this deployment does not know about is not an
+    // error — it is a watch that outlived its account. Drop it quietly.
+    if (!account) return ack();
+
+    await ctx.scheduler.runAfter(0, internal.gmail.syncFromHistory, {
+      accountId: account.accountId,
+    });
+
+    return ack();
+  }),
+});
 
 export default http;

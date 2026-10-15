@@ -28,6 +28,7 @@ bunx convex env list --prod   # verify prod
 all `*_API_KEY` · all `*_MODEL_*` · `GOOGLE_CLIENT_ID` · `GOOGLE_CLIENT_SECRET` ·
 `GOOGLE_PUBSUB_AUDIENCE` · `GOOGLE_PUBSUB_SA_EMAIL` · `USER_TIMEZONE` ·
 `APPROVAL_TTL_MINUTES` · `MAX_ALERTS_PER_HOUR` · `ZOHO_*` · `MS_*` · `LINEAR_API_KEY
+LINEAR_TEAM_KEY
 NOTION_API_KEY
 NOTION_NOTES_DATABASE_ID`
 
@@ -41,10 +42,10 @@ NOTION_NOTES_DATABASE_ID`
 | 3 | `GOOGLE_CLIENT_ID` `GOOGLE_CLIENT_SECRET` `GOOGLE_REDIRECT_URI` |
 | 5 | `MAX_ALERTS_PER_HOUR` |
 | 6 | `APPROVAL_TTL_MINUTES` — real sending starts here; `AUTONOMOUS_SEND_ENABLED` still must not exist yet (see phase 18's row) |
-| 8 | `GOOGLE_PUBSUB_TOPIC` `GOOGLE_PUBSUB_AUDIENCE` `GOOGLE_PUBSUB_SA_EMAIL` |
+| 8 | `GOOGLE_PUBSUB_TOPIC` (full topic path, `projects/<project>/topics/<topic>`) · `GOOGLE_PUBSUB_AUDIENCE` (the push endpoint URL, `https://<deployment>.convex.site/webhooks/gmail`) · `GOOGLE_PUBSUB_SA_EMAIL` (the service account the subscription pushes as). **All three unset = the webhook is closed, not open** — it refuses every push rather than trusting it |
 | 9 | `GEMINI_MODEL_TRANSCRIBE` (+ optional `OPENAI_*`, `AI_ROUTE_TRANSCRIBE_VOICE`) |
 | 15 | `ZOHO_CLIENT_ID` `ZOHO_CLIENT_SECRET` `MS_CLIENT_ID` `MS_CLIENT_SECRET` `MS_TENANT_ID` |
-| 16 | `LINEAR_API_KEY` |
+| 16 | `LINEAR_API_KEY` · `LINEAR_TEAM_KEY` (optional — which team a new issue is created in. Needed only when the key can see more than one team; with exactly one, that one is used and this can stay unset) |
 | 17 | an `EMBED`-tier model name — not defined by the source plan (gap #5) |
 | 18 | `AUTONOMOUS_SEND_ENABLED` — **must not exist before this phase** |
 

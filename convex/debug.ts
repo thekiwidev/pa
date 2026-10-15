@@ -11,6 +11,9 @@ import { planningSystemPrompt, tldrOnlySystemPrompt } from "./lib/prompts/assist
 import { converse } from "./assistant";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { TASKS, modelEnvVar, type TaskName } from "./lib/ai/tiers";
+import { pickBackend } from "./lib/tasks/backend";
+import { listOpenLinearIssues } from "./tools/router";
+import { listTeams, listLabels, listWorkflowStates } from "./connectors/linear/client";
 
 /**
  * Operator tools. Internal only — there is no URL for these, so they are
@@ -130,25 +133,37 @@ export const planOnly = internalAction({
     const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId });
     if (!user) throw new Error("owner has no user row yet — message the bot once first");
 
-    const [projects, openTasks] = await Promise.all([
+    const [projects, localTasks, accounts] = await Promise.all([
       ctx.runQuery(internal.model.projects.listActive, { userId: user._id, limit: 15 }),
       ctx.runQuery(internal.model.tasks.list, { userId: user._id, limit: 15 }),
+      ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId: user._id }),
     ]);
+
+    // Mirror converse()'s backend choice, or this tool prints a prompt the
+    // assistant never sees — which is the one thing it exists not to do.
+    const taskBackend = pickBackend(
+      accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
+    );
+    const openTasks =
+      taskBackend === "linear"
+        ? await listOpenLinearIssues(ctx, user._id)
+        : localTasks
+            .filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED")
+            .map((t) => ({ taskId: t._id as string, title: t.title, status: t.status }));
 
     const system = planningSystemPrompt({
       displayName: user.displayName,
       timezone,
       nowMs: Date.now(),
       projects: projects.map((p) => ({ name: p.name, status: p.status })),
-      openTasks: openTasks
-        .filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED")
-        .map((t) => ({ taskId: t._id, title: t.title, status: t.status })),
+      openTasks,
+      taskBackend,
       reminders: [],
-      connectedAccounts: (
-        await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
-          userId: user._id,
-        })
-      ).map((a) => ({ label: a.label, email: a.accountEmail, status: a.status })),
+      connectedAccounts: accounts.map((a) => ({
+        label: a.label,
+        email: a.accountEmail,
+        status: a.status,
+      })),
       customInstructions: (
         await ctx.runQuery(internal.model.instructions.list, { userId: user._id })
       ).map((i) => i.text),
@@ -241,6 +256,10 @@ export const connectLinear = internalAction({
       credentialIv: sealed.iv,
       credentialAuthTag: sealed.authTag,
       scopesGranted: [],
+      // Deliberate: "linear" is a fixed literal, not a name the user chose,
+      // so re-running this bootstrap should restore it. Gmail's reconnect
+      // path is the opposite case and passes relabel:false.
+      relabel: true,
     });
 
     return { accountId: result.accountId, created: result.created };
@@ -306,6 +325,137 @@ export const cryptoSelfTest = internalAction({
 
 /** Recent auditLogs, newest first — what actually happened, durably, unlike
  *  `convex logs` which only tails forward from the moment you run it. */
+/**
+ * What is connected, and therefore where tasks live.
+ *
+ * Read-only. Exists because the two facts it prints are the ones that break
+ * silently: a mailbox LABEL (which a bad /reconnect used to overwrite, so
+ * "check my primary mailbox" stopped matching anything) and which store owns
+ * tasks (which changes what task.create does).
+ *
+ *   bunx convex run debug:accounts '{}'
+ */
+export const accounts = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Record<string, unknown>> => {
+    const telegramId = process.env.TELEGRAM_OWNER_ID;
+    if (!telegramId) throw new Error("TELEGRAM_OWNER_ID is not set");
+
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId });
+    if (!user) throw new Error("owner has no user row yet — message the bot once first");
+
+    const rows = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
+      userId: user._id,
+    });
+
+    // What each Google account can actually DO. Scopes are granted at
+    // connect time and Google never adds one to an existing token, so an
+    // account connected before a capability shipped has a perfectly valid
+    // credential that silently cannot use it. This is the readout that makes
+    // that visible instead of surfacing as a 403 mid-conversation.
+    const can = (a: (typeof rows)[number], scope: string) =>
+      a.provider === "gmail" && a.status === "ACTIVE" && a.scopesGranted.includes(scope);
+
+    const CAPABILITIES = {
+      readMail: "https://www.googleapis.com/auth/gmail.readonly",
+      sendMail: "https://www.googleapis.com/auth/gmail.send",
+      mailboxActions: "https://www.googleapis.com/auth/gmail.modify",
+      calendar: "https://www.googleapis.com/auth/calendar.events",
+      drive: "https://www.googleapis.com/auth/drive.readonly",
+    };
+
+    return {
+      accounts: rows.map((a) => ({
+        provider: a.provider,
+        label: a.label,
+        email: a.accountEmail,
+        status: a.status,
+        ...(a.provider === "gmail"
+          ? {
+              can: Object.entries(CAPABILITIES)
+                .filter(([, scope]) => can(a, scope))
+                .map(([name]) => name),
+              watchExpiresAt: a.watchExpiresAt
+                ? new Date(a.watchExpiresAt).toISOString()
+                : "(no push watch)",
+            }
+          : {}),
+      })),
+      mailboxLabels: rows
+        .filter((a) => a.provider === "gmail" && a.status === "ACTIVE")
+        .map((a) => a.label),
+      taskBackend: pickBackend(
+        rows.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
+      ),
+      linearTeamKey: process.env.LINEAR_TEAM_KEY ?? "(unset — uses the only team, or asks)",
+      gmailPush: process.env.GOOGLE_PUBSUB_TOPIC
+        ? {
+            topic: process.env.GOOGLE_PUBSUB_TOPIC,
+            audienceSet: Boolean(process.env.GOOGLE_PUBSUB_AUDIENCE),
+            serviceAccountSet: Boolean(process.env.GOOGLE_PUBSUB_SA_EMAIL),
+          }
+        : "(not configured — mail is polled every 10 min instead)",
+    };
+  },
+});
+
+/**
+ * Prove the Linear connection and every lookup task.create depends on.
+ *
+ * Read-only. Mirrors debug:checkNotion — a GraphQL field name that is wrong
+ * fails identically to a bad key, and finding that out from a failed
+ * task.create in Telegram is the expensive way.
+ *
+ *   bunx convex run debug:checkLinear '{}'
+ */
+export const checkLinear = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Record<string, unknown>> => {
+    const telegramId = process.env.TELEGRAM_OWNER_ID;
+    if (!telegramId) throw new Error("TELEGRAM_OWNER_ID is not set");
+
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId });
+    if (!user) throw new Error("owner has no user row yet — message the bot once first");
+
+    const rows = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
+      userId: user._id,
+    });
+    const account = rows.find((a) => a.provider === "linear" && a.status === "ACTIVE");
+    if (!account) {
+      return {
+        ok: false,
+        hint: "No ACTIVE Linear account. Run `bunx convex run debug:connectLinear '{}'`.",
+      };
+    }
+
+    const apiKey = await open({
+      ciphertext: account.encryptedCredentials,
+      iv: account.credentialIv,
+      authTag: account.credentialAuthTag,
+    });
+
+    const teams = await listTeams(apiKey);
+    const labels = await listLabels(apiKey);
+    const wanted = process.env.LINEAR_TEAM_KEY;
+    const team = wanted
+      ? teams.find((t) => t.key.toLowerCase() === wanted.toLowerCase())
+      : teams.length === 1
+        ? teams[0]
+        : undefined;
+
+    const states = team ? await listWorkflowStates(apiKey, team.key) : [];
+
+    return {
+      ok: true,
+      teams: teams.map((t) => t.key),
+      teamForNewIssues: team?.key ?? "(ambiguous — set LINEAR_TEAM_KEY)",
+      // The `type` on each is what "move it to done" actually matches against.
+      states: states.map((st) => `${st.name} (${st.type})`),
+      labels: labels.map((l) => l.name).slice(0, 40),
+    };
+  },
+});
+
 export const recentAudit = internalQuery({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {

@@ -3,7 +3,15 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { v } from "convex/values";
-import { payloadHash, changesetPayloadHash, type ChangesetEntry } from "../security/hash";
+import {
+  payloadHash,
+  changesetPayloadHash,
+  calendarEventPayloadHash,
+  captureBatchPayloadHash,
+  type ChangesetEntry,
+  type CalendarEventEntry,
+  type CaptureBatchEntry,
+} from "../security/hash";
 import { recipientsContained } from "../lib/email/recipients";
 
 const DEFAULT_TTL_MINUTES = 30;
@@ -180,6 +188,68 @@ export const consume = internalMutation({
         return {
           ok: false,
           reason: "That batch changed after it was approved. Propose it again to re-approve.",
+        };
+      }
+
+      await ctx.db.patch("approvals", approval._id, {
+        status: "CONSUMED",
+        decidedAt: Date.now(),
+      });
+      return { ok: true, approvalId: approval._id };
+    }
+
+    // A calendar event with guests. Same content-addressed shape as a Linear
+    // batch: the pending event lives in `preferences`, and the hash is
+    // recomputed from it rather than trusted from the approval row — so
+    // editing the guest list after the card was sent voids the approval
+    // instead of quietly inviting somebody you did not agree to invite.
+    // A captured batch. Content-addressed like the two above, and hashed
+    // over the ITEMS rather than a count — an approval given for five
+    // specific films must not be satisfiable by a different fifth film.
+    if (args.targetType === "capture_batches") {
+      const stored = await ctx.db
+        .query("preferences")
+        .withIndex("by_user_key", (q) =>
+          q.eq("userId", approval.userId).eq("key", `capture_batch:${args.targetId}`),
+        )
+        .first();
+      if (!stored) {
+        return { ok: false, reason: "That list is no longer pending. Ask for it again." };
+      }
+
+      const batch = (stored.value as { batch: CaptureBatchEntry }).batch;
+      const liveHash = await captureBatchPayloadHash(batch);
+      if (liveHash !== approval.payloadHash) {
+        return {
+          ok: false,
+          reason: "That list changed after it was approved. Ask for it again to re-approve.",
+        };
+      }
+
+      await ctx.db.patch("approvals", approval._id, {
+        status: "CONSUMED",
+        decidedAt: Date.now(),
+      });
+      return { ok: true, approvalId: approval._id };
+    }
+
+    if (args.targetType === "calendar_events") {
+      const stored = await ctx.db
+        .query("preferences")
+        .withIndex("by_user_key", (q) =>
+          q.eq("userId", approval.userId).eq("key", `calendar_event:${args.targetId}`),
+        )
+        .first();
+      if (!stored) {
+        return { ok: false, reason: "That event is no longer pending. Ask for it again." };
+      }
+
+      const event = (stored.value as { event: CalendarEventEntry }).event;
+      const liveHash = await calendarEventPayloadHash(event);
+      if (liveHash !== approval.payloadHash) {
+        return {
+          ok: false,
+          reason: "That event changed after it was approved. Ask for it again to re-approve.",
         };
       }
 

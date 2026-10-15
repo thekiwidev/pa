@@ -187,3 +187,154 @@ export async function sendMessage(
   if (!res.ok) throw new GmailApiError(res.status, await res.text());
   return (await res.json()) as { id: string; threadId: string };
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 8 — modify, watch, and history.
+//
+// Everything below needs the gmail.modify scope. Note what is NOT here:
+// there is no messages.delete and no threads.delete, because this project
+// never requests https://mail.google.com/ and a permanent delete has no undo.
+// TRASH is reachable through modify and is reversible; that is the line.
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface GmailLabel {
+  id: string;
+  name: string;
+  type?: string;
+}
+
+export async function listLabels(accessToken: string): Promise<GmailLabel[]> {
+  const res = await fetch(`${BASE}/labels`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+  const data = (await res.json()) as { labels?: GmailLabel[] };
+  return data.labels ?? [];
+}
+
+export async function createLabel(accessToken: string, name: string): Promise<GmailLabel> {
+  const res = await fetch(`${BASE}/labels`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name,
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show",
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+  return (await res.json()) as GmailLabel;
+}
+
+/**
+ * Add and/or remove labels on one message.
+ *
+ * This is the single primitive behind archive, mark-read and label:
+ *   archive     = remove INBOX
+ *   mark read   = remove UNREAD
+ *   mark unread = add UNREAD
+ *
+ * Gmail models all three as label edits, which is also why all three are
+ * reversible — nothing here destroys anything.
+ */
+export async function modifyMessage(
+  accessToken: string,
+  messageId: string,
+  changes: { addLabelIds?: string[]; removeLabelIds?: string[] },
+): Promise<{ id: string; labelIds?: string[] }> {
+  const res = await fetch(`${BASE}/messages/${encodeURIComponent(messageId)}/modify`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      addLabelIds: changes.addLabelIds ?? [],
+      removeLabelIds: changes.removeLabelIds ?? [],
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+  return (await res.json()) as { id: string; labelIds?: string[] };
+}
+
+/**
+ * Ask Gmail to publish change notifications to a Pub/Sub topic.
+ *
+ * The returned expiration is at most SEVEN DAYS out, and Google recommends
+ * renewing daily. A lapsed watch fails silently — no error, just no
+ * notifications ever again — which is why renewal is a cron and not a
+ * one-time setup step, and why the polling sync stays as a safety net.
+ */
+export async function watchMailbox(
+  accessToken: string,
+  topicName: string,
+): Promise<{ historyId: string; expiration: string }> {
+  const res = await fetch(`${BASE}/watch`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    // No labelIds filter: SPAM must be watched too. Filtering to INBOX here
+    // would reintroduce the exact failure includeSpamTrash exists to prevent.
+    body: JSON.stringify({ topicName }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+  return (await res.json()) as { historyId: string; expiration: string };
+}
+
+export async function stopWatch(accessToken: string): Promise<void> {
+  const res = await fetch(`${BASE}/stop`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  // 404 means there was no active watch, which is the desired end state.
+  if (!res.ok && res.status !== 404) throw new GmailApiError(res.status, await res.text());
+}
+
+export interface GmailHistoryRecord {
+  id: string;
+  messagesAdded?: { message: GmailMessageRef }[];
+}
+
+/**
+ * What changed since `startHistoryId`.
+ *
+ * Returns `expired: true` when Gmail no longer holds that far back — history
+ * is kept for a limited window, and an account that was quiet for a week
+ * comes back with a 404. That is not an error, it is an instruction to fall
+ * back to a full window sync, and conflating the two would mean silently
+ * missing mail.
+ */
+export async function listHistory(
+  accessToken: string,
+  startHistoryId: string,
+): Promise<{ expired: boolean; records: GmailHistoryRecord[]; historyId?: string }> {
+  const params = new URLSearchParams({
+    startHistoryId,
+    historyTypes: "messageAdded",
+    maxResults: "200",
+  });
+  const res = await fetch(`${BASE}/history?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (res.status === 404) return { expired: true, records: [] };
+  if (!res.ok) throw new GmailApiError(res.status, await res.text());
+
+  const data = (await res.json()) as {
+    history?: GmailHistoryRecord[];
+    historyId?: string;
+  };
+  return { expired: false, records: data.history ?? [], historyId: data.historyId };
+}

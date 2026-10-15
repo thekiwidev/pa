@@ -29,7 +29,9 @@ describe("buildListIssuesQuery", () => {
   test("query text requests the fields the router depends on", () => {
     const { query } = buildListIssuesQuery({});
     expect(query).toContain("identifier");
-    expect(query).toContain("state { id name }");
+    // `type` is load-bearing: moving an issue to "done" resolves against
+    // Linear's state CATEGORY, never the team's display name for it.
+    expect(query).toContain("state { id name type }");
   });
 });
 

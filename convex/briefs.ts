@@ -10,6 +10,8 @@ import { nextOccurrenceOf } from "./model/briefConfig";
 import { TELEGRAM_FORMAT_CONTRACT } from "./lib/prompts/format";
 import { buildKnowledgeBlock } from "./lib/prompts/knowledge";
 import { normalizeCategory } from "./lib/userContext";
+import { pickBackend } from "./lib/tasks/backend";
+import { listOpenLinearIssues } from "./tools/router";
 
 /* ── Pure: gathering + formatting. No ctx, no fetch — bun test runs this
    with no Convex runtime, same boundary as everything in convex/lib/. ── */
@@ -266,6 +268,31 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
   const untilMs = Date.now();
   const sinceMs = sinceYesterdayMidnight(untilMs, timezone);
 
+  // The brief must show the board the user actually works from. It read only
+  // the Convex table, so once Linear owned the tasks the morning brief
+  // quietly reported "(none)" every day — the worst kind of wrong, because
+  // an empty list looks like an answer.
+  const taskBackendKind = pickBackend(
+    accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
+  );
+
+  let tasks: { title: string; status: string; dueAt?: number }[] = tasksRaw.map((t) => ({
+    title: t.title,
+    status: t.status,
+    dueAt: t.dueAt,
+  }));
+
+  if (taskBackendKind === "linear") {
+    try {
+      const issues = await listOpenLinearIssues(ctx, userId, 25);
+      tasks = issues.map((i) => ({ title: `${i.taskId} ${i.title}`, status: i.status }));
+    } catch (error) {
+      // A Linear outage must not silently render as an empty board — say it.
+      console.warn(`brief_linear_load_failed: ${String(error)}`);
+      tasks = [{ title: "(could not reach Linear — board not shown)", status: "UNKNOWN" }];
+    }
+  }
+
   const accountIds = accounts.filter((a) => a.status === "ACTIVE").map((a) => a._id);
   // limit:50, not 25 — this is filtered by TIME after fetching, so it must
   // fetch enough to actually cover a ~30-hour window, not just "recent 25".
@@ -291,7 +318,7 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     timezone,
     sinceMs,
     notes: config.notes,
-    tasks: tasksRaw.map((t) => ({ title: t.title, status: t.status, dueAt: t.dueAt })),
+    tasks,
     blockers: blockersRaw.flatMap(({ task, blockers }) =>
       blockers.map((b) => ({
         taskTitle: task.title,

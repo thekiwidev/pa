@@ -9,6 +9,356 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-09-07 — "Is this possible?" is a research task with a real answer, and the answer was no
+
+The WhatsApp requirement was specific and reasonable: watch the main personal
+account, notice when a client asks for something, say so in Telegram. The
+instinct is to reach for a library — `whatsapp-web.js` and Baileys both do
+exactly this and are one npm install away.
+
+What the research actually found, and what makes it a decision rather than a
+preference:
+
+- Meta's official Cloud API is **structurally** incapable of it. Not
+  "restricted" — it is a send pipe with an inbound webhook for messages sent
+  TO a business number. There is no conversation to read, and a personal
+  account is not addressable.
+- Every product that *can* do it — Unipile, Blueticks, Whapi, and the open
+  libraries — pairs as a linked device over a reverse-engineered protocol.
+  Meta detects this at the network layer; the reported outcome is a permanent
+  ban with no effective appeal, typically inside 2–8 weeks.
+
+The part worth keeping is the framing of the trade. **The account at risk is
+the same account the feature exists to watch.** A notification is not worth a
+permanent loss of the channel carrying client and employer conversations, at
+any probability. That reasoning survives even if a future library gets better
+at hiding.
+
+Second, independent blocker, and a useful habit: check whether the thing can
+even *live* on the stack. A QR session is a long-lived WebSocket; Convex is
+serverless V8 with no persistent processes. Two unrelated blockers is a
+stronger no than one, and finding the second one costs a minute.
+
+---
+
+## 2026-09-07 — A platform limit is worth stating in the product, not just working around
+
+Instagram publishes only the COVER slide of a carousel to an unauthenticated
+reader. Verified again on 2026-09-07: oEmbed returns embed HTML with a
+thumbnail and no media URLs, and Business Discovery needs the poster to be a
+Professional account, needs a USERNAME rather than a link, and needs your own
+Professional account plus App Review. There is no endpoint that takes a post
+URL and returns its children.
+
+Two temptations, both wrong:
+
+1. **Return slide one and say nothing.** This is the real failure mode — the
+   user asks for ten movies, gets two, and has no way to know the other eight
+   were never seen.
+2. **Scrape it.** Works until it does not, costs money through a provider,
+   and puts the same ToS question back on the table.
+
+What actually works is already in the product: **send the slides as a
+Telegram album.** That path reads every image and always did. So the link
+path says plainly what it could not reach and asks for the album, which turns
+a hard limit into a one-step workaround instead of a silent truncation.
+
+The general rule: when a capability is bounded by somebody else's platform,
+the bound belongs in the user-facing output. A gap the user can see is a gap
+they can route around.
+
+---
+
+## 2026-09-07 — Cap sizes are a claim about the data, and a silent one rots
+
+`readPostImages` did `.slice(0, 4)`. Four was presumably a reasonable guess
+when the feature read single-image posts. Applied to an educational carousel
+it discarded 60% of the content, and nothing in the result said so — the
+model then confidently summarised half a deck.
+
+Three things fixed together, and the second two are the transferable part:
+
+- The cap moved to 20, which is Instagram's own carousel maximum, so it is
+  now a number with a REASON rather than a guess.
+- Overflow is **reported**. A cap the user cannot see is indistinguishable
+  from the post having been short.
+- The token budget scaled with the input. `maxOutputTokens: 2000` was a
+  two-slide allowance quietly truncating a ten-slide read — a second silent
+  cap sitting behind the first.
+
+Worth auditing elsewhere: a magic number bounding how much of the user's data
+is looked at is a product decision wearing a constant's clothes.
+
+---
+
+## 2026-09-06 — "Consequential" is a property of the ARGUMENTS, not of the tool
+
+Phase 10 states the rule as *"consequentiality is about attendees, not about
+writing"*: blocking your own time affects nobody, inviting a client affects
+somebody. Both are `calendar.create_event`.
+
+`meta.consequential` is a static boolean read by the gate BEFORE dispatch, so
+one tool cannot be both. The tempting fix — make the gate async and let it
+inspect the arguments — puts a runtime decision inside the one piece of code
+whose entire value is being unconditional.
+
+The answer was already in the codebase, twice: `linear.propose_changeset` and
+the Linear task backend both **propose** without being consequential, and a
+separate `apply` tool carries the flag. Stated generally: **a tool that
+proposes is never consequential, whatever it proposes about.** So
+`calendar.create_event` either creates a solo event outright or holds an
+invitation, and `calendar.apply_event` is the gated half.
+
+This is the third feature to land on the same shape. It is the pattern now,
+not a workaround.
+
+---
+
+## 2026-09-06 — Least privilege has a migration cost, and it is paid on reconnect
+
+Adding Calendar, Drive and `gmail.modify` to the scope list does nothing for
+accounts that already exist. Google does not retroactively grant a scope to a
+token issued without it, so three perfectly healthy accounts had valid
+credentials that could not touch a calendar.
+
+The failure mode without a check is a raw 403 from inside a fetch, which reads
+exactly like a broken integration. So `googleAccountFor` looks for the scope
+in `scopesGranted` BEFORE calling anything and says the one sentence that
+fixes it — reconnect once.
+
+Worth keeping for the next connector: **the alternative was worse.** Asking
+for calendar and drive on day one, before anything used them, means a consent
+screen demanding permissions the app cannot justify. The migration cost is
+one reconnect, on a cycle that already happens weekly because of Testing-mode
+expiry. That is the right trade, but only if the error message names it.
+
+---
+
+## 2026-09-06 — Vendor specifics for Calendar, Drive and Gmail push
+
+Measured while building, all easy to get wrong and expensive to rediscover.
+
+**Calendar**
+- `singleEvents: true` is mandatory on a list, or a weekly standup returns
+  ONCE as a recurrence rule and every repeating meeting silently vanishes
+  from "what's my day". It is also what makes `orderBy: startTime` legal.
+- An all-day event's `end` is EXCLUSIVE — a one-day event on the 8th ends
+  "2026-09-09". Rendering it literally tells the user a one-day thing spans
+  two days.
+- `Date.parse("2026-09-08")` is UTC midnight, which is the previous evening
+  for anyone east of Greenwich. An all-day date must anchor to LOCAL midnight.
+- A cancelled instance of a recurring event still comes back, with
+  `status: "cancelled"` and usually no summary.
+- Google marks your own attendee row `self: true` only sometimes, depending
+  which calendar the event was read from — so the account address is compared
+  directly as well. Meeting rooms arrive as attendees on
+  `@resource.calendar.google.com` and are not people.
+
+**Drive**
+- `q` has no escape for a single quote inside a literal. A stray one does not
+  widen a search, it changes which clauses are joined — `name contains 'a' or
+  trashed = true` returns the bin. Strip, never escape.
+- A Google Doc has no bytes: `alt=media` returns 403, which reads exactly
+  like a missing scope. It must be `/export?mimeType=text/plain`.
+- `drive.file` scope would only see files this app created, which is useless
+  for "find my CV". `drive.readonly` is the honest minimum, and the mitigation
+  is the narrow-then-choose rule rather than a smaller scope.
+
+**Gmail push**
+- The push envelope's `historyId` is a NUMBER; the history endpoint requires
+  a STRING.
+- `history.list` returns 404 when the cursor is older than Gmail's retention.
+  That is an instruction to fall back to a windowed sync, not an error.
+- One message appears in several history records; deduplicate before fetching
+  or a busy thread costs a `getMessage` per mention.
+- A `users.watch` lasts at most 7 days and, when it lapses, **fails silently**
+  — no error, just no more notifications. Hence a daily renewal cron and
+  hence keeping the poll.
+- The webhook must return 2xx even when refusing. A non-2xx makes Pub/Sub
+  redeliver forever, so a rejected forgery would become a self-inflicted
+  denial of service.
+
+---
+
+## 2026-09-06 — A public webhook's only defence is the token, so verify it properly
+
+`/webhooks/gmail` is on `.convex.site`. Nothing about the URL is secret and
+nothing about it can be — unlike the Telegram webhook, there is no shared
+secret to compare.
+
+So the OIDC token Google attaches is the entire security boundary, and a
+token that is *decoded but not verified* is worse than none, because it looks
+like a check. Full verification: issuer, audience, service-account email,
+`email_verified`, expiry with clock skew both ways, then RS256 against
+Google's published keys, refetched once if the key id is unknown in case they
+just rotated.
+
+Two details worth keeping:
+
+- **Refuse `alg` by name.** Anything but RS256 is rejected before a key is
+  even looked up, which is what closes the "alg: none" family.
+- **Check claims before the signature.** A stale or misaddressed token then
+  costs no crypto and no key fetch — the cheap checks are also the ones an
+  attacker can spam.
+
+Unconfigured means CLOSED, not open: with `GOOGLE_PUBSUB_AUDIENCE` unset the
+endpoint refuses everything rather than trusting everything.
+
+---
+
+## 2026-09-06 — A provider-agnostic query plus a provider-specific consumer is a time bomb
+
+`connectedAccounts.listActive` returns every ACTIVE account of every provider.
+That was harmless while Gmail was the only provider, and `syncAll` was written
+then. Phase 16 added a Linear row to the same table and nothing about `syncAll`
+changed, because nothing about it looked wrong.
+
+What actually happened, every ten minutes: the Gmail cron decrypted the Linear
+API key, posted it to Google as a refresh token, got `invalid_grant` — and
+`invalid_grant` is exactly what a genuine 7-day Testing-mode expiry looks like,
+so the correct handler ran, marked the LINEAR account `NEEDS_REAUTH`, and
+Telegrammed "⚠️ linear needs re-authorizing". Every error path behaved
+correctly. The bug was upstream of all of them.
+
+It stayed invisible because nothing read the Linear account until now; it
+surfaced only when `pickBackend` reported "convex" on a deployment where
+`LINEAR_API_KEY` was plainly set.
+
+The lesson is about the SHAPE, not this instance: **when a query is
+deliberately generic and its only caller is specific, the filter belongs at
+the call site the day the query is written, not the day a second kind of row
+appears.** `listActive` now says so in its docstring, and `syncAccount` refuses
+a non-Gmail account on its own so the next caller cannot repeat it.
+
+Corollary found in the same sweep: `resolveAccounts` was likewise offering the
+Linear row as a searchable mailbox, so "you have: personal, primary, linear"
+was one bad label away from being user-visible.
+
+---
+
+## 2026-09-06 — A command alias can quietly destroy the identity it reconnects
+
+`/reconnect` was `case "/reconnect": return await connectCommand(...)`. One
+line, obviously correct, and wrong for a year.
+
+`connectCommand` derives a LABEL from its argument by stripping everything
+outside `[a-z0-9_-]`. The reauth notice tells the user to send an ADDRESS.
+So `/reconnect ade.propmail@gmail.com` produced the label
+`adepropmailgmailcom`, `upsert` patched it onto the existing row, and the
+mailbox connected as "primary" stopped being primary. Weekly, because
+Testing-mode refresh tokens expire every 7 days.
+
+The user-visible symptom was three steps removed from the cause: "check my
+primary mailbox for mail from X" → `accountLabel: "primary"` matches nothing
+→ `resolveAccountIds` returns `[]` → the handler returns `{connected:false}`
+→ **"No mailbox connected."** About a mailbox that was connected and syncing.
+Nothing in that chain is a bug on its own.
+
+Two lessons worth keeping:
+
+- **An alias is not a synonym.** `/connect` NAMES a mailbox; `/reconnect`
+  REFRESHES one. They take arguments that look alike and mean opposite
+  things — one mints an identity, the other must preserve it.
+- **`[]` was doing two jobs.** "No accounts" and "no account by that name"
+  had the same representation, so the renderer could not tell them apart and
+  stated the more alarming one as fact. Same shape as the Notion
+  reachable/empty split below: when absence and mismatch are different facts,
+  they need different return values, not one empty array.
+
+The parser fix alone would have been enough. The guard on `upsert`
+(`relabel`, default false) is there because the fix is one line and so was
+the bug.
+
+---
+
+## 2026-09-06 — A tool description that contradicts the code steers the model wrong, silently
+
+`email.search`'s `query` said:
+
+> a PLAIN word or phrase … NOT Gmail search syntax; "from:x@y.com" matches
+> nothing
+
+That was true of the CACHED path (a JS substring match) and false of the LIVE
+path, which passed the string verbatim into Gmail's `q`, where `from:` works
+exactly as documented by Google. One description, two code paths, opposite
+truths.
+
+The model believed it. Told that its only filter was useless, it dropped the
+filter — and a deep search with no query is the whole mailbox. That is the
+entire mechanism behind "I asked for one email and it dumped my inbox": not a
+model failure, a description that described the wrong branch.
+
+The fix is not a better sentence. `from` and `subject` are now FIELDS and
+`lib/email/gmailQuery.ts` writes the query string, so free text is quoted and
+cannot be syntax whatever the model writes. Invariant 1 read narrowly: a
+query language is an API, and the model was being asked to emit one.
+
+Two things fell out of building the window properly:
+
+- The widening ladder has to be HALF-OPEN (`withinDays` + `afterDays`), not
+  just a bigger `withinDays`. Widening by depth alone re-lists everything the
+  user has already rejected, which is what "keep looking" felt like before.
+- Gmail's `before:` EXCLUDES the named day, so an inclusive window has to add
+  a day. Its date operators are day-granular in the account's own timezone —
+  more precision than that is a lie, so `gmailDate` uses UTC and says so.
+
+---
+
+## 2026-09-06 — Deterministic rendering only holds if the model is not asked to re-present it
+
+`renderEmailList` was already pure, tested and exact. It was also, in
+practice, never what the user saw: the `check_email` skill matches on the bare
+word "email", so nearly every email turn took the compose branch, where the
+rendered list is handed to `COMPOSE_REPLY` as untrusted content to present.
+
+A model given a formatted list as "results" re-typesets it. Dates survived one
+reply and not the next; the mailbox label went missing; entries ran together.
+The user read this as the formatting being bad, and the formatting WAS bad —
+but fixing the renderer alone would have fixed nothing, because the renderer's
+output was a draft, not the output.
+
+So listings joined the carve-out full email bodies already had: emitted
+verbatim, model appends a short note underneath. The general rule this project
+keeps re-learning: **if the exact bytes matter, they must not pass through a
+model — not even as input it was told to copy.** Measured twice now, on two
+different things.
+
+---
+
+## 2026-09-06 — Runtime-dependent consequentiality does not fit a static flag
+
+Tasks go to Linear when Linear is connected and to Convex when it is not. A
+Linear write is external and so needs an approval (I-4); a Convex write does
+not. But `meta.consequential` is a constant read by the gate BEFORE dispatch,
+so `task.create` cannot be both.
+
+The temptation was to make the gate async and let it ask the database. That
+would put a network-shaped decision inside the one piece of code whose whole
+value is being unconditional.
+
+`linear.propose_changeset` already had the answer and it is worth stating
+generally: **a tool that PROPOSES is not consequential, whatever it proposes
+about.** On the Linear backend `task.*` stages onto the turn's `ToolContext`
+and touches nothing; the caller flushes the batch into one approval after the
+tool loop. The gate stays static and synchronous, and the user gets one tap
+for "add three tasks and close ENG-12" rather than four.
+
+Other Linear specifics measured here:
+
+- `workflowStates` must select `type`, not just `id name`. Matching "done"
+  against a state's NAME works on a board with a "Done" column and silently
+  does nothing on one that says "Shipped". The category is Linear's stable
+  handle; the name is the team's decoration.
+- Linear has no blocked category. A blocker is a sentence, and a label cannot
+  hold one, so it is a marker line at the top of the description.
+- The two priority scales run in OPPOSITE directions — internal 1 is most
+  urgent, Linear 0 is none and 1 is Urgent. Converted in exactly one place;
+  done inline at a call site this inverts a board and nobody notices.
+- `issueCreate` and `issueUpdate` are different mutations, so one approved
+  batch has to split into two aliased requests at apply time.
+
+---
+
 ## 2026-08-24 — With no local copy, "I found nothing" is a claim you cannot make
 
 Notes live only in Notion. That makes an ordinary empty-result path unsafe: if

@@ -110,6 +110,29 @@ const TASK_REF = {
     .describe("title, when you have no id — e.g. a task created earlier in this same plan"),
 };
 
+/**
+ * How a mailbox action names the message it acts on.
+ *
+ * Same two-door shape as TASK_REF: an id when one is to hand, words when it
+ * is not. Email ids are deliberately never shown in chat, so `senderOrSubject`
+ * is the door the model actually uses most.
+ */
+const EMAIL_REF = {
+  emailMessageId: z
+    .string()
+    .optional()
+    .describe("id from an email.list_recent / email.search / email.get_message result"),
+  senderOrSubject: z
+    .string()
+    .optional()
+    .describe('a name, address or subject fragment — e.g. "FairMoney" — when you have no id'),
+  accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
+};
+
+const needsEmailRef = <T extends { emailMessageId?: string; senderOrSubject?: string }>(v: T) =>
+  Boolean(v.emailMessageId || v.senderOrSubject);
+const EMAIL_REF_ERROR = { message: "give either emailMessageId or senderOrSubject" };
+
 const needsTaskRef = <T extends { taskId?: string; taskTitle?: string }>(value: T) =>
   Boolean(value.taskId || value.taskTitle);
 const TASK_REF_ERROR = { message: "give either taskId or taskTitle" };
@@ -164,6 +187,93 @@ const LINEAR_CHANGE = z.object({
 });
 
 
+/**
+ * How far back a search reaches. ABSENT means the fast path: the locally
+ * synced last 2 days, no network. Present means a live Gmail query.
+ *
+ * Paired with afterDays below, this is what lets a search WIDEN without
+ * repeating itself — see searchWindow() in lib/email/gmailQuery.ts.
+ */
+/**
+ * Which Linear team an issue belongs to. Meaningless when tasks live in the
+ * local database, and normally omitted either way — LINEAR_TEAM_KEY or a
+ * single-team workspace answers it without the model having to.
+ */
+const TEAM_KEY = z
+  .string()
+  .min(1)
+  .describe('Linear team key, e.g. "ENG" — omit unless the user names a team');
+
+/**
+ * The closed set of time ranges a calendar question can be about.
+ *
+ * Deliberately not a free-text date range. A model asked for one produces
+ * "next Tuesday-ish" and something downstream has to guess; a model asked to
+ * pick from five options picks one of five. Anything more specific goes
+ * through startsAt/endsAt on create_event, where it is an explicit instant.
+ */
+const CALENDAR_WINDOW = z
+  .preprocess((value) => {
+    if (typeof value !== "string") return value;
+    // Same treatment PRIORITY gets, and for the same measured reason: a bare
+    // enum rejected "this_week" — which is what the model actually says when
+    // asked "when am I free this week" — and the user got nothing back. A
+    // rejection is the guard working; it is still a failed request.
+    const aliases: Record<string, string> = {
+      this_week: "week",
+      thisweek: "week",
+      current_week: "week",
+      upcoming: "week",
+      "7_days": "week",
+      following_week: "next_week",
+      nextweek: "next_week",
+      rest_of_day: "rest_of_today",
+      remainder_of_today: "rest_of_today",
+      later_today: "rest_of_today",
+      now: "rest_of_today",
+      this_afternoon: "rest_of_today",
+      today_remaining: "rest_of_today",
+      tonight: "rest_of_today",
+      this_evening: "rest_of_today",
+      day: "today",
+      this_day: "today",
+      next_day: "tomorrow",
+      tmrw: "tomorrow",
+    };
+    const key = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    return aliases[key] ?? key;
+  }, z.enum(["today", "rest_of_today", "tomorrow", "week", "next_week"]))
+  .describe(
+    "which stretch of time. " +
+      '"today" = the whole of today · ' +
+      '"rest_of_today" = from now until midnight · ' +
+      '"tomorrow" = the whole of tomorrow · ' +
+      '"week" = the NEXT 7 DAYS STARTING TODAY — this is what "this week" means · ' +
+      '"next_week" = the 7 days after those. Default "today"',
+  );
+
+const SEARCH_WITHIN_DAYS = z
+  .number()
+  .int()
+  .min(1)
+  .max(3650)
+  .describe(
+    "how many days back to search live in Gmail. Omit for the fast local " +
+      "last-2-days check. Widen along 7 -> 14 -> 30 -> 90 -> 365 when the " +
+      'user says "keep looking" or "all time"',
+  );
+
+const SEARCH_AFTER_DAYS = z
+  .number()
+  .int()
+  .min(0)
+  .max(3650)
+  .describe(
+    "skip anything NEWER than this many days ago. Pair with withinDays to " +
+      "search only the stretch you have not looked at yet: after checking " +
+      "the last 14 days, use withinDays:28 afterDays:14",
+  );
+
 export const TOOL_SCHEMAS = {
   "memory.upsert_project": z.object({
     name: z.string().min(1).describe("project name"),
@@ -181,12 +291,23 @@ export const TOOL_SCHEMAS = {
     projectName: z
       .string()
       .optional()
-      .describe("project this belongs to; created if new"),
+      .describe("project this belongs to; created if new, and used as a label"),
+    labels: z
+      .array(z.string().min(1))
+      .max(10)
+      .optional()
+      .describe(
+        'extra tags, e.g. ["backend", "urgent"] — the project name is already ' +
+          "added as one, so do not repeat it. A label that does not exist yet " +
+          "is created",
+      ),
+    teamKey: TEAM_KEY.optional(),
     priority: PRIORITY.optional(),
     dueAt: INSTANT.optional(),
   }),
   "task.list": z.object({
     status: TASK_STATUS.optional(),
+    teamKey: TEAM_KEY.optional(),
     limit: z.number().int().min(1).max(25).optional().describe("default 15"),
   }),
   "task.update": z
@@ -195,6 +316,13 @@ export const TOOL_SCHEMAS = {
       title: z.string().optional(),
       detail: z.string().optional(),
       status: TASK_STATUS.optional(),
+      stateName: z
+        .string()
+        .optional()
+        .describe(
+          'the exact column the user named, e.g. "In Review" — only when they ' +
+            "named one; status covers the ordinary cases",
+        ),
       priority: PRIORITY.optional(),
       dueAt: INSTANT.optional(),
     })
@@ -237,36 +365,121 @@ export const TOOL_SCHEMAS = {
   "email.list_recent": z.object({
     accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
     gmailLabel: EMAIL_LABEL.optional(),
-    limit: z.number().int().min(1).max(20).optional().describe("default 10"),
-    deep: z
-      .boolean()
-      .optional()
-      .describe(
-        "true = query Gmail live, no 2-day cap — use when the user says " +
-          '"all time"/"everything"/"keep looking", or a normal (non-deep) ' +
-          "call just returned empty and they push back",
-      ),
+    limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+    withinDays: SEARCH_WITHIN_DAYS.optional(),
   }),
-  "email.search": z.object({
-    query: z
+  "email.search": z
+    .object({
+      query: z
+        .string()
+        .optional()
+        .describe("words to match anywhere — subject, sender or body. Plain words only"),
+      from: z
+        .string()
+        .optional()
+        .describe('sender name or address, e.g. "paul" or "paul@x.com" — the right way to find mail from someone'),
+      subject: z.string().optional().describe("words that appear in the subject line"),
+      accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
+      gmailLabel: EMAIL_LABEL.optional(),
+      limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+      withinDays: SEARCH_WITHIN_DAYS.optional(),
+      afterDays: SEARCH_AFTER_DAYS.optional(),
+    })
+    .refine((v) => Boolean(v.query || v.from || v.subject || v.gmailLabel), {
+      message:
+        "give at least one of query, from, subject or gmailLabel — a search with no criteria returns the whole mailbox",
+    }),
+  "calendar.list_events": z.object({
+    window: CALENDAR_WINDOW.optional(),
+    query: z.string().optional().describe("only events whose text matches this"),
+    limit: z.number().int().min(1).max(50).optional().describe("default 25"),
+  }),
+  "calendar.get_event": z.object({
+    eventId: z.string().min(1).describe("id from a calendar.list_events result"),
+  }),
+  "calendar.create_event": z
+    .object({
+      title: z.string().min(1).describe("what the event is called"),
+      startsAt: INSTANT.describe("when it starts, ISO 8601 local time"),
+      endsAt: INSTANT.optional().describe("when it ends — omit and give durationMinutes instead"),
+      durationMinutes: z
+        .number()
+        .int()
+        .min(5)
+        .max(1440)
+        .optional()
+        .describe("how long, when you have no explicit end. Default 60"),
+      description: z.string().optional(),
+      location: z.string().optional(),
+      attendees: z
+        .array(z.string())
+        .max(20)
+        .optional()
+        .describe(
+          "email addresses of OTHER people to invite. Adding anyone here turns " +
+            "this into an invitation the user must approve before it is sent — " +
+            "so never add the user themselves, and never guess an address",
+        ),
+    })
+    .describe("solo events are created immediately; anything with guests waits for approval"),
+  "calendar.apply_event": z.object({
+    eventDraftId: z
       .string()
-      .optional()
-      .describe(
-        "a PLAIN word or phrase to match in subject, sender or body — NOT Gmail search syntax; " +
-          '"from:x@y.com subject:foo" matches nothing. Use one distinctive word instead',
-      ),
-    accountLabel: z.string().optional().describe("connected-mailbox label; omit for all"),
-    gmailLabel: EMAIL_LABEL.optional(),
-    limit: z.number().int().min(1).max(20).optional().describe("default 10"),
-    deep: z
-      .boolean()
-      .optional()
-      .describe(
-        "true = query Gmail live, no 2-day cap — use when the user says " +
-          '"all time"/"everything"/"keep looking", or a normal (non-deep) ' +
-          "call just returned empty and they push back",
-      ),
+      .min(1)
+      .describe("id from a calendar.create_event result that is awaiting approval"),
   }),
+  "calendar.find_free_slots": z.object({
+    durationMinutes: z
+      .number()
+      .int()
+      .min(15)
+      .max(480)
+      .describe("how long a gap you need"),
+    window: CALENDAR_WINDOW.optional(),
+    limit: z.number().int().min(1).max(10).optional().describe("default 5"),
+  }),
+
+  "drive.search_files": z
+    .object({
+      name: z.string().optional().describe("words in the FILE NAME — the usual way to find a document"),
+      text: z
+        .string()
+        .optional()
+        .describe("words anywhere INSIDE the file. Slower and broader; use when the name is unknown"),
+      kind: z
+        .enum(["doc", "sheet", "slides", "pdf", "folder"])
+        .optional()
+        .describe("restrict to one kind of file"),
+      ownedByMe: z.boolean().optional().describe("only files the user owns, not ones shared with them"),
+      limit: z.number().int().min(1).max(25).optional().describe("default 10"),
+    })
+    .refine((v) => Boolean(v.name || v.text || v.kind), {
+      message: "give at least one of name, text or kind — a search with no criteria lists the whole Drive",
+    }),
+  "drive.get_metadata": z.object({
+    fileId: z.string().min(1).describe("id from a drive.search_files result"),
+  }),
+  "drive.read_content": z.object({
+    fileId: z.string().min(1).describe("id from a drive.search_files result"),
+  }),
+
+  "email.archive": z
+    .object({ ...EMAIL_REF })
+    .refine(needsEmailRef, EMAIL_REF_ERROR),
+  "email.mark_read": z
+    .object({ ...EMAIL_REF })
+    .refine(needsEmailRef, EMAIL_REF_ERROR),
+  "email.mark_unread": z
+    .object({ ...EMAIL_REF })
+    .refine(needsEmailRef, EMAIL_REF_ERROR),
+  "email.label": z
+    .object({
+      ...EMAIL_REF,
+      label: z.string().min(1).describe('the label name, e.g. "Receipts" — created if new'),
+      remove: z.boolean().optional().describe("true to take the label OFF instead of putting it on"),
+    })
+    .refine(needsEmailRef, EMAIL_REF_ERROR),
+
   "email.create_draft": z
     .object({
       emailMessageId: z
@@ -450,6 +663,63 @@ export const TOOL_SCHEMAS = {
           'in the caption, "images" when it is in the slides or the picture ' +
           'itself, "auto" (default) to take whatever the post gives up',
       ),
+  }),
+
+  "capture.propose": z.object({
+    title: z
+      .string()
+      .min(1)
+      .describe('what this collection is, e.g. "Movies from @filmclub\'s carousel"'),
+    destination: z
+      .enum(["notes", "tasks"])
+      .describe('"notes" for reference material (films, recipes, reading); "tasks" for things to DO'),
+    items: z
+      .array(
+        z.preprocess(
+          (value) => {
+            // Measured 2026-09-07: asked to list five films, the model sent
+            // `["Arrival (2016)", "Dune (2021)", ...]` — a plain array of
+            // strings. The object form is genuinely more useful when it is
+            // used, so the schema keeps it and accepts the string form too
+            // rather than rejecting a correct answer in the wrong shape.
+            // Same call PRIORITY makes for `priority: "high"`.
+            if (typeof value === "string") return { title: value };
+            if (typeof value === "object" && value !== null) {
+              const row = value as Record<string, unknown>;
+              // `name` and `text` are the two other keys it reaches for.
+              const title = row.title ?? row.name ?? row.text;
+              if (typeof title === "string") {
+                const detail = row.detail ?? row.description ?? row.note ?? row.year;
+                return {
+                  title,
+                  ...(detail === undefined || detail === null ? {} : { detail: String(detail) }),
+                };
+              }
+            }
+            return value;
+          },
+          z.object({
+            title: z.string().min(1).describe("the item itself — a film name, a task"),
+            detail: z.string().optional().describe("year, author, due date, anything worth keeping"),
+          }),
+        ),
+      )
+      .min(1)
+      .max(30)
+      .describe(
+        'EVERY item you found, not a sample, each as {title, detail?} — ' +
+          'e.g. {"title":"Arrival","detail":"2016"}. If a carousel had ten ' +
+          "films, list ten. Missing items cannot be recovered later — the " +
+          "user only sees what you list here",
+      ),
+    category: z
+      .string()
+      .optional()
+      .describe('Notion section or task label, e.g. "Movies" — call note.categories if unsure'),
+    sourceUrl: z.string().optional().describe("the post this came from, so the list can be traced back"),
+  }),
+  "capture.apply": z.object({
+    batchId: z.string().min(1).describe("id from a capture.propose result — propose the batch first"),
   }),
 
   "meeting.ingest": z.object({
@@ -653,20 +923,110 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "email.list_recent": {
     description:
-      "Recent synced emails (last ~2 days), including spam. Set deep:true to " +
-      "query Gmail live with no day limit instead. Read-only.",
+      "Most recent emails, including spam. Defaults to the last ~2 days of " +
+      "synced mail; set withinDays to reach further back live. Read-only.",
     consequential: false,
     requiresAccountId: true,
     contentIsUnknowable: true,
   },
   "email.search": {
     description:
-      "Search synced emails (last ~2 days) by keyword. Set deep:true to query " +
-      "Gmail live with no day limit instead — slower, but not capped by sync. " +
-      "Read-only.",
+      "Find specific emails. Put what you are looking for in the FIELD that " +
+      "fits — from for a sender, subject for a subject, query for anything " +
+      "else — and at least one is required. Defaults to the last ~2 days of " +
+      "synced mail; set withinDays (7/14/30/90/365) to search Gmail live, " +
+      "and afterDays to skip the stretch you already checked. Read-only.",
     consequential: false,
     requiresAccountId: true,
     contentIsUnknowable: true,
+  },
+  "calendar.list_events": {
+    description:
+      "The user's schedule for a window of time. Read-only. Use this for " +
+      '"what\'s my day", "am I free Thursday", "what\'s on this week".',
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "calendar.get_event": {
+    description: "Full detail of one event, including its guest list. Read-only.",
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "calendar.create_event": {
+    description:
+      "Put something on the calendar. A SOLO event — no attendees — is " +
+      "created immediately, because it affects nobody but the user. Adding " +
+      "attendees makes it an invitation: it is held and shown for approval " +
+      "instead, and only sent once the user taps Confirm. Never invent an " +
+      "attendee's email address.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "calendar.apply_event": {
+    description:
+      "Send a previously-held event invitation. Only reachable after the " +
+      "user has approved it — never call this yourself.",
+    consequential: true,
+    requiresAccountId: true,
+  },
+  "calendar.find_free_slots": {
+    description:
+      "Gaps of at least N minutes in working hours that are not already " +
+      "booked. Read-only. Use before proposing a time to anyone.",
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "drive.search_files": {
+    description:
+      "Find documents in the user's Google Drive. Read-only. Returns " +
+      "candidates newest-first with their modified dates — PRESENT THEM AND " +
+      "LET THE USER CHOOSE. Never pick a file on their behalf and never " +
+      "describe a file you have not read.",
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "drive.get_metadata": {
+    description: "Name, kind, size, owner and last-modified date of one file. Read-only.",
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "drive.read_content": {
+    description:
+      "The text of one Drive document. Works for Google Docs, Sheets, " +
+      "Slides and plain-text files. Cannot read PDFs, images or video — it " +
+      "says so rather than guessing. Read-only.",
+    consequential: false,
+    requiresAccountId: true,
+    contentIsUnknowable: true,
+  },
+  "email.archive": {
+    description:
+      "Take a message out of the inbox. It stays in All Mail and nothing is " +
+      "deleted, so this is reversible — no approval needed.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "email.mark_read": {
+    description: "Mark a message as read. Reversible.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "email.mark_unread": {
+    description: "Mark a message as unread, to bring it back to attention. Reversible.",
+    consequential: false,
+    requiresAccountId: true,
+  },
+  "email.label": {
+    description:
+      "Put a Gmail label on a message, or take one off with remove:true. " +
+      "A label that does not exist yet is created. Reversible.",
+    consequential: false,
+    requiresAccountId: true,
   },
   "email.create_draft": {
     description:
@@ -808,6 +1168,24 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     consequential: false,
     requiresAccountId: false,
     contentIsUnknowable: true,
+  },
+  "capture.propose": {
+    description:
+      "Offer a LIST of things pulled out of a post, document or image for " +
+      "the user to confirm in one tap — 'I found 5 movies, add all 5?'. Use " +
+      "this whenever an instruction would create MORE THAN ONE thing " +
+      "('add these movies', 'make tasks from this'). Writes nothing by " +
+      "itself. List every item you found: the user can only approve what " +
+      "you show them.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "capture.apply": {
+    description:
+      "Write a previously-proposed batch. Only reachable after the user has " +
+      "tapped to confirm — never call this yourself.",
+    consequential: true,
+    requiresAccountId: false,
   },
   "meeting.ingest": {
     description:

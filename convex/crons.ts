@@ -20,6 +20,17 @@ crons.cron("mailbox sync overnight", "*/30 22,23,0-3 * * *", internal.gmail.sync
 // fires if that chain broke. 08:00 WAT is 07:00 UTC — comfortably after the
 // earliest sane brief time, so it never races a same-day first-time enable.
 crons.cron("ensure brief scheduled", "0 7 * * *", internal.briefs.ensureScheduled, {});
+
+/**
+ * Renew every mailbox's Gmail push watch, daily.
+ *
+ * A watch expires after at most SEVEN DAYS and Google recommends renewing
+ * daily. The failure mode is what makes this a cron rather than a setup
+ * step: a lapsed watch does not error, it just stops delivering — the
+ * assistant would go quiet and look like it was working. No-ops when
+ * GOOGLE_PUBSUB_TOPIC is unset, so this is harmless before Pub/Sub exists.
+ */
+crons.cron("renew gmail watches", "0 5 * * *", internal.gmail.watchAll, {});
 // Phase 12 adds: morning brief 0 6 * * *  /  evening brief 0 19 * * *
 
 export default crons;

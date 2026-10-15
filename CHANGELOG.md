@@ -9,6 +9,287 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — social posts: every slide, then one tap to save the lot
+
+`capture.propose` / `capture.apply`. An instruction that would create more
+than one thing — "add these movies", "make tasks from this deck" — now
+produces a numbered card listing **every** item found, with a single
+**Add all N** tap. Notes get one note holding the list; tasks get one issue
+each.
+
+The batch is stored and hashed rather than remembered. Between "I found five
+movies" and the tap is a round trip, and re-deriving the list from a
+conversation transcript is exactly where the fifth one goes missing. An edit
+after the card was sent voids the approval, same as a draft or a Linear
+batch.
+
+`capture.apply` is the fourth consequential tool. A single `note.save` is
+not: ten items pulled off a misread carousel are, because the damage scales
+and cannot be spotted afterwards.
+
+### Fixed — OCR read four slides of a carousel and said nothing about the rest
+
+`readPostImages` was capped at `.slice(0, 4)`, silently. A ten-slide deck
+came back with six missing and no indication. The cap is now 20 — Instagram's
+own carousel maximum — slides are numbered `--- Slide N ---` so they stay
+distinguishable downstream, the token budget scales with slide count instead
+of being a fixed two-slide allowance, and anything beyond the cap is
+reported.
+
+### Fixed — `capture.propose` rejected a correct answer in the wrong shape
+
+Measured live: asked to list five films, the model sent
+`["Arrival (2016)", "Dune (2021)", …]` — a bare array of strings — and the
+whole call was rejected, producing zero items from a perfectly good
+extraction. The schema now accepts the string form, and `name`/`text` as the
+title key, and `description`/`note`/`year` as the detail key. Same call
+`PRIORITY` makes for `priority: "high"`.
+
+### Removed — the Mac companion (Phase 20)
+
+Out of the plan by decision: not MVP, not future work, unless explicitly
+reconsidered. Nothing had been built for it, so this is a documentation
+change. It takes iMessage and SMS with it — there is no other route to those
+from a cloud service.
+
+### Decided — WhatsApp will not be built
+
+Researched 2026-09-07 against the stated requirement (monitor the *existing
+personal* account, surface important messages through Telegram). Meta's
+official Cloud API cannot do it — business-only, and a send pipe with an
+inbound webhook rather than a store you can query. Every product that can
+read a personal account pairs as a linked device over a reverse-engineered
+protocol, which is a ToS violation whose reported outcome is an immediate
+and permanent ban with no effective appeal.
+
+Separately, a QR session is a long-lived WebSocket and this stack has no
+persistent processes. Recorded in `docs/NOTES.md` N-009 with sources, so it
+is not re-litigated.
+
+### Added — Google Calendar (Phase 10)
+
+Read the day, find gaps, create events. `calendar.list_events`,
+`calendar.get_event`, `calendar.find_free_slots`, `calendar.create_event`,
+`calendar.apply_event`.
+
+**Consequentiality is about attendees, not about writing.** A solo block on
+your own calendar affects nobody and is created immediately; adding a guest
+turns it into an invitation that is held and shown for approval. That could
+not be a `consequential` flag — the flag is static and read before dispatch —
+so `create_event` proposes and `apply_event` applies, the same split
+`linear.propose_changeset` already uses.
+
+Time handling is the other half. `lib/calendar/window.ts` works in calendar
+dates first and converts to instants last, which is the only ordering that
+survives a DST boundary; there are tests for a 23-hour and a 25-hour day even
+though Lagos has neither. All-day events anchor to local midnight, and
+Google's exclusive end date is walked back so a one-day event does not read
+as two.
+
+### Added — Google Drive as context (Phase 11)
+
+`drive.search_files`, `drive.get_metadata`, `drive.read_content`. Read-only
+by scope **and** by construction — there is no create, share or delete
+function in the connector for a caller to reach for.
+
+Trashed files are excluded unconditionally: "find my latest CV" returning a
+deleted draft that then gets attached to a job application is the failure
+this connector must not have. Google Docs, Sheets and Slides are exported to
+text; a PDF says so and points at the Telegram route that does work.
+
+The rule in the prompt: **the model narrows, you choose.** It may never pick
+a file on your behalf.
+
+### Added — Gmail push and mailbox actions (Phase 8) · the MVP line
+
+`POST /webhooks/gmail` verifies Google's OIDC push token against Google's own
+public keys — issuer, audience, service account, expiry, then the RS256
+signature, in that order so a bad token costs no crypto. The endpoint is on
+`.convex.site` and is public, so that token is the only thing protecting it.
+It always answers 200, even when refusing: a non-2xx tells Pub/Sub to
+redeliver forever.
+
+Notifications drive `gmail.syncFromHistory`, which falls back to a full
+windowed sync when Gmail's history has expired — a mailbox quiet for a week
+comes back 404, and treating that as an error would silently miss everything
+that arrived meanwhile. `users.watch` is renewed daily by cron, because a
+lapsed watch fails *silently*. **The polling sync stays** as the
+reconciliation path; push is the fast path, the poll is the guarantee.
+
+Mailbox actions: `email.archive`, `email.mark_read`, `email.mark_unread`,
+`email.label`. All four are Gmail label edits underneath, all four are
+reversible, none needs approval. Deliberately absent: delete (the scope that
+permits one is never requested) and unsubscribe (see `docs/NOTES.md` N-008).
+
+### Changed — one Google grant now covers Gmail, Calendar and Drive
+
+`GOOGLE_CONNECT_SCOPES` adds `gmail.modify`, `calendar.readonly`,
+`calendar.events` and `drive.readonly` to the existing Gmail set. One account,
+one refresh token, one row — and every tool checks `scopesGranted` before
+assuming a capability, because Google never adds a scope to a token issued
+without it.
+
+**This means every existing account must be reconnected once.** Until then
+Calendar, Drive and mailbox actions are shipped but inert, and each tool says
+exactly that rather than surfacing a raw 403. `debug:accounts` now reports a
+`can` list per account so the state is visible.
+
+### Added — `debug:checkLinear`, and a capability readout on `debug:accounts`
+
+`checkLinear` proves the teams, labels and workflow states that `task.create`
+depends on, the way `checkNotion` already did for Notion. `accounts` now shows
+what each Google account can actually do, and whether Gmail push is
+configured.
+
+### Added — three documents that answer three different questions
+
+`docs/FLOWCHART.md` — seven Mermaid diagrams tracing a message from Telegram
+to the AI model to Gmail/Linear/Notion and back, in plain language, with the
+file that owns each step. Each diagram is also a standalone `.mmd` in
+`docs/flowcharts/`, extracted from the doc so the two cannot drift, and all
+seven are verified against Mermaid's own parser. Includes the answer to "why
+does *what are my tasks* work without typing `/tasks`" — and names the three
+slash commands that have no plain-English equivalent.
+
+`docs/STATUS.md` — where the project stands against the blueprint and build
+plan v3, phase by phase. Headline: **14 of 23 phases shipped, and the MVP is
+one phase from done** — Phase 8, push notifications and email actions, is the
+only Stage B gap. `docs/ROADMAP.md` now carries a superseded banner; it
+declared nine shipped phases unbuilt.
+
+`docs/NOTES.md` — the running log of ideas and decisions, dated, with a status
+each (`IDEA` / `PLAN` / `IN PROGRESS` / `DONE` / `BLOCKED` / `BUG` / `FIX` /
+`NOTE` / `DROPPED`) and stable `N-###` ids. It is the only one of the four
+logs written *before* work happens. First entries: adding xAI Grok as a
+provider, OpenAI credits now being available, and Calendar/Drive as the next
+connectors.
+
+### Fixed — the Gmail sync cron was disabling the Linear account
+
+`syncAll` walked `connectedAccounts.listActive`, which returns every provider,
+and called `gmail.syncAccount` on each. With a Linear row present that meant
+decrypting a Linear API key and posting it to Google's token endpoint as a
+refresh token. Google answered `invalid_grant`, which this codebase correctly
+reads as "the 7-day Testing-mode expiry" — so it marked the **Linear** account
+`NEEDS_REAUTH` and messaged the owner "⚠️ linear needs re-authorizing", within
+ten minutes of Linear being connected, every time.
+
+Found because the new task backend read `convex` on a deployment where Linear
+was configured: `pickBackend` looks for an ACTIVE Linear account, and there
+had not been one for weeks. The sync loop now filters to `provider: "gmail"`,
+`syncAccount` refuses a non-Gmail account outright, and `resolveAccounts`
+likewise no longer offers a Linear row as a mailbox to search.
+
+### Fixed — /reconnect no longer renames the mailbox it reconnects
+
+The reauth notice said `Send: /reconnect ade.propmail@gmail.com`, and
+`/reconnect` was an alias for `/connect` — whose parser strips everything
+outside `[a-z0-9_-]` to make a label. So the weekly Testing-mode reauth
+relabelled the mailbox connected as "primary" to `adepropmailgmailcom`, after
+which "check my primary mailbox" matched no account and the assistant replied
+"No mailbox connected" about a mailbox that was connected and syncing.
+
+`/reconnect` is now its own command: the argument is a lookup key resolved
+against existing accounts by address **or** label, and the stored label is
+carried through untouched. `connectedAccounts.upsert` additionally refuses to
+overwrite an existing row's label without an explicit `relabel: true`, so no
+future caller can reintroduce it. The long-dead `oauthStates.reconnectAccountId`
+column now carries that distinction through the OAuth handshake.
+
+### Changed — email search narrows first and widens on request
+
+`email.search` took one free-text `query` that was passed verbatim into
+Gmail's `q` on the live path, while its own description told the model that
+Gmail syntax "matches nothing". The model therefore dropped the only filter
+that worked and ran an unfiltered deep search, answering "find the one from
+Paul" with 25 arbitrary messages.
+
+It now takes typed fields — `from`, `subject`, `query`, `gmailLabel` — and a
+new pure `lib/email/gmailQuery.ts` writes the query string. Free text is
+quoted, so a search can no longer smuggle in an operator; `from:` works
+because it is a field rather than a string the model has to spell.
+
+A `.refine()` requires at least one criterion, so a search with none is
+rejected before it runs. The whole-mailbox dump is now unrepresentable.
+
+`deep: true` is replaced by `withinDays` / `afterDays`, a half-open window.
+Round one is `withinDays: 14`; round two is `withinDays: 30, afterDays: 14`,
+which cannot repeat what round one showed. `SEARCH_LADDER` fixes the rungs at
+7 → 14 → 30 → 90 → 365, and an empty result names the window it searched and
+offers the next one. Two long-standing bugs went with it: the live path
+ignored `limit` entirely and never sorted merged accounts by date.
+
+### Changed — email listings are written by code, not re-typeset by a model
+
+`renderEmailList` emitted `• from — subject` plus an indented snippet, joined
+by single newlines: no date, no mailbox, no importance, and no blank line
+between entries, so ten results read as one paragraph. Results are now
+numbered, separated, and carry the date, the mailbox label and the importance
+badge — the same badge the alert card uses, moved into `lib/email` so both
+surfaces share one definition.
+
+More importantly the list is no longer handed to `COMPOSE_REPLY` as untrusted
+input to present. It is emitted verbatim and the model appends only a short
+"what stands out" beneath it, via the new `listSummarySystemPrompt` — the same
+construction that already protects a full email body. Identical requests now
+produce identical layouts.
+
+Tool results also carry `accountLabel` now, and all three compose prompts get
+the mailbox roster, which only the planning pass had.
+
+### Added — tasks live in Linear when Linear is connected
+
+One set of `task.*` tools, two backends, chosen in code from whether an ACTIVE
+Linear account exists — never by the model. With Linear connected, `task.create`
+makes an issue and the project name becomes a label; `task.update` /
+`complete` / `block` / `unblock` move an existing one. Without it, the Convex
+`tasks` table works exactly as before, so the project remains usable with no
+Linear at all.
+
+Status maps to Linear's state **category** (`started`, `completed`, …) and
+never to a column's display name, so it works on a board whose "done" column
+is called "Shipped". Linear has no blocked state, so a blocker rides as a
+marker line in the description.
+
+Writing to Linear is external, so it needs an approval — but `task.create` is
+not consequential on the Convex backend, and `meta.consequential` is static.
+Resolved the way `linear.propose_changeset` already does it: on the Linear
+backend `task.*` **stages** and touches nothing, and the turn's whole batch
+becomes one card with one tap. `ChangesetEntry` and its hash grew an `op`, a
+`teamId`, `labelIds` and a `dueDate` so a create is bound as tightly as an
+update.
+
+`/tasks`, `/blocked` and the morning brief read whichever backend is active,
+and each distinguishes an empty board from an unreachable one. The open-issue
+list reaches the prompt only on task-shaped messages, so an unrelated "hi"
+pays no GraphQL round trip.
+
+New: `LINEAR_TEAM_KEY` (optional — only needed when the key sees more than one
+team).
+
+### Added — the handover documentation set
+
+Four documents plus a rewritten README, written so the project can be
+continued by hand rather than by agent. Each answers a different question:
+
+| Document | Answers |
+|---|---|
+| `README.md` | what this is, how to run it, the rules that bind |
+| `docs/ARCHITECTURE.md` | *why* it is shaped this way — invariants, stack, decisions defended |
+| `docs/HOW-IT-WORKS.md` | *where the code is* — the message lifecycle, prompting, the AI chain, tools, and a worked email-search change |
+| `docs/TESTING.md` | how to verify anything, pure and live, including the Telegram smoke test |
+| `docs/DEPLOYMENT.md` | dev (which is staging) and production, step by step, with a rollback path |
+
+`HOW-IT-WORKS.md` covers the two things that were previously only readable by
+opening five files at once: **what string the model actually receives** (every
+section of `planningSystemPrompt`, and how to print it with `debug:planOnly`),
+and **how to switch provider** (four `convex env set` calls, no code change).
+
+Nothing in the codebase changed. Counts stated in the docs were verified
+against the source at the time of writing: 46 tools, 15 commands, 4 cron jobs,
+32 unit files.
+
+
 ### Added — Notion as the notes store
 
 Notes and long-tail memory live in Notion and **nowhere else** — nothing is

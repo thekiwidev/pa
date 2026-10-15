@@ -31,6 +31,65 @@ export const GMAIL_SEND_SCOPES = [
   "https://www.googleapis.com/auth/gmail.send",
 ] as const;
 
+/**
+ * Phase 8. `gmail.modify` is what archive / label / mark-read need.
+ *
+ * It is NOT `https://mail.google.com/` and must never become it: modify can
+ * move and label a message, and can trash one, but cannot permanently delete
+ * — which is exactly the line this project wants. There is no undo for a
+ * hard delete, so the scope that permits one is never requested.
+ */
+export const GMAIL_MODIFY_SCOPES = [
+  ...GMAIL_SEND_SCOPES,
+  "https://www.googleapis.com/auth/gmail.modify",
+] as const;
+
+/**
+ * Phase 10. Read the calendar, and write events.
+ *
+ * `calendar.events` covers create and update. There is no separate delete
+ * scope to withhold, so restraint lives in the tool catalogue instead: there
+ * is no delete tool, and an event with attendees needs an approval.
+ */
+export const CALENDAR_SCOPES = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+] as const;
+
+/**
+ * Phase 11. Read Drive, and nothing else — no create, no share, no delete,
+ * not in this phase and possibly not ever.
+ *
+ * `drive.readonly` sees every file the account can see. The narrower
+ * `drive.file` would only see files this app created, which is useless for
+ * "find my CV" — the whole point is reaching documents that already exist.
+ * The mitigation is not a smaller scope, it is that the model NARROWS and
+ * you CHOOSE; nothing is ever attached without your tap.
+ */
+export const DRIVE_SCOPES = [
+  "https://www.googleapis.com/auth/drive.readonly",
+] as const;
+
+/**
+ * What a fresh /connect actually asks Google for.
+ *
+ * One grant covers Gmail, Calendar and Drive rather than three separate
+ * OAuth flows, because they are all the same Google account and Google
+ * issues one refresh token per grant. `scopesGranted` on the account row
+ * records what was really given, and every tool checks it before assuming
+ * a capability — see requireScope in tools/router.ts.
+ *
+ * Google does NOT retroactively grant a scope to a token issued without it.
+ * An account connected before this list grew must reconnect once. That is
+ * the weekly /reconnect anyway, so the migration path is: do nothing, and it
+ * heals itself the next time the token expires.
+ */
+export const GOOGLE_CONNECT_SCOPES = [
+  ...GMAIL_MODIFY_SCOPES,
+  ...CALENDAR_SCOPES,
+  ...DRIVE_SCOPES,
+] as const;
+
 export class TokenRevoked extends Error {
   constructor(detail: string) {
     super(`refresh token rejected: ${detail.slice(0, 200)}`);
@@ -56,7 +115,7 @@ export function authorizeUrl(state: string): string {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: GMAIL_SEND_SCOPES.join(" "),
+    scope: GOOGLE_CONNECT_SCOPES.join(" "),
     state,
     // Both are required to be GIVEN a refresh token at all. Without
     // prompt=consent, a second authorization of an already-granted account

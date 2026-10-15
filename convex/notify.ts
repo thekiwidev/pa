@@ -7,6 +7,7 @@ import { escapeTelegramHtml, alreadyHtml } from "./lib/telegram/html";
 import type { TelegramHtml } from "./lib/telegram/html";
 import { formatInstant } from "./lib/time";
 import { DEDUP_WINDOW_MS } from "./model/notifications";
+import { IMPORTANCE_ICON } from "./lib/email/classification";
 
 /**
  * 6/hour, replenishing continuously (a token bucket, not a fixed window) so
@@ -52,13 +53,7 @@ export interface ComposedCard {
   buttons: InlineButton[][];
 }
 
-const IMPORTANCE_ICON: Record<CardEmail["importance"], string> = {
-  CRITICAL: "🔴",
-  HIGH: "🟠",
-  NORMAL: "🟡",
-  LOW: "⚪",
-  IGNORE: "⚪",
-};
+
 
 /**
  * Pure. Every field here is load-bearing (source plan, Phase 5): the SPAM

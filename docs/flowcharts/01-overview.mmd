@@ -1,0 +1,21 @@
+%% The 30-second version — you text the bot, something happens, you get an answer
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart LR
+    You(["📱 You, in Telegram"]) -->|"a message"| TG["Telegram's servers"]
+    TG -->|"webhook"| App["Your assistant<br/>running on Convex"]
+
+    App --> Q{"Slash command,<br/>or ordinary English?"}
+
+    Q -->|"/tasks"| Direct["Run it directly.<br/>No AI involved."]
+    Q -->|"'what am I working on?'"| Plan["Ask an AI model:<br/><b>which tools should I run?</b>"]
+
+    Plan --> Run["Run those tools<br/>Gmail · Linear · Notion · database"]
+    Direct --> Write
+    Run --> Write["Turn the results into words"]
+    Write --> You
+
+    classDef ai fill:#4a3a6b,stroke:#8b6fc4,color:#fff
+    classDef code fill:#1f4d3a,stroke:#3fa87a,color:#fff
+    class Plan ai
+    class Direct,Run,Write code

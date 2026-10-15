@@ -1,0 +1,25 @@
+%% Slash commands vs plain English, and which phrasings have no tool behind them
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    Msg(["Your message"]) --> Slash{"First character<br/>is '/'?"}
+
+    Slash -->|"yes"| Fast["<b>The fast lane</b><br/>handleCommand · assistant.ts:508<br/>a switch statement, nothing more"]
+    Fast --> FastDo["Reads the database directly.<br/><b>No AI. No cost. Never wrong.</b>"]
+    FastDo --> Answer(["The answer"])
+
+    Slash -->|"no"| Think["<b>The thinking lane</b><br/>converse · assistant.ts:109"]
+    Think --> Ask["The model picks tools<br/>from the 60 in the catalogue"]
+    Ask --> Match{"Is there a tool<br/>that does this?"}
+
+    Match -->|"yes — e.g. task.list"| Run["Run it. Same data<br/>the slash command reads."]
+    Run --> Answer
+    Match -->|"no tool exists"| Refuse["It says it cannot,<br/>and stops."]
+    Refuse --> Answer
+
+    classDef ai fill:#4a3a6b,stroke:#8b6fc4,color:#fff
+    classDef code fill:#1f4d3a,stroke:#3fa87a,color:#fff
+    classDef warn fill:#5c4a2a,stroke:#c4a06f,color:#fff
+    class Ask ai
+    class Fast,FastDo,Run code
+    class Refuse warn

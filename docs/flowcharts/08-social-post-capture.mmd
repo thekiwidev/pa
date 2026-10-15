@@ -1,0 +1,39 @@
+%% Sharing a post: link or album, OCR every slide, one tap to save the lot
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    Start(["You share a post<br/>+ an instruction"]) --> How{"How did it<br/>arrive?"}
+
+    How -->|"a pasted link"| L1["link.read<br/><i>connectors/social/client.ts</i>"]
+    How -->|"images / an album"| A1["handlePhoto → flushMediaGroup<br/><i>assistant.ts</i>"]
+
+    L1 --> L2{"Which platform?"}
+    L2 -->|"X"| LX["Full post text.<br/>Reliable."]
+    L2 -->|"TikTok"| LT["Caption + cover slide."]
+    L2 -->|"Instagram · Facebook"| LI["Caption + <b>cover slide only</b>.<br/>Later slides need a login —<br/>a platform limit, not a bug."]
+
+    LI --> Ask["Says so, and asks you to<br/>send the slides as an album"]
+    Ask -.->|"you do"| A1
+
+    LX --> OCR
+    LT --> OCR
+    LI --> OCR
+    A1 --> OCR["<b>Read every image</b><br/>numbered --- Slide N ---<br/>up to 20, and it says<br/>if there were more"]
+
+    OCR --> Combine["<b>Caption + slide text + your instruction</b><br/>the post's words are CONTENT,<br/>never orders to follow"]
+    Combine --> Intent{"How many things<br/>would this create?"}
+
+    Intent -->|"one"| One["Just do it —<br/>save the note, make the task"]
+    Intent -->|"more than one"| Batch["<b>capture.propose</b><br/>every item, numbered"]
+
+    Batch --> Card["📥 Card: 'Found 5 items'<br/>the whole list, then<br/><b>[Add all 5]</b> [Cancel]"]
+    Card --> Tap(["⏸ Your tap"])
+    Tap -->|"Add all"| Write["<b>capture.apply</b><br/>notes → one note holding the list<br/>tasks → one issue each"]
+
+    One --> Done(["Done"])
+    Write --> Done
+
+    classDef limit fill:#5c4a2a,stroke:#c4a06f,color:#fff
+    classDef gate fill:#4a3a6b,stroke:#8b6fc4,color:#fff
+    class LI,Ask limit
+    class Card,Tap gate

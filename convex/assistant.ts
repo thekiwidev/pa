@@ -8,14 +8,24 @@ import { sendMessage, downloadFile } from "./channels/telegram";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { modelEnvVar } from "./lib/ai/tiers";
 import { parseToolPlan } from "./lib/tools/plan";
-import { executeToolCall, type ToolOutcome } from "./tools/router";
+import {
+  executeToolCall,
+  flushStagedWrites,
+  listOpenLinearIssues,
+  listOpenLinearIssuesWithDescriptions,
+  type ToolContext,
+  type ToolOutcome,
+} from "./tools/router";
+import { pickBackend, mentionsTasks, hasBlockerNote, blockerReason } from "./lib/tasks/backend";
 import {
   planningSystemPrompt,
   skillComposeSystemPrompt,
   tldrOnlySystemPrompt,
+  listSummarySystemPrompt,
   renderConversation,
 } from "./lib/prompts/assistant";
 import { renderOutcomes } from "./lib/tools/outcomes";
+import { returnsUnknowableContent } from "./lib/tools/catalog";
 import { guardReply, wantsFullEmail } from "./lib/scope";
 import { relevantSkillNames } from "./lib/skills";
 import { CALLBACK_PREFIX } from "./notify";
@@ -126,7 +136,7 @@ export async function converse(
 ): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
-  const [history, projects, openTasks, pending, accounts, instructions, userContext] =
+  const [history, projects, localTasks, pending, accounts, instructions, userContext] =
     await Promise.all([
     ctx.runQuery(internal.model.messages.recentForUser, {
       userId,
@@ -139,6 +149,42 @@ export async function converse(
     ctx.runQuery(internal.model.instructions.list, { userId }),
     ctx.runQuery(internal.model.userContext.list, { userId }),
   ]);
+
+  // Which store owns tasks is a fact about `accounts`, which is already
+  // loaded — so deciding costs nothing extra. FETCHING from Linear does cost
+  // a GraphQL round trip, so it happens only when the message looks
+  // task-shaped; see mentionsTasks.
+  const taskBackend = pickBackend(
+    accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"),
+  );
+  const wantsTasks = mentionsTasks(intentText ?? text);
+
+  let openTasks: { taskId: string; title: string; status: string; dueAt?: string }[] = [];
+  let tasksNotLoaded = false;
+
+  if (taskBackend === "linear") {
+    if (wantsTasks) {
+      // A failure here must not take the whole turn down: the model can still
+      // answer, and task.list will report the outage properly if it is asked.
+      try {
+        openTasks = await listOpenLinearIssues(ctx, userId);
+      } catch (error) {
+        console.warn(`linear_task_prompt_load_failed: ${String(error)}`);
+        tasksNotLoaded = true;
+      }
+    } else {
+      tasksNotLoaded = true;
+    }
+  } else {
+    openTasks = localTasks
+      .filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED")
+      .map((t) => ({
+        taskId: t._id,
+        title: t.title,
+        status: t.status,
+        dueAt: t.dueAt === undefined ? undefined : formatInstant(t.dueAt, timezone),
+      }));
+  }
 
   // Deterministic keyword match, no model call spent deciding — a turn with
   // no email/brief/draft language pays nothing for skills existing at all.
@@ -154,14 +200,9 @@ export async function converse(
     timezone,
     nowMs: Date.now(),
     projects: projects.map((p) => ({ name: p.name, status: p.status })),
-    openTasks: openTasks
-      .filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED")
-      .map((t) => ({
-        taskId: t._id,
-        title: t.title,
-        status: t.status,
-        dueAt: t.dueAt === undefined ? undefined : formatInstant(t.dueAt, timezone),
-      })),
+    openTasks,
+    taskBackend,
+    tasksNotLoaded,
     reminders: pending.map((r) => ({
       reminderId: r._id,
       message: r.message,
@@ -206,12 +247,54 @@ export async function converse(
     return plan.reply || "I didn't follow that. Say it another way?";
   }
 
+  // One ToolContext for the whole turn, because task.* on the Linear backend
+  // STAGES its writes onto it rather than performing them — so the batch has
+  // to survive across calls and be flushed once. See ToolContext.staged.
+  const toolCtx: ToolContext = { userId, timezone };
+
   const outcomes: ToolOutcome[] = [];
   for (const call of plan.calls) {
-    outcomes.push(await executeToolCall(ctx, { userId, timezone }, call));
+    outcomes.push(await executeToolCall(ctx, toolCtx, call));
   }
 
-  const deterministic = renderOutcomes(plan.reply, outcomes, plan.rejected);
+  // Everything task.* staged becomes ONE approval card. "Add three tasks and
+  // close ENG-12" is a single intention, so it costs a single tap.
+  await flushStagedWrites(ctx, toolCtx);
+
+  let deterministic = renderOutcomes(plan.reply, outcomes, plan.rejected, timezone);
+
+  // ── The follow-up round ──────────────────────────────────────────────
+  //
+  // You get ONE batch of tool calls per message, and that batch is chosen
+  // BEFORE any tool has run. So "read this link and save it to my notes" was
+  // structurally impossible: the planner spent its batch on link.read, and by
+  // the time the caption existed the turn was over. The user saw the post and
+  // no note — with nothing announcing that half their request had been
+  // dropped.
+  //
+  // This has been patched per-tool three times now (create_draft resolving an
+  // email, note.get resolving a title, meeting.ingest doing its own work).
+  // Those fixes each removed the need for a lookup FIRST; none of them helps
+  // when the second step depends on content the first step fetched.
+  //
+  // So: exactly one more planning pass, given what the tools actually
+  // returned. Bounded hard at one — no third round, ever, no loop.
+  const fetchedContent = outcomes.some((o) => o.ok && returnsUnknowableContent(o.name));
+  if (fetchedContent) {
+    const followUp = await planFollowUp(ctx, {
+      userId,
+      timezone,
+      system,
+      text,
+      results: deterministic,
+    });
+    if (followUp) {
+      deterministic = `${deterministic}\n${followUp}`;
+      // A follow-up that produced nothing is the common case ("just read this
+      // link"), and costs one call. That is the price of the other case
+      // working at all.
+    }
+  }
 
   // ONE model call per message by default — the deterministic render is free
   // and cannot soften a failure or invent a due date the way a model
@@ -238,6 +321,14 @@ export async function converse(
     customInstructions: instructions.map((i) => i.text),
   };
 
+  // The same roster the planning pass got. Without it, this pass could be
+  // handed a result labelled "primary" with no idea which address that is.
+  const mailboxes = accounts.map((a) => ({
+    label: a.label,
+    email: a.accountEmail,
+    status: a.status,
+  }));
+
   // Did the user ask for an email's FULL content? Then the body must reach
   // them byte-for-byte, so it is emitted by the deterministic renderer and
   // the model only appends a TL;DR beneath it. Handing a long body to a
@@ -260,7 +351,7 @@ export async function converse(
 
   if (wantsFullBody) {
     const tldr = await runTask("COMPOSE_REPLY", {
-      system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone, knowledge),
+      system: tldrOnlySystemPrompt(activeSkills, Date.now(), timezone, knowledge, mailboxes),
       input: "Write the TL;DR for the email below.",
       untrusted: [{ label: "email", content: deterministic }],
       maxOutputTokens: 600,
@@ -268,6 +359,24 @@ export async function converse(
     const summary = tldr.text.trim();
     return summary ? `${deterministic}\n\n---\nTL;DR:\n${summary}` : deterministic;
   }
+
+  // A LISTING gets the same treatment as a full body, and for the same
+  // reason: the layout must be exact, and a model asked to reproduce one
+  // will not reproduce it.
+  //
+  // renderEmailList emits the sender, subject, date, mailbox and importance
+  // of each result in a fixed shape. Handing that to COMPOSE_REPLY as
+  // untrusted input let the model re-format it freely, so the same request
+  // came back differently every time — dates dropped from one reply, the
+  // mailbox from the next, entries run together in a third. The list is
+  // FACTS, and facts do not need a second author.
+  //
+  // The model still earns its call: it reads the hydrated bodies and writes
+  // a short "what stands out" beneath the list. Interpretation is what it is
+  // good at; typesetting is not.
+  const listedEmails = outcomes.some(
+    (o) => (o.name === "email.search" || o.name === "email.list_recent") && o.ok,
+  );
 
   // A list/search result carries Gmail's ~200-character SNIPPET, not the
   // message. Measured on a real FairMoney webinar mail: the snippet ended
@@ -282,8 +391,29 @@ export async function converse(
   // answerable, not to bulk-load an inbox.
   const bodies = await hydrateBodies(ctx, userId, outcomes);
 
+  if (listedEmails) {
+    const summary = await runTask("COMPOSE_REPLY", {
+      system: listSummarySystemPrompt(activeSkills, Date.now(), timezone, knowledge, mailboxes),
+      input: `The user said: ${text}`,
+      untrusted: [
+        { label: "tool_results", content: deterministic },
+        ...(bodies ? [{ label: "full_email_bodies", content: bodies }] : []),
+      ],
+      maxOutputTokens: 700,
+    });
+    const note = summary.text.trim();
+    return note ? `${deterministic}\n\n---\n${note}` : deterministic;
+  }
+
   const composed = await runTask("COMPOSE_REPLY", {
-    system: skillComposeSystemPrompt(displayName, activeSkills, Date.now(), timezone, knowledge),
+    system: skillComposeSystemPrompt(
+      displayName,
+      activeSkills,
+      Date.now(),
+      timezone,
+      knowledge,
+      mailboxes,
+    ),
     input: `The user said: ${text}`,
     // The rendered facts include email bodies — attacker-controlled content,
     // so it enters through the untrusted channel, never the instruction.
@@ -397,7 +527,7 @@ async function handleCommand(
     case "/connect":
       return await connectCommand(ctx, userId, text);
     case "/reconnect":
-      return await connectCommand(ctx, userId, text);
+      return await reconnectCommand(ctx, userId, text);
     case "/accounts":
       return await accountsCommand(ctx, userId);
     case "/sync":
@@ -425,8 +555,28 @@ function status(): string {
   ].join("\n");
 }
 
+/** Which store owns tasks, from the accounts already in the database. */
+async function backendFor(ctx: ActionCtx, userId: Id<"users">) {
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
+  return pickBackend(accounts.some((a) => a.provider === "linear" && a.status === "ACTIVE"));
+}
+
 async function tasksCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  if ((await backendFor(ctx, userId)) === "linear") {
+    // "Nothing open" and "I could not reach Linear" are different facts, and
+    // only one of them is about the board. Same rule as note.search.
+    let issues;
+    try {
+      issues = await listOpenLinearIssues(ctx, userId, 25);
+    } catch (error) {
+      return `⚠️ Couldn't reach Linear: ${String(error instanceof Error ? error.message : error)}`;
+    }
+    if (issues.length === 0) return "Nothing open on your Linear board.";
+    return issues.map((i) => `• ${i.taskId} ${i.title} — ${i.status}`).join("\n");
+  }
+
   const tasks = await ctx.runQuery(internal.model.tasks.list, { userId, limit: 25 });
   const open = tasks.filter(
     (t) => t.status !== "COMPLETED" && t.status !== "CANCELLED",
@@ -445,6 +595,22 @@ async function tasksCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string
 }
 
 async function blockedCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  if ((await backendFor(ctx, userId)) === "linear") {
+    // On Linear a blocker is a marker line in the issue description — there
+    // is no `blockers` table to query. See withBlockerNote.
+    let issues;
+    try {
+      issues = await listOpenLinearIssuesWithDescriptions(ctx, userId, 25);
+    } catch (error) {
+      return `⚠️ Couldn't reach Linear: ${String(error instanceof Error ? error.message : error)}`;
+    }
+    const blocked = issues.filter((i) => hasBlockerNote(i.description));
+    if (blocked.length === 0) return "Nothing blocked.";
+    return blocked
+      .map((i) => [`• ${i.identifier} ${i.title}`, `    ↳ ${blockerReason(i.description)}`].join("\n"))
+      .join("\n");
+  }
+
   const blocked = await ctx.runQuery(internal.model.tasks.openBlockers, { userId });
   if (blocked.length === 0) return "Nothing blocked.";
 
@@ -474,6 +640,59 @@ async function remindersCommand(ctx: ActionCtx, userId: Id<"users">): Promise<st
  * crash. One sentence naming the limitation costs nothing and tells you
  * exactly where you are in the build.
  */
+/**
+ * The second planning round. Sees the tool results; may call more tools.
+ *
+ * SECURITY: the results block contains fetched external content — an
+ * Instagram caption, an email body. It enters as `untrusted`, and the same
+ * SCOPE and approval rules apply because this reuses the planning prompt
+ * verbatim. An injected "email everyone" still cannot send: email.send_reply
+ * is consequential and the gate is unchanged. The realistic exposure is a
+ * junk note or a junk task, which is recoverable and visible.
+ */
+async function planFollowUp(
+  ctx: ActionCtx,
+  args: {
+    userId: Id<"users">;
+    timezone: string;
+    system: string;
+    text: string;
+    results: string;
+  },
+): Promise<string | null> {
+  const proposal = await runTask("PLAN_TOOLS", {
+    system: args.system,
+    input:
+      `The user said: ${args.text}\n\n` +
+      `Tools have ALREADY run for this message and their results are in the ` +
+      `untrusted block below. Do the part of the request that has NOT been ` +
+      `done yet — for example, if they asked you to read something and then ` +
+      `save it, the reading is done and the saving is not.\n\n` +
+      `Do NOT call the same read tool again; you already have its result. ` +
+      `If everything they asked for is already done, return an empty "tools" ` +
+      `array and an empty "reply" — that is the normal outcome and costs ` +
+      `nothing.`,
+    untrusted: [{ label: "tool_results", content: args.results }],
+    maxOutputTokens: 1200,
+  });
+
+  const plan = parseToolPlan(proposal.text);
+  if (plan.calls.length === 0) return null;
+
+  const toolCtx: ToolContext = { userId: args.userId, timezone: args.timezone };
+
+  const outcomes: ToolOutcome[] = [];
+  for (const call of plan.calls) {
+    outcomes.push(await executeToolCall(ctx, toolCtx, call));
+  }
+
+  await flushStagedWrites(ctx, toolCtx);
+
+  // plan.reply is dropped: this pass has the results in front of it, so its
+  // prose would restate what the deterministic render above already said.
+  return renderOutcomes("", outcomes, plan.rejected, args.timezone);
+}
+
 export const handleUnsupported = internalAction({
   args: { chatId: v.string(), kind: v.string() },
   handler: async (_ctx, args) => {
@@ -960,6 +1179,82 @@ async function connectCommand(
   ].join("\n");
 }
 
+/**
+ * Re-authorize a mailbox that already exists. NOT the same command as
+ * /connect, and the difference is the whole point.
+ *
+ * A Testing-mode Google app expires refresh tokens every 7 days, so this runs
+ * roughly weekly. It used to be an alias for connectCommand, which meant the
+ * argument was run through /connect's `[^a-z0-9_-]` label stripper — and the
+ * reauth notice tells the user to send an ADDRESS. So
+ * `/reconnect ade.propmail@gmail.com` minted the label "adepropmailgmailcom"
+ * and the upsert renamed the mailbox the user had connected as "primary".
+ * After that, "check my primary mailbox" matched no account and the assistant
+ * said "No mailbox connected" — about a mailbox that was connected and
+ * syncing. Every week, silently.
+ *
+ * So: the argument is a LOOKUP KEY, never a new name. It resolves against
+ * accounts that already exist, by address or by label, and the label that
+ * comes back out is the one already stored.
+ */
+async function reconnectCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  text: string,
+): Promise<string> {
+  const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
+    userId,
+  });
+
+  if (accounts.length === 0) {
+    return "No mailboxes to reconnect. Send /connect <label> to add one.";
+  }
+
+  const needle = (text.split(/\s+/)[1] ?? "").trim().toLowerCase();
+  const roster = accounts.map((a) => `  ${a.accountEmail} (${a.label})`).join("\n");
+
+  if (!needle) {
+    // One mailbox is the common case and needs no argument at all.
+    if (accounts.length > 1) {
+      return `Which one? Send /reconnect <address or label>:\n${roster}`;
+    }
+  }
+
+  const matches = needle
+    ? accounts.filter(
+        (a) => a.accountEmail.toLowerCase() === needle || a.label.toLowerCase() === needle,
+      )
+    : accounts;
+
+  if (matches.length === 0) {
+    return `No mailbox matches "${needle}". You have:\n${roster}`;
+  }
+  if (matches.length > 1) {
+    return `"${needle}" matches more than one mailbox. Use the address:\n${roster}`;
+  }
+
+  const account = matches[0]!;
+
+  const siteUrl = process.env.CONVEX_SITE_URL;
+  if (!siteUrl) return "CONVEX_SITE_URL is not set on this deployment.";
+
+  const { nonce } = await ctx.runMutation(internal.model.oauthStates.issue, {
+    userId,
+    // Its OWN label, carried through unchanged. Setting reconnectAccountId is
+    // what tells the callback to pass relabel:false.
+    label: account.label,
+    reconnectAccountId: account._id,
+  });
+
+  return [
+    `Re-authorize ${account.accountEmail} — it stays labelled "${account.label}":`,
+    `${siteUrl}/oauth/google/start?state=${nonce}`,
+    "",
+    "Pick the same Google account at the prompt.",
+    "The link works once and expires in 10 minutes.",
+  ].join("\n");
+}
+
 async function accountsCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, {
@@ -1114,6 +1409,34 @@ export const handleCallback = internalAction({
           ctx,
           userId,
           args.data.slice("discardset:".length),
+        );
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("applybatch:")) {
+        const text = await applyBatchCommand(ctx, userId, args.data.slice("applybatch:".length));
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("discardbatch:")) {
+        const text = await discardBatchCommand(
+          ctx,
+          userId,
+          args.data.slice("discardbatch:".length),
+        );
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("applyevent:")) {
+        const text = await applyEventCommand(ctx, userId, args.data.slice("applyevent:".length));
+        await sendMessage(args.chatId, text);
+        return;
+      }
+      if (args.data.startsWith("discardevent:")) {
+        const text = await discardEventCommand(
+          ctx,
+          userId,
+          args.data.slice("discardevent:".length),
         );
         await sendMessage(args.chatId, text);
         return;
@@ -1310,6 +1633,99 @@ async function discardChangesetCommand(
   });
   void userId;
   return rejected.rejected ? "🗑️ Batch discarded — nothing was written to Linear." : "Nothing to discard.";
+}
+
+/**
+ * The [Send invite] tap on a calendar card.
+ *
+ * Identical shape to applyChangesetCommand and sendDraftCommand: `consume`
+ * decides, and a tap that fails a check never reaches executeToolCall. What
+ * differs is only what gets re-hashed — here, the stored event, so a guest
+ * list edited after the card was sent voids the approval.
+ */
+async function applyEventCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  eventDraftId: string,
+): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  const consumed = await ctx.runMutation(internal.model.approvals.consume, {
+    action: "calendar.apply_event",
+    targetType: "calendar_events",
+    targetId: eventDraftId,
+  });
+
+  if (!consumed.ok) return `Not sent: ${consumed.reason}`;
+
+  const outcome = await executeToolCall(ctx, { userId, timezone }, {
+    name: "calendar.apply_event",
+    args: { eventDraftId },
+  });
+  return renderOutcomes("", [outcome], [], timezone);
+}
+
+async function discardEventCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  eventDraftId: string,
+): Promise<string> {
+  const rejected = await ctx.runMutation(internal.model.approvals.rejectForTarget, {
+    action: "calendar.apply_event",
+    targetType: "calendar_events",
+    targetId: eventDraftId,
+  });
+  void userId;
+  return rejected.rejected
+    ? "🗑️ Invitation discarded — nothing was sent and nothing was added to your calendar."
+    : "Nothing to discard.";
+}
+
+/**
+ * The [Add all N] tap on a capture card.
+ *
+ * Same shape as every other approval tap: `consume` decides, and a tap that
+ * fails a check never reaches executeToolCall. The flush afterwards matters
+ * here — a batch bound for the task board stages Linear writes, which need
+ * their own card.
+ */
+async function applyBatchCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  batchId: string,
+): Promise<string> {
+  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+
+  const consumed = await ctx.runMutation(internal.model.approvals.consume, {
+    action: "capture.apply",
+    targetType: "capture_batches",
+    targetId: batchId,
+  });
+
+  if (!consumed.ok) return `Not added: ${consumed.reason}`;
+
+  const toolCtx: ToolContext = { userId, timezone };
+  const outcome = await executeToolCall(ctx, toolCtx, {
+    name: "capture.apply",
+    args: { batchId },
+  });
+  await flushStagedWrites(ctx, toolCtx);
+
+  return renderOutcomes("", [outcome], [], timezone);
+}
+
+async function discardBatchCommand(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  batchId: string,
+): Promise<string> {
+  const rejected = await ctx.runMutation(internal.model.approvals.rejectForTarget, {
+    action: "capture.apply",
+    targetType: "capture_batches",
+    targetId: batchId,
+  });
+  void userId;
+  return rejected.rejected ? "🗑️ Discarded — nothing was saved." : "Nothing to discard.";
 }
 
 async function briefCommand(ctx: ActionCtx, userId: Id<"users">): Promise<string> {

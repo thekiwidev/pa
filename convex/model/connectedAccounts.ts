@@ -18,6 +18,23 @@ export const upsert = internalMutation({
     credentialIv: v.bytes(),
     credentialAuthTag: v.bytes(),
     scopesGranted: v.array(v.string()),
+    /**
+     * Permission to overwrite an EXISTING row's label. Default false, and
+     * that default is the whole point.
+     *
+     * `/reconnect ade.propmail@gmail.com` used to reach here with
+     * label="adepropmailgmailcom" — the address run through /connect's
+     * `[^a-z0-9_-]` stripper — and this mutation cheerfully renamed the
+     * mailbox the user had connected as "primary". Every 7-day Testing-mode
+     * expiry destroyed the label, after which `accountLabel: "primary"`
+     * matched nothing and the assistant answered "No mailbox connected."
+     *
+     * assistant.ts's reconnectCommand no longer sends a mangled label, but
+     * the guard lives HERE as well so no future caller can reintroduce the
+     * bug. A label is identity; renaming one is a deliberate act, never a
+     * side effect of refreshing a credential.
+     */
+    relabel: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -35,10 +52,10 @@ export const upsert = internalMutation({
         credentialIv: args.credentialIv,
         credentialAuthTag: args.credentialAuthTag,
         scopesGranted: args.scopesGranted,
-        label: args.label,
+        ...(args.relabel === true ? { label: args.label } : {}),
         status: "ACTIVE",
       });
-      return { accountId: match._id, created: false };
+      return { accountId: match._id, created: false, label: match.label };
     }
 
     const accountId = await ctx.db.insert("connectedAccounts", {
@@ -53,7 +70,7 @@ export const upsert = internalMutation({
       credentialAuthTag: args.credentialAuthTag,
       scopesGranted: args.scopesGranted,
     });
-    return { accountId, created: true };
+    return { accountId, created: true, label: args.label };
   },
 });
 
@@ -67,7 +84,14 @@ export const listForUser = internalQuery({
   },
 });
 
-/** Every ACTIVE account across all users — what the sync cron walks. */
+/**
+ * Every ACTIVE account across all users, of EVERY provider.
+ *
+ * Callers must filter by provider. The Gmail sync cron did not, and fed a
+ * Linear API key to Google's token endpoint as though it were a refresh
+ * token — which marked the Linear account NEEDS_REAUTH and silently took the
+ * task backend down with it.
+ */
 export const listActive = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -92,6 +116,28 @@ export const markSynced = internalMutation({
     await ctx.db.patch("connectedAccounts", args.accountId, {
       lastSyncedAt: Date.now(),
       ...(args.lastHistoryId ? { lastHistoryId: args.lastHistoryId } : {}),
+    });
+  },
+});
+
+/**
+ * Record a push watch, or advance the history cursor.
+ *
+ * Separate from markSynced because a push and a poll are different clocks:
+ * `lastSyncedAt` answers "when did we last look", `lastHistoryId` answers
+ * "what have we already seen". Advancing one from the other would make a
+ * failed history fetch look like a successful sync.
+ */
+export const markWatched = internalMutation({
+  args: {
+    accountId: v.id("connectedAccounts"),
+    historyId: v.optional(v.string()),
+    watchExpiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch("connectedAccounts", args.accountId, {
+      ...(args.historyId ? { lastHistoryId: args.historyId } : {}),
+      ...(args.watchExpiresAt !== undefined ? { watchExpiresAt: args.watchExpiresAt } : {}),
     });
   },
 });

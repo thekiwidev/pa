@@ -1,0 +1,45 @@
+%% Gmail push, the polling safety net, reminders, watch renewal and the brief
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    subgraph Push["The moment mail arrives — Gmail push"]
+        direction TB
+        P1["Google Pub/Sub"] -->|"POST /webhooks/gmail"| P2["Verify Google's signed token<br/>issuer · audience · service account<br/>· expiry · RS256 signature"]
+        P2 -->|"anything wrong"| P3["Refuse. Always answer 200 anyway,<br/>or Pub/Sub retries forever."]
+        P2 -->|"genuine"| P4["Fetch only what changed<br/>gmail.syncFromHistory"]
+        P4 --> Pre
+    end
+
+    subgraph Mail["Safety net: every 10 min (4am–9pm) · every 30 min overnight"]
+        direction TB
+        C1["crons.ts:14"] --> Sync["gmail.syncAll<br/>Gmail accounts only"]
+        Sync --> Fetch["Fetch the last 2 days<br/><b>including Spam</b>"]
+        Fetch --> Pre["Cheap filter first:<br/>known noise senders, your own rules<br/><i>lib/email/prefilter.ts</i>"]
+        Pre -->|"obvious noise"| Stop1["Dropped. No AI spent."]
+        Pre -->|"might matter"| Class["AI: how important is this?<br/>CRITICAL · HIGH · NORMAL · LOW · IGNORE"]
+        Class --> Worth{"Worth waking<br/>you for?"}
+        Worth -->|"CRITICAL"| Alert
+        Worth -->|"HIGH, 7am–10pm"| Alert
+        Worth -->|"otherwise"| Hold["Held for the morning brief"]
+        Alert["📲 Alert card<br/>From · Subject · why it matters · deadline<br/>+ TL;DR / Full / Draft reply / Not important<br/><i>convex/notify.ts</i>"]
+    end
+
+    subgraph Brief["07:00 daily, self-rescheduling"]
+        C2["crons.ts:22"] --> Gather2["Gather facts: tasks, blockers,<br/>reminders, important mail since yesterday"]
+        Gather2 --> Write2["AI turns facts into prose<br/>runTask 'COMPOSE_BRIEF'"]
+        Write2 --> Send2["📲 Your morning brief"]
+    end
+
+    subgraph Rem["At the exact moment you asked for"]
+        C3["scheduler.runAt<br/>not a cron — an exact-time job"] --> Fire["📲 Your reminder"]
+        C4["crons.ts:11 · hourly"] --> Recon["Sweep for any reminder<br/>the scheduler missed"]
+    end
+
+    subgraph Watch["05:00 daily"]
+        C5["crons.ts · gmail.watchAll"] --> Renew["Renew each mailbox's push watch.<br/><b>A lapsed watch fails SILENTLY</b> —<br/>no error, just no more notifications."]
+    end
+
+    classDef ai fill:#4a3a6b,stroke:#8b6fc4,color:#fff
+    classDef out fill:#1f4d3a,stroke:#3fa87a,color:#fff
+    class Class,Write2 ai
+    class Alert,Send2,Fire out

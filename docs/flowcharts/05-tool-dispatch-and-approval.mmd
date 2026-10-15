@@ -1,0 +1,47 @@
+%% Proposal to action: validation, the approval desk, execution, audit
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    Prop(["Model proposes:<br/>tool + arguments"]) --> Zod{"Do the arguments<br/>match the schema?"}
+    Zod -->|"no"| Rej["❌ REJECTED<br/>reported to you, never guessed<br/><i>lib/tools/plan.ts</i>"]
+
+    Zod -->|"yes"| Gate{"Is this tool<br/><b>consequential</b>?<br/><i>tools/router.ts:60</i>"}
+
+    Gate -->|"no — 57 of the 60 tools"| Resolve
+    Gate -->|"yes — send email · Linear batch<br/>calendar invite · saved batch"| Appr{"Is there a live,<br/>unused approval<br/>for this exact payload?"}
+
+    Appr -->|"no"| Card["📋 Send you a card with buttons.<br/><b>Nothing happens yet.</b><br/>Expires in 30 minutes."]
+    Card --> Wait(["⏸ Waiting for your tap"])
+    Wait -->|"you tap Send / Apply"| Seven["Re-check everything<br/>from scratch<br/><i>model/approvals.ts:139</i>"]
+    Seven --> Resolve
+    Appr -->|"yes, already tapped"| Resolve
+
+    Resolve["<b>Resolve names to ids — in code</b><br/>'the FairMoney email' → a row id<br/>'Done' → that team's state id<br/>'primary' → a mailbox id"]
+
+    Resolve --> Which{"What does it<br/>need to touch?"}
+    Which -->|"your own data"| DB["Convex database<br/><i>convex/model/*</i>"]
+    Which -->|"mail"| Gmail["Gmail API<br/><i>connectors/gmail/</i>"]
+    Which -->|"notes"| Notion["Notion API<br/><i>connectors/notion/</i>"]
+    Which -->|"tasks"| Linear["Linear API<br/><i>connectors/linear/</i>"]
+    Which -->|"your calendar"| Cal["Google Calendar<br/><i>connectors/gcal/</i>"]
+    Which -->|"a document"| Drv["Google Drive, read-only<br/><i>connectors/gdrive/</i>"]
+    Which -->|"a link you pasted"| Web["That one post<br/><i>connectors/social/</i>"]
+
+    DB --> Audit
+    Gmail --> Audit
+    Notion --> Audit
+    Linear --> Audit
+    Cal --> Audit
+    Drv --> Audit
+    Web --> Audit
+
+    Audit["📓 Write an audit row<br/><b>success or failure, always</b><br/>append-only, no delete exists"]
+    Audit --> Done(["Result goes back to be rendered"])
+    Rej --> Done
+
+    classDef danger fill:#5c2a2a,stroke:#c46f6f,color:#fff
+    classDef gatecls fill:#5c4a2a,stroke:#c4a06f,color:#fff
+    classDef ext fill:#2a3f5c,stroke:#6f9bc4,color:#fff
+    class Rej danger
+    class Gate,Appr,Card,Wait,Seven gatecls
+    class Gmail,Notion,Linear,Cal,Drv,Web ext

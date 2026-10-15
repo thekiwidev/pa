@@ -88,3 +88,26 @@ export function formatInstant(atMs: number, timeZone: string): string {
     hour12: false,
   }).format(new Date(atMs));
 }
+
+/** "Fri 5 Sep" — a date with no clock, for search windows and list rows. */
+export function formatDay(atMs: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  }).format(new Date(atMs));
+}
+
+/** "Fri 5 Sep, 14:22" — a list row needs the time but not the year. */
+export function formatDayTime(atMs: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(atMs));
+}

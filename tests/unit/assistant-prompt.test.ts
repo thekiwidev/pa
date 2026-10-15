@@ -5,6 +5,7 @@ import {
   planningSystemPrompt,
   skillComposeSystemPrompt,
   tldrOnlySystemPrompt,
+  listSummarySystemPrompt,
   renderConversation,
 } from "../../convex/lib/prompts/assistant";
 
@@ -88,8 +89,15 @@ describe("planningSystemPrompt", () => {
     // Linear left this list when Phase 16 landed. The list is a promise about
     // what does not exist — every entry removed from it must correspond to a
     // real tool, and every tool absent from the catalogue must be in it.
-    expect(prompt).toContain("Calendar, Drive, WhatsApp");
-    expect(prompt).toContain("You CAN read and update Linear issues");
+    // Calendar and Drive left this list when Phases 10 and 11 landed,
+    // exactly as Linear did in Phase 16. WhatsApp is still genuinely absent,
+    // and so are the destructive email actions.
+    expect(prompt).toContain("WhatsApp");
+    expect(prompt).toContain("CALENDAR is real");
+    expect(prompt).toContain("DRIVE is real, and READ-ONLY");
+    // The rule that keeps Drive safe must survive any rewording of the rest.
+    expect(prompt).toContain("You NARROW; the user CHOOSES");
+    expect(prompt).toContain("You CAN also read and update Linear issues");
     expect(prompt).toContain('Never say "I am checking / investigating');
   });
 
@@ -315,6 +323,7 @@ describe("format contract reaches every user-facing prompt", () => {
     ["planningSystemPrompt", planningSystemPrompt(base)],
     ["skillComposeSystemPrompt", skillComposeSystemPrompt("Ade", skills, nowMs, "Africa/Lagos")],
     ["tldrOnlySystemPrompt", tldrOnlySystemPrompt(skills, nowMs, "Africa/Lagos")],
+    ["listSummarySystemPrompt", listSummarySystemPrompt(skills, nowMs, "Africa/Lagos")],
   ];
 
   for (const [name, prompt] of builders) {
@@ -341,5 +350,73 @@ describe("SCOPE tells the truth about where notes live", () => {
   test("distinguishes an outage from an absence", () => {
     const prompt = planningSystemPrompt(base);
     expect(prompt).toContain("couldn't reach Notion");
+  });
+});
+
+describe("every user-facing prompt knows which mailbox is which", () => {
+  // The planning pass has always had the roster. The COMPOSE passes did not,
+  // which is how "check my primary mailbox" could be planned correctly and
+  // then answered by a pass that had never been told what "primary" meant.
+  const NOW = Date.UTC(2026, 7, 21, 9, 0);
+  const skills = [{ title: "Check email", content: "Append a TL;DR." }];
+  const mailboxes = [
+    { label: "primary", email: "ade.propmail@gmail.com", status: "ACTIVE" },
+    { label: "secondary", email: "second@gmail.com", status: "ACTIVE" },
+  ];
+
+  const builders: [string, string][] = [
+    [
+      "skillComposeSystemPrompt",
+      skillComposeSystemPrompt("Ade", skills, NOW, "Africa/Lagos", undefined, mailboxes),
+    ],
+    [
+      "tldrOnlySystemPrompt",
+      tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos", undefined, mailboxes),
+    ],
+    [
+      "listSummarySystemPrompt",
+      listSummarySystemPrompt(skills, NOW, "Africa/Lagos", undefined, mailboxes),
+    ],
+  ];
+
+  for (const [name, prompt] of builders) {
+    test(`${name} names each mailbox and its label`, () => {
+      expect(prompt).toContain("ade.propmail@gmail.com (primary) — ACTIVE");
+      expect(prompt).toContain("second@gmail.com (secondary) — ACTIVE");
+    });
+  }
+
+  test("with no mailboxes, every prompt says so rather than going silent", () => {
+    for (const build of [
+      () => skillComposeSystemPrompt("Ade", skills, NOW, "Africa/Lagos"),
+      () => tldrOnlySystemPrompt(skills, NOW, "Africa/Lagos"),
+      () => listSummarySystemPrompt(skills, NOW, "Africa/Lagos"),
+    ]) {
+      expect(build()).toContain("(none connected");
+    }
+  });
+});
+
+describe("listSummarySystemPrompt — the list is not the model's to rewrite", () => {
+  const NOW = Date.UTC(2026, 7, 21, 9, 0);
+  const skills = [{ title: "Check email", content: "Append a TL;DR." }];
+  const prompt = listSummarySystemPrompt(skills, NOW, "Africa/Lagos");
+
+  test("says the list has already been shown, so it is never re-listed", () => {
+    const flat = prompt.replace(/\s+/g, " ");
+    expect(flat).toContain("ALREADY been shown");
+    expect(flat).toContain("Do NOT reproduce it");
+  });
+
+  test("tells the model to reference results by number", () => {
+    expect(prompt.replace(/\s+/g, " ")).toContain("by its NUMBER");
+  });
+
+  test("still treats a dated event as an action", () => {
+    expect(prompt).toContain("IS an action");
+  });
+
+  test("writes nothing at all when the result was empty", () => {
+    expect(prompt.replace(/\s+/g, " ")).toContain("If the result was empty, add nothing");
   });
 });

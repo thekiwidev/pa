@@ -86,14 +86,44 @@ describe("catalog", () => {
     // adding one must be a decision someone made on purpose — this test is
     // the place that decision gets recorded.
     //
-    // email.send_reply — sends mail to another person.
-    // linear.apply_changeset — writes to a shared issue tracker.
+    // email.send_reply       — sends mail to another person.
+    // linear.apply_changeset  — writes to a shared issue tracker.
+    // calendar.apply_event    — emails an invitation and lands on someone
+    //                           else's calendar. Note that its sibling,
+    //                           calendar.create_event, is NOT here: a solo
+    //                           block affects nobody, so it writes freely and
+    //                           only escalates to this tool when there are
+    //                           guests. Consequentiality is about attendees,
+    //                           not about writing.
+    // capture.apply           — writes a BATCH the user was shown. A single
+    //                           note.save is not consequential; ten items
+    //                           pulled off a possibly-misread carousel are,
+    //                           because the damage scales and the user cannot
+    //                           spot it afterwards. Its sibling
+    //                           capture.propose only shows the list.
     const consequential = Object.entries(TOOL_META)
       .filter(([, meta]) => meta.consequential)
       .map(([name]) => name)
       .sort();
 
-    expect(consequential).toEqual(["email.send_reply", "linear.apply_changeset"]);
+    expect(consequential).toEqual([
+      "calendar.apply_event",
+      "capture.apply",
+      "email.send_reply",
+      "linear.apply_changeset",
+    ]);
+  });
+
+  test("capture.propose is NOT consequential — showing a list writes nothing", () => {
+    expect(TOOL_META["capture.propose"].consequential).toBe(false);
+    expect(TOOL_META["capture.apply"].consequential).toBe(true);
+  });
+
+  test("calendar.create_event is NOT consequential — the guest list decides", () => {
+    // If this ever flips to true, blocking your own focus time starts
+    // demanding a tap, and the tool stops being worth using.
+    expect(TOOL_META["calendar.create_event"].consequential).toBe(false);
+    expect(TOOL_META["calendar.apply_event"].consequential).toBe(true);
   });
 
   test("no tool that merely READS is marked consequential", () => {
@@ -284,16 +314,48 @@ describe("catalog — instruction tools", () => {
   });
 });
 
-describe("catalog — deep search", () => {
-  test("email.search accepts deep:true", () => {
+describe("catalog — email search windows", () => {
+  test("email.search accepts a widening window", () => {
     const plan = parseToolPlan(
       JSON.stringify({
         reply: "",
-        tools: [{ name: "email.search", args: { gmailLabel: "SPAM", deep: true } }],
+        tools: [
+          { name: "email.search", args: { from: "paul", withinDays: 30, afterDays: 14 } },
+        ],
       }),
     );
     expect(plan.rejected).toEqual([]);
-    expect(plan.calls[0]?.args.deep).toBe(true);
+    expect(plan.calls[0]?.args.withinDays).toBe(30);
+    expect(plan.calls[0]?.args.afterDays).toBe(14);
+    expect(plan.calls[0]?.args.from).toBe("paul");
+  });
+
+  test("a label alone is criteria enough", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [{ name: "email.search", args: { gmailLabel: "SPAM", withinDays: 365 } }],
+      }),
+    );
+    expect(plan.rejected).toEqual([]);
+  });
+
+  test("a search with NO criteria is rejected, not run against the whole mailbox", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [{ name: "email.search", args: { withinDays: 365 } }],
+      }),
+    );
+    expect(plan.calls).toEqual([]);
+    expect(plan.rejected[0]?.name).toBe("email.search");
+  });
+
+  test("email.list_recent still needs no criteria — it is the 'what is new' tool", () => {
+    const plan = parseToolPlan(
+      JSON.stringify({ reply: "", tools: [{ name: "email.list_recent", args: {} }] }),
+    );
+    expect(plan.rejected).toEqual([]);
   });
 });
 
@@ -421,5 +483,68 @@ describe("catalog — email.create_draft accepts a fragment", () => {
     );
     expect(plan.calls).toEqual([]);
     expect(plan.rejected[0]?.reason).toContain("emailMessageId or senderOrSubject");
+  });
+});
+
+describe("catalog — capture.propose accepts the shapes the model actually sends", () => {
+  const plan = (items: unknown) =>
+    parseToolPlan(
+      JSON.stringify({
+        reply: "",
+        tools: [
+          {
+            name: "capture.propose",
+            args: { title: "Movies", destination: "notes", items },
+          },
+        ],
+      }),
+    );
+
+  test("the documented object form works", () => {
+    const p = plan([{ title: "Arrival", detail: "2016" }]);
+    expect(p.rejected).toEqual([]);
+    expect(p.calls[0]?.args.items).toEqual([{ title: "Arrival", detail: "2016" }]);
+  });
+
+  test("a bare array of strings is accepted, not rejected", () => {
+    // Measured live: asked for five films the model sent plain strings. A
+    // correct answer in the wrong shape must not become zero items.
+    const p = plan(["Arrival (2016)", "Dune (2021)"]);
+    expect(p.rejected).toEqual([]);
+    expect(p.calls[0]?.args.items).toEqual([
+      { title: "Arrival (2016)" },
+      { title: "Dune (2021)" },
+    ]);
+  });
+
+  test("`name` and `text` are accepted as the title key", () => {
+    expect(plan([{ name: "Dune" }]).calls[0]?.args.items).toEqual([{ title: "Dune" }]);
+    expect(plan([{ text: "Dune" }]).calls[0]?.args.items).toEqual([{ title: "Dune" }]);
+  });
+
+  test("`description`, `note` and `year` are accepted as the detail key", () => {
+    expect(plan([{ title: "Dune", year: 2021 }]).calls[0]?.args.items).toEqual([
+      { title: "Dune", detail: "2021" },
+    ]);
+    expect(plan([{ title: "Dune", description: "sci-fi" }]).calls[0]?.args.items).toEqual([
+      { title: "Dune", detail: "sci-fi" },
+    ]);
+  });
+
+  test("a mixed array is normalised item by item", () => {
+    expect(plan(["Arrival", { title: "Dune", detail: "2021" }]).calls[0]?.args.items).toEqual([
+      { title: "Arrival" },
+      { title: "Dune", detail: "2021" },
+    ]);
+  });
+
+  test("genuinely unusable items are still rejected", () => {
+    expect(plan([{ nonsense: true }]).rejected.length).toBe(1);
+    expect(plan([]).rejected.length).toBe(1);
+    expect(plan([""]).rejected.length).toBe(1);
+  });
+
+  test("a batch beyond the cap is rejected rather than silently trimmed", () => {
+    expect(plan(Array.from({ length: 31 }, (_, i) => `Item ${i}`)).rejected.length).toBe(1);
   });
 });

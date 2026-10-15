@@ -1,0 +1,53 @@
+%% Every step a Telegram message takes, with the file that owns each one
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart TD
+    Start(["📱 You send a message"]) --> TG["Telegram servers"]
+    TG -->|"HTTPS POST"| Hook["<b>/webhooks/telegram</b><br/><i>convex/http.ts:38</i>"]
+
+    Hook --> Secret{"Correct secret<br/>header?"}
+    Secret -->|"no"| Drop401["401. Ignored."]
+    Secret -->|"yes"| Kind{"What kind of<br/>message is it?"}
+
+    Kind -->|"button tap"| CB["handleCallback<br/><i>assistant.ts:1376</i>"]
+    Kind -->|"voice note"| Voice["handleVoice → transcribe<br/><i>assistant.ts:1072</i>"]
+    Kind -->|"photo / PDF / .md"| Media["handlePhoto · handleDocument<br/><i>assistant.ts:788, 984</i>"]
+    Kind -->|"plain text"| Text["handleMessage<br/><i>assistant.ts:46</i>"]
+
+    Voice --> Text
+    Media --> Text
+
+    Text --> Save1["<b>1. Save what arrived</b><br/>messages table<br/><i>model/messages.ts</i>"]
+    Save1 --> Fork{"Starts with<br/>a slash?"}
+
+    Fork -->|"yes"| Cmd["handleCommand<br/><i>assistant.ts:508</i><br/>No AI. Straight to the answer."]
+    Fork -->|"no"| Conv["<b>converse</b><br/><i>assistant.ts:109</i>"]
+
+    Conv --> Gather["<b>2. Gather context</b><br/>last 10 messages · projects · open tasks<br/>reminders · mailboxes · your facts · your rules"]
+    Gather --> Prompt["<b>3. Build the prompt</b><br/><i>lib/prompts/assistant.ts</i><br/>see diagram 4"]
+
+    Prompt --> Model["<b>4. Ask the model what to do</b><br/>runTask 'PLAN_TOOLS'<br/><i>ai/registry.ts</i>"]
+    Model --> Json["Model replies with JSON:<br/>{ reply, tools: [...] }"]
+
+    Json --> Validate["<b>5. Check every tool call</b><br/>parseToolPlan · Zod<br/><i>lib/tools/plan.ts</i>"]
+    Validate --> Bad["Anything invalid is REJECTED<br/>and reported, never guessed at"]
+    Validate --> Exec["<b>6. Run the survivors</b><br/>executeToolCall<br/><i>tools/router.ts</i><br/>see diagram 5"]
+
+    Exec --> Render["<b>7. Write the answer in code</b><br/>renderOutcomes<br/><i>lib/tools/outcomes.ts</i>"]
+    Bad --> Render
+
+    Render --> Skill{"Did a skill match<br/>this message?"}
+    Skill -->|"no"| Out
+    Skill -->|"yes"| Second["<b>8. Second AI pass</b><br/>presentation only<br/>runTask 'COMPOSE_REPLY'"]
+    Second --> Out
+
+    Cmd --> Out["<b>9. Send it</b><br/>markdown → Telegram HTML → split<br/><i>channels/telegram.ts</i>"]
+    Out --> Save2["<b>10. Save what we said</b>"]
+    Save2 --> End(["📱 The reply lands"])
+
+    classDef ai fill:#4a3a6b,stroke:#8b6fc4,color:#fff
+    classDef danger fill:#5c2a2a,stroke:#c46f6f,color:#fff
+    classDef store fill:#2a3f5c,stroke:#6f9bc4,color:#fff
+    class Model,Second ai
+    class Drop401,Bad danger
+    class Save1,Save2,Gather store

@@ -1,4 +1,4 @@
-import { internalAction } from "./_generated/server";
+import { internalAction, internalQuery } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -7,7 +7,7 @@ import { seal, open } from "./security/crypto";
 import {
   exchangeCode,
   refreshAccessToken,
-  GMAIL_SEND_SCOPES,
+  GOOGLE_CONNECT_SCOPES,
   TokenRevoked,
 } from "./connectors/gmail/oauth";
 import {
@@ -15,6 +15,11 @@ import {
   listMessages,
   getMessage,
   sendMessage as sendGmailMessage,
+  watchMailbox,
+  listHistory,
+  modifyMessage,
+  listLabels,
+  createLabel,
   GmailApiError,
 } from "./connectors/gmail/client";
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
@@ -35,6 +40,9 @@ import { sendMessage } from "./channels/telegram";
 
 /** How far back a sync looks. Gmail's `q` syntax. */
 const SYNC_WINDOW = "newer_than:2d";
+
+/** What archive / label / mark-read need. Checked before every one of them. */
+const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 const MAX_PER_SYNC = 40;
 
 /**
@@ -50,6 +58,9 @@ export const completeConnect = internalAction({
     userId: v.id("users"),
     label: v.string(),
     telegramId: v.string(),
+    /** False on /reconnect: refreshing a credential must never rename the
+     *  mailbox. See the note on connectedAccounts.upsert. */
+    relabel: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const tokens = await exchangeCode(args.code);
@@ -79,7 +90,12 @@ export const completeConnect = internalAction({
       encryptedCredentials: sealed.ciphertext,
       credentialIv: sealed.iv,
       credentialAuthTag: sealed.authTag,
-      scopesGranted: tokens.scopes.length ? tokens.scopes : [...GMAIL_SEND_SCOPES],
+      // What Google SAID it granted, always preferred over what we asked for.
+      // The fallback matters only if Google omits `scope` from the response;
+      // assuming the full list there would let a Calendar tool believe it has
+      // a permission the token does not carry.
+      scopesGranted: tokens.scopes.length ? tokens.scopes : [...GOOGLE_CONNECT_SCOPES],
+      relabel: args.relabel !== false,
     });
 
     await ctx.runMutation(internal.model.audit.record, {
@@ -87,13 +103,13 @@ export const completeConnect = internalAction({
       action: "account.connect",
       targetType: "connectedAccounts",
       targetId: result.accountId,
-      args: { provider: "gmail", label: args.label, email: profile.emailAddress },
+      args: { provider: "gmail", label: result.label, email: profile.emailAddress },
       result: "ok",
     });
 
     await sendMessage(
       args.telegramId,
-      `✅ Connected ${profile.emailAddress} as "${args.label}".\n` +
+      `✅ Connected ${profile.emailAddress} as "${result.label}".\n` +
         `Read-only. Syncing now — including spam.`,
     );
 
@@ -126,30 +142,303 @@ async function accessTokenFor(
 }
 
 /**
+ * Apply a label change to one message, in Gmail and in the local cache.
+ *
+ * Archive, mark-read and mark-unread are all this one operation — Gmail
+ * models them as label edits, which is also why all three are reversible.
+ * Nothing here can destroy a message: `gmail.modify` cannot permanently
+ * delete, and this project never requests the scope that can.
+ *
+ * The local row is patched from Gmail's OWN response rather than from what
+ * we asked for, so a partially-applied change is reflected honestly.
+ */
+export const applyLabels = internalAction({
+  args: {
+    emailMessageId: v.id("emailMessages"),
+    addLabelIds: v.optional(v.array(v.string())),
+    removeLabelIds: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<{ labelIds: string[] }> => {
+    const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+      emailMessageId: args.emailMessageId,
+    });
+    if (!message) throw new Error("no email matching that");
+
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: message.accountId,
+    });
+    if (!account || account.status !== "ACTIVE") throw new Error("that mailbox is not connected");
+
+    if (!account.scopesGranted.includes(GMAIL_MODIFY_SCOPE)) {
+      throw new Error(
+        `${account.accountEmail} was connected before mailbox actions existed, and ` +
+          "Google cannot add the permission to an existing token — send " +
+          `/reconnect ${account.accountEmail} once and this will work.`,
+      );
+    }
+
+    const accessToken = await accessTokenFor(ctx, message.accountId);
+    const result = await modifyMessage(accessToken, message.providerMessageId, {
+      addLabelIds: args.addLabelIds,
+      removeLabelIds: args.removeLabelIds,
+    });
+
+    const labelIds = result.labelIds ?? message.labelIds;
+    await ctx.runMutation(internal.model.emailMessages.setLabels, {
+      emailMessageId: args.emailMessageId,
+      labelIds,
+    });
+
+    return { labelIds };
+  },
+});
+
+/** Resolve a label NAME to its Gmail id, creating it if it does not exist. */
+export const resolveLabelId = internalAction({
+  args: { accountId: v.id("connectedAccounts"), name: v.string() },
+  handler: async (ctx, args): Promise<{ labelId: string; created: boolean }> => {
+    const accessToken = await accessTokenFor(ctx, args.accountId);
+    const labels = await listLabels(accessToken);
+
+    const needle = args.name.trim().toLowerCase();
+    const found = labels.find((l) => l.name.toLowerCase() === needle);
+    if (found) return { labelId: found.id, created: false };
+
+    const created = await createLabel(accessToken, args.name.trim());
+    return { labelId: created.id, created: true };
+  },
+});
+
+/**
+ * Register (or renew) a Gmail push watch for one mailbox.
+ *
+ * The returned expiration is at most 7 days out and Google recommends daily
+ * renewal, so this is called by a cron rather than once at connect time. A
+ * lapsed watch fails SILENTLY — no error, just no notifications ever again —
+ * which is also why the polling sync stays in place as a safety net rather
+ * than being replaced by this.
+ */
+export const watchAccount = internalAction({
+  args: { accountId: v.id("connectedAccounts") },
+  handler: async (ctx, args): Promise<{ watched: boolean; reason?: string }> => {
+    const topic = process.env.GOOGLE_PUBSUB_TOPIC;
+    if (!topic) return { watched: false, reason: "GOOGLE_PUBSUB_TOPIC is not set" };
+
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: args.accountId,
+    });
+    if (!account || account.provider !== "gmail" || account.status !== "ACTIVE") {
+      return { watched: false, reason: "account is not an active Gmail account" };
+    }
+
+    try {
+      const accessToken = await accessTokenFor(ctx, args.accountId);
+      const result = await watchMailbox(accessToken, topic);
+
+      await ctx.runMutation(internal.model.connectedAccounts.markWatched, {
+        accountId: args.accountId,
+        historyId: result.historyId,
+        // Google returns the expiration as ms-epoch in a STRING.
+        watchExpiresAt: Number(result.expiration),
+      });
+      return { watched: true };
+    } catch (error) {
+      if (error instanceof TokenRevoked) {
+        await notifyNeedsReauth(
+          ctx,
+          account.userId,
+          args.accountId,
+          account.accountEmail,
+          account.label,
+        );
+        return { watched: false, reason: "needs re-auth" };
+      }
+      // A watch failure must never take down the poll. Report and continue.
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(`gmail_watch_failed account=${args.accountId}: ${detail}`);
+      return { watched: false, reason: detail.slice(0, 200) };
+    }
+  },
+});
+
+/** Renew every active mailbox's watch. Cheap, idempotent, runs daily. */
+export const watchAll = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ skipped?: string; renewed?: number }> => {
+    if (!process.env.GOOGLE_PUBSUB_TOPIC) return { skipped: "no topic configured" };
+
+    const accounts = (
+      await ctx.runQuery(internal.model.connectedAccounts.listActive, {})
+    ).filter((a) => a.provider === "gmail");
+
+    for (const account of accounts) {
+      await ctx.runAction(internal.gmail.watchAccount, { accountId: account._id });
+    }
+    return { renewed: accounts.length };
+  },
+});
+
+/**
+ * The push path: sync only what changed since the stored history cursor.
+ *
+ * Falls back to the ordinary windowed sync when Gmail no longer holds that
+ * far back. History is kept for a limited period, so a mailbox that was
+ * quiet for a week comes back expired — treating that as an error would mean
+ * silently missing every message that arrived in the meantime.
+ */
+export const syncFromHistory = internalAction({
+  args: { accountId: v.id("connectedAccounts") },
+  handler: async (ctx, args): Promise<{ synced: number; fellBack: boolean }> => {
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: args.accountId,
+    });
+    if (!account || account.provider !== "gmail" || account.status !== "ACTIVE") {
+      return { synced: 0, fellBack: false };
+    }
+
+    if (!account.lastHistoryId) {
+      await ctx.runAction(internal.gmail.syncAccount, { accountId: args.accountId });
+      return { synced: 0, fellBack: true };
+    }
+
+    let accessToken: string;
+    try {
+      accessToken = await accessTokenFor(ctx, args.accountId);
+    } catch (error) {
+      if (error instanceof TokenRevoked) {
+        await notifyNeedsReauth(
+          ctx,
+          account.userId,
+          args.accountId,
+          account.accountEmail,
+          account.label,
+        );
+        return { synced: 0, fellBack: false };
+      }
+      throw error;
+    }
+
+    const history = await listHistory(accessToken, account.lastHistoryId);
+
+    if (history.expired) {
+      await ctx.runAction(internal.gmail.syncAccount, { accountId: args.accountId });
+      return { synced: 0, fellBack: true };
+    }
+
+    // One message can appear in several history records. Deduplicate before
+    // fetching, or a busy thread costs a getMessage per mention.
+    const ids = new Set<string>();
+    for (const record of history.records) {
+      for (const added of record.messagesAdded ?? []) {
+        if (added.message?.id) ids.add(added.message.id);
+      }
+    }
+
+    let stored = 0;
+    for (const messageId of ids) {
+      try {
+        const full = await getMessage(accessToken, messageId);
+        const normalized = normalizeMessage(full);
+        const { bodyTruncated: _bodyTruncated, ...row } = normalized;
+        const result = await ctx.runMutation(internal.model.emailMessages.upsert, {
+          accountId: args.accountId,
+          ...row,
+        });
+        if (result.created) stored++;
+      } catch (error) {
+        // One unreadable message must not abandon the rest of the batch.
+        console.warn(`gmail_history_message_failed id=${messageId}: ${String(error)}`);
+      }
+    }
+
+    // Classify in one pass afterwards, exactly as the polling sync does —
+    // classification is the expensive half and batching it keeps a burst of
+    // pushes from becoming a burst of model calls.
+    if (stored > 0) {
+      await ctx.runAction(internal.gmail.classifyBacklog, {
+        accountId: args.accountId,
+        limit: Math.min(stored, 20),
+      });
+    }
+
+    if (history.historyId) {
+      await ctx.runMutation(internal.model.connectedAccounts.markWatched, {
+        accountId: args.accountId,
+        historyId: history.historyId,
+      });
+    }
+
+    return { synced: stored, fellBack: false };
+  },
+});
+
+/** Resolve a pushed mailbox ADDRESS to the account row it belongs to. */
+export const accountByEmail = internalQuery({
+  args: { accountEmail: v.string() },
+  // Explicit return type: without it this handler's inferred type flows
+  // through _generated/api and silently degrades ctx.runQuery types across
+  // assistant.ts to `any`. Same trap debug:planOnly documents.
+  handler: async (ctx, args): Promise<{ accountId: Id<"connectedAccounts"> } | null> => {
+    const rows = await ctx.db
+      .query("connectedAccounts")
+      .withIndex("by_status", (q) => q.eq("status", "ACTIVE"))
+      .take(50);
+    const needle = args.accountEmail.trim().toLowerCase();
+    const found = rows.find(
+      (r) => r.provider === "gmail" && r.accountEmail.toLowerCase() === needle,
+    );
+    return found ? { accountId: found._id } : null;
+  },
+});
+
+/**
+ * A fresh Google access token for one account, for callers outside this file.
+ *
+ * An action, not a plain export, because the plaintext refresh token must
+ * never leave this module's frame — and because Calendar and Drive ride the
+ * same grant, so they need exactly this and nothing else from Gmail.
+ */
+export const accessTokenForAccount = internalAction({
+  args: { accountId: v.id("connectedAccounts") },
+  handler: async (ctx, args): Promise<string> => {
+    const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
+      accountId: args.accountId,
+    });
+    if (!account || account.status !== "ACTIVE") throw new Error("account is not active");
+    return await accessTokenFor(ctx, args.accountId);
+  },
+});
+
+/**
  * A live, on-demand Gmail query — NOT the cached `emailMessages` table.
  *
  * `syncAccount` only ever looks at the last 2 days; that cap is a cost
  * decision for the passive background sync, not a limit on what the user can
- * actually ask for. When someone says "check my spam, all of it" or a normal
- * search comes back empty and they push back, this is what runs instead:
- * a real Gmail API query with no `newer_than` clause (Gmail's default is
- * unbounded), matches get normalized and upserted into the permanent cache
- * exactly like a background sync would, and are returned immediately.
+ * actually ask for. When someone asks for a specific message, or pushes back
+ * on an empty result, this is what runs instead: a real Gmail API query,
+ * whose matches get normalized and upserted into the permanent cache exactly
+ * like a background sync would, and are returned immediately.
  *
- * Capped at DEEP_SEARCH_MAX results — this is user-triggered and synchronous
- * from the model's point of view (it's waiting on the tool result), so it
- * cannot be allowed to run away on a huge mailbox.
+ * The `q` string arrives ALREADY BUILT, from lib/email/gmailQuery.ts. This
+ * action used to assemble it — and to accept the model's raw `query` string
+ * as Gmail syntax, which is the model writing a query language (invariant
+ * I-1 inverted). Building it from typed fields in a pure, tested module is
+ * what lets `from:` work at all while making it impossible for a free-text
+ * search to smuggle an operator in.
+ *
+ * Capped at DEEP_SEARCH_MAX — this is user-triggered and synchronous from the
+ * model's point of view (it is waiting on the tool result), so it cannot be
+ * allowed to run away on a huge mailbox.
  */
 const DEEP_SEARCH_MAX = 25;
 
 export const deepSearch = internalAction({
   args: {
     accountId: v.id("connectedAccounts"),
-    /** Gmail's own `q` syntax, e.g. `from:recruiter label:spam`. Omit for
-     *  "everything matching the label filter, no keyword". */
+    /** A complete Gmail `q` string, built by lib/email/gmailQuery.ts. */
     query: v.optional(v.string()),
-    /** Gmail label to filter to, e.g. "SPAM". Combined with `query` via AND. */
-    gmailLabel: v.optional(v.string()),
+    /** Caller's own cap, clamped to DEEP_SEARCH_MAX. */
+    maxResults: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<{ emailMessageIds: string[]; scanned: number }> => {
     const account = await ctx.runQuery(internal.model.connectedAccounts.get, {
@@ -161,15 +450,14 @@ export const deepSearch = internalAction({
 
     const accessToken = await accessTokenFor(ctx, args.accountId);
 
-    const gmailQuery = [args.query, args.gmailLabel ? `label:${args.gmailLabel}` : undefined]
-      .filter(Boolean)
-      .join(" ");
+    const gmailQuery = args.query ?? "";
 
     const listed = await listMessages(accessToken, {
-      // No `newer_than` — Gmail's default is unbounded, which is the whole
-      // point: this is the escape hatch from the 2-day background-sync cap.
+      // No `newer_than` here: any date bound the caller wanted is already in
+      // `q` as after:/before:. This is the escape hatch from the 2-day
+      // background-sync cap.
       query: gmailQuery,
-      maxResults: DEEP_SEARCH_MAX,
+      maxResults: Math.min(args.maxResults ?? DEEP_SEARCH_MAX, DEEP_SEARCH_MAX),
     });
 
     const emailMessageIds: string[] = [];
@@ -425,6 +713,11 @@ export const syncAccount = internalAction({
       accountId: args.accountId,
     });
     if (!account || account.status === "REVOKED") return;
+    // Defence in depth against the bug fixed in syncAll: this action reads a
+    // GOOGLE refresh token out of the row, so pointing it at any other
+    // provider destroys that account's status for a credential Google was
+    // never going to accept.
+    if (account.provider !== "gmail") return;
 
     let accessToken: string;
     try {
@@ -433,7 +726,13 @@ export const syncAccount = internalAction({
       // A Testing-mode refresh token expires after SEVEN DAYS. This is the
       // normal weekly path, not an exception — tell the user how to fix it.
       if (error instanceof TokenRevoked) {
-        await notifyNeedsReauth(ctx, account.userId, args.accountId, account.accountEmail);
+        await notifyNeedsReauth(
+          ctx,
+          account.userId,
+          args.accountId,
+          account.accountEmail,
+          account.label,
+        );
         return;
       }
       throw error;
@@ -490,7 +789,13 @@ export const syncAccount = internalAction({
       });
     } catch (error) {
       if (error instanceof GmailApiError && error.isAuthFailure) {
-        await notifyNeedsReauth(ctx, account.userId, args.accountId, account.accountEmail);
+        await notifyNeedsReauth(
+          ctx,
+          account.userId,
+          args.accountId,
+          account.accountEmail,
+          account.label,
+        );
         return;
       }
       const detail = error instanceof Error ? error.message : String(error);
@@ -513,7 +818,16 @@ export const syncAccount = internalAction({
 export const syncAll = internalAction({
   args: {},
   handler: async (ctx) => {
-    const accounts = await ctx.runQuery(internal.model.connectedAccounts.listActive, {});
+    // GMAIL accounts only. `listActive` is provider-agnostic, so once a
+    // non-Gmail connector existed this loop happily fed it a Linear API key
+    // as if it were a Google refresh token: Google answered invalid_grant,
+    // TokenRevoked propagated, and the LINEAR account was marked
+    // NEEDS_REAUTH — permanently, within ten minutes of being connected, with
+    // a Telegram alert telling the owner to "/reconnect linear". The task
+    // backend then silently fell back to the local table.
+    const accounts = (
+      await ctx.runQuery(internal.model.connectedAccounts.listActive, {})
+    ).filter((a) => a.provider === "gmail");
 
     // Concurrent, not sequential. Awaiting each account in turn meant a noisy
     // personal mailbox — many new messages, each needing its own getMessage
@@ -542,6 +856,7 @@ async function notifyNeedsReauth(
   userId: Id<"users">,
   accountId: Id<"connectedAccounts">,
   accountEmail: string,
+  label: string,
 ) {
   await ctx.runMutation(internal.model.connectedAccounts.markNeedsReauth, {
     accountId,
@@ -555,7 +870,8 @@ async function notifyNeedsReauth(
     user.telegramId,
     `⚠️ ${accountEmail} needs re-authorizing — Google rejected the saved token.\n` +
       `This happens every 7 days while the app is in Testing mode.\n\n` +
-      `Send: /reconnect ${accountEmail}`,
+      `Send: /reconnect ${accountEmail}\n` +
+      `It stays labelled "${label}".`,
   );
 }
 

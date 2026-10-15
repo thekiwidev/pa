@@ -1,0 +1,38 @@
+%% Where every section of the AI prompt comes from
+%% Source of truth: docs/FLOWCHART.md — regenerate, do not hand-edit.
+
+flowchart LR
+    subgraph Live["Pulled fresh from the database, every message"]
+        direction TB
+        T["Current time<br/><i>lib/time.ts</i>"]
+        P["Your projects<br/><i>model/projects.ts</i>"]
+        K["Open tasks<br/><b>Linear</b> if connected,<br/>else the local table"]
+        R["Pending reminders<br/><i>model/reminders.ts</i>"]
+        M["Connected mailboxes<br/>+ their labels<br/><i>model/connectedAccounts.ts</i>"]
+        F["Facts about you<br/><i>model/userContext.ts</i><br/>max 40"]
+        I["Your standing rules<br/><i>model/instructions.ts</i>"]
+    end
+
+    subgraph Matched["Only when the message mentions it"]
+        S["Skills — step-by-step<br/>procedures, keyword-matched<br/><i>lib/skills.ts</i>"]
+    end
+
+    subgraph Fixed["Always the same text"]
+        C["The 46 tools and their arguments<br/><i>lib/tools/catalog.ts</i>"]
+        SC["SCOPE — what you can and cannot do<br/><i>lib/prompts/assistant.ts</i>"]
+        OC["OUTPUT CONTRACT — reply as JSON<br/>+ Telegram formatting rules"]
+    end
+
+    Live --> Build["<b>planningSystemPrompt</b><br/><i>lib/prompts/assistant.ts:284</i>"]
+    Matched --> Build
+    Fixed --> Build
+
+    Build --> Sys["The system prompt"]
+    Hist["Last 10 messages<br/><i>model/messages.ts</i>"] --> Inp["The user input"]
+
+    Sys --> Call["runTask 'PLAN_TOOLS'"]
+    Inp --> Call
+    Untrusted["📧 Email bodies, web text,<br/>tool results"] -->|"a SEPARATE, quarantined channel"| Call
+
+    classDef quar fill:#5c2a2a,stroke:#c46f6f,color:#fff
+    class Untrusted quar

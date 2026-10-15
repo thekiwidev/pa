@@ -123,23 +123,70 @@ describe("renderOutcomes — connect and email tools", () => {
     expect(out).toContain("No mailbox connected");
   });
 
-  test("renders a recent-email list with sender, subject and spam flag", () => {
+  test("renders a recent-email list numbered, with sender, subject and spam flag", () => {
     const out = renderOutcomes("", [
       ok("email.list_recent", {
         connected: true,
+        withinDays: 2,
         messages: [
           { from: "jobs@corp.example", subject: "Interview", snippet: "Can you...", spam: false },
           { from: "spam@x.example", subject: "You won!!", snippet: "Click now", spam: true },
         ],
       }),
     ]);
-    expect(out).toContain("jobs@corp.example — Interview");
-    expect(out).toContain("You won!! [SPAM]");
+    expect(out).toContain("**1. jobs@corp.example**");
+    expect(out).toContain("Interview");
+    expect(out).toContain("**2. spam@x.example** ⚠️ SPAM");
   });
 
-  test("says so when a search finds nothing, with no query or label", () => {
-    const out = renderOutcomes("", [ok("email.search", { connected: true, messages: [] })]);
-    expect(out).toBe("Nothing in the last 2 days.");
+  test("separates entries with a blank line, so a list is not one paragraph", () => {
+    const out = renderOutcomes("", [
+      ok("email.list_recent", {
+        connected: true,
+        withinDays: 2,
+        messages: [
+          { from: "a@x.example", subject: "One", snippet: "first" },
+          { from: "b@x.example", subject: "Two", snippet: "second" },
+        ],
+      }),
+    ]);
+    expect(out).toContain("first\n\n");
+    expect(out.split("\n\n").length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("a list row names the mailbox it came from", () => {
+    const out = renderOutcomes("", [
+      ok("email.search", {
+        connected: true,
+        withinDays: 2,
+        query: "x",
+        searchedMailboxes: ["primary"],
+        messages: [{ from: "a@x.example", subject: "S", accountLabel: "primary" }],
+      }),
+    ]);
+    expect(out).toContain("primary");
+  });
+
+  test("says so when a search finds nothing, and offers the next window", () => {
+    const out = renderOutcomes("", [
+      ok("email.search", { connected: true, query: "x", withinDays: 2, messages: [] }),
+    ]);
+    expect(out).toContain('matching "x"');
+    expect(out).toContain("the last 2 days");
+    expect(out).toContain("back to 7 days");
+  });
+
+  test("an unknown mailbox label is not reported as 'no mailbox connected'", () => {
+    const out = renderOutcomes("", [
+      ok("email.search", {
+        connected: true,
+        unknownLabel: "work",
+        available: ["primary", "secondary"],
+      }),
+    ]);
+    expect(out).toContain('no mailbox labelled "work"');
+    expect(out).toContain("primary, secondary");
+    expect(out).not.toContain("No mailbox connected");
   });
 
   test("renders a single message with its body, capped only above the real Telegram-sized limit", () => {
@@ -152,8 +199,8 @@ describe("renderOutcomes — connect and email tools", () => {
         body: "x".repeat(1000),
       }),
     ]);
-    expect(out).toContain("From: a@b.com");
-    expect(out).toContain("Subject: Hi");
+    expect(out).toContain("a@b.com");
+    expect(out).toContain("Hi");
     // 1000 chars is well under the 3500 cap — must render in full, not the
     // old 800-char cap that cut real emails off after two sentences.
     expect(out).toContain("x".repeat(1000));
@@ -168,16 +215,25 @@ describe("renderOutcomes — connect and email tools", () => {
 describe("renderOutcomes — labelled email results", () => {
   test("an empty SPAM filter says so specifically, not just 'Nothing found'", () => {
     const out = renderOutcomes("", [
-      ok("email.list_recent", { connected: true, gmailLabel: "SPAM", messages: [] }),
+      ok("email.list_recent", { connected: true, gmailLabel: "SPAM", withinDays: 2, messages: [] }),
     ]);
-    expect(out).toBe("No emails labelled SPAM in the last 2 days.");
+    expect(out).toContain("labelled SPAM");
+    expect(out).toContain("the last 2 days");
   });
 
   test("an empty keyword search names the keyword", () => {
     const out = renderOutcomes("", [
-      ok("email.search", { connected: true, query: "invoice", messages: [] }),
+      ok("email.search", { connected: true, query: "invoice", withinDays: 2, messages: [] }),
     ]);
-    expect(out).toBe('Nothing matching "invoice" in the last 2 days.');
+    expect(out).toContain('matching "invoice"');
+  });
+
+  test("an empty sender search names the sender, not a keyword", () => {
+    const out = renderOutcomes("", [
+      ok("email.search", { connected: true, from: "paul@x.com", withinDays: 14, messages: [] }),
+    ]);
+    expect(out).toContain("from paul@x.com");
+    expect(out).toContain("last 14 days");
   });
 });
 
@@ -198,19 +254,56 @@ describe("renderOutcomes — instructions", () => {
   });
 });
 
-describe("renderOutcomes — deep search scope", () => {
-  test("an empty deep search says 'whole mailbox', not 'last 2 days'", () => {
-    const out = renderOutcomes("", [
-      ok("email.search", { connected: true, deep: true, gmailLabel: "SPAM", messages: [] }),
-    ]);
-    expect(out).toBe("No emails labelled SPAM in your whole mailbox.");
+describe("renderOutcomes — search window is always stated", () => {
+  test("a live search names the actual dates it covered", () => {
+    const jan1 = Date.UTC(2026, 0, 1);
+    const jan15 = Date.UTC(2026, 0, 15);
+    const out = renderOutcomes(
+      "",
+      [
+        ok("email.search", {
+          connected: true,
+          gmailLabel: "SPAM",
+          withinDays: 14,
+          afterDays: 0,
+          searchedFrom: jan1,
+          searchedTo: jan15,
+          messages: [],
+        }),
+      ],
+      [],
+      "UTC",
+    );
+    expect(out).toContain("Jan");
+    expect(out).toContain("last 14 days");
   });
 
-  test("a non-deep empty search still says 'last 2 days'", () => {
+  test("a resumed search says which stretch it covered, not 'the last N days'", () => {
+    const out = renderOutcomes(
+      "",
+      [
+        ok("email.search", {
+          connected: true,
+          query: "x",
+          withinDays: 30,
+          afterDays: 14,
+          searchedFrom: Date.UTC(2026, 0, 1),
+          searchedTo: Date.UTC(2026, 0, 17),
+          messages: [],
+        }),
+      ],
+      [],
+      "UTC",
+    );
+    expect(out).toContain("14–30 days ago");
+  });
+
+  test("the top of the ladder stops offering to go further", () => {
     const out = renderOutcomes("", [
-      ok("email.search", { connected: true, gmailLabel: "SPAM", messages: [] }),
+      ok("email.search", { connected: true, query: "x", withinDays: 365, messages: [] }),
     ]);
-    expect(out).toBe("No emails labelled SPAM in the last 2 days.");
+    expect(out).toContain("as far back as I search");
+    expect(out).not.toContain("Want me to keep looking");
   });
 });
 
