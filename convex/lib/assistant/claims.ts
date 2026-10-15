@@ -18,7 +18,7 @@ export interface OutcomeLike {
  * a new tool defaults to "can back a claim" only if it actually succeeded.
  */
 const READ_ONLY =
-  /^(?:[a-z_]+\.(?:list|list_recent|list_events|list_rules|list_issues|get|get_event|get_message|get_issue|get_project|get_metadata|search|search_files|read_content|categories|find_free_slots|check_availability|preview|summarize_thread)|link\.read|saved\.(?:search|get)|list\.query|ops\.health)$/;
+  /^(?:[a-z_]+\.(?:list|list_recent|list_events|list_rules|list_issues|get|get_event|get_message|get_issue|get_project|get_metadata|search|search_files|read_content|categories|find_free_slots|check_availability|preview|summarize_thread)|saved\.(?:search|get|recent)|list\.query|ops\.health)$/;
 
 export function isWriteTool(name: string): boolean {
   return !READ_ONLY.test(name);

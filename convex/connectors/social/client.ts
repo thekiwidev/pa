@@ -22,6 +22,14 @@
 import { MAX_REDIRECTS, MAX_RESPONSE_BYTES, assertFetchable } from "../../lib/net/urlGuard";
 import { parseMetaTags, parseOEmbed, stripTweetHtml } from "../../lib/social/parse";
 import type { DetectedLink } from "../../lib/social/detect";
+import {
+  instagramShortcode,
+  parseApifyInstagram,
+  parseFxTwitter,
+  parseInstagramEmbed,
+  tweetIdFromUrl,
+  type FullPost,
+} from "../../lib/social/sources";
 
 export interface FetchedPost {
   platform: string;
@@ -157,4 +165,156 @@ export async function fetchPost(link: DetectedLink): Promise<FetchedPost> {
       ? `${link.platform} serves only the cover image publicly — further slides need a logged-in session.`
       : undefined,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Saved posts (2026-10-15): the FULL post, not just og: tags.
+//
+//   X          FxTwitter's public JSON (no key): text, every photo, video
+//              variants, the quoted tweet. Falls back to oEmbed + og:.
+//   Instagram  Apify's Instagram scraper when APIFY_TOKEN is set: caption
+//              and EVERY carousel slide, plus reel video. Then Instagram's
+//              own /embed/captioned/ page, then og: (cover only).
+//
+// Both third parties are behind env vars and a provider name on the result
+// (invariant 6); nothing upstream knows which one answered.
+// ─────────────────────────────────────────────────────────────────────────
+
+
+export interface FetchedFullPost extends FullPost {
+  platform: string;
+  url: string;
+  provider: "fxtwitter" | "apify" | "embed" | "og" | "oembed";
+  /** True when we know slides exist that we could not get. */
+  slidesUnavailable: boolean;
+  note?: string;
+}
+
+async function fetchFxTwitter(id: string): Promise<FullPost | null> {
+  try {
+    const body = await guardedFetch(assertFetchable(`https://api.fxtwitter.com/status/${id}`));
+    return parseFxTwitter(body);
+  } catch {
+    return null;
+  }
+}
+
+/** Apify's API is a fixed host chosen by config, not by a link, so it is not urlGuard'ed. */
+async function fetchApifyInstagram(url: string): Promise<FullPost | null> {
+  const token = process.env.APIFY_TOKEN;
+  if (!token) return null;
+  const actor = process.env.APIFY_INSTAGRAM_ACTOR ?? "apify~instagram-scraper";
+  try {
+    const res = await fetch(
+      `https://api.apify.com/v2/acts/${encodeURIComponent(actor)}/run-sync-get-dataset-items?timeout=100`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ directUrls: [url], resultsType: "details", resultsLimit: 1, addParentData: false }),
+        signal: AbortSignal.timeout(115_000),
+      },
+    );
+    if (!res.ok) throw new Error(`apify ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return parseApifyInstagram(await res.text());
+  } catch (error) {
+    console.warn(`apify_instagram_failed: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+async function fetchInstagramEmbed(shortcode: string): Promise<FullPost | null> {
+  try {
+    const html = await guardedFetch(
+      assertFetchable(`https://www.instagram.com/p/${shortcode}/embed/captioned/`),
+    );
+    return parseInstagramEmbed(html);
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchFullPost(link: DetectedLink): Promise<FetchedFullPost> {
+  const base = { platform: link.platform, url: link.canonicalUrl };
+
+  if (link.platform === "x") {
+    const id = tweetIdFromUrl(link.canonicalUrl);
+    const fx = id ? await fetchFxTwitter(id) : null;
+    if (fx && (fx.caption || fx.images.length > 0)) {
+      return { ...base, ...fx, provider: "fxtwitter", slidesUnavailable: false };
+    }
+  }
+
+  if (link.platform === "instagram") {
+    const viaApify = await fetchApifyInstagram(link.canonicalUrl);
+    if (viaApify && (viaApify.images.length > 0 || viaApify.caption)) {
+      return { ...base, ...viaApify, provider: "apify", slidesUnavailable: false };
+    }
+    const code = instagramShortcode(link.canonicalUrl);
+    const embed = code ? await fetchInstagramEmbed(code) : null;
+    if (embed && (embed.images.length > 1 || (embed.images.length > 0 && embed.caption))) {
+      return {
+        ...base,
+        ...embed,
+        provider: "embed",
+        slidesUnavailable: embed.images.length <= 1,
+        note:
+          embed.images.length <= 1
+            ? process.env.APIFY_TOKEN
+              ? "Instagram only gave me the cover image this time."
+              : "Instagram only shows the cover image without APIFY_TOKEN set."
+            : undefined,
+      };
+    }
+  }
+
+  // Everything else, and the last resort for the two above: today's path.
+  const thin = await fetchPost(link);
+  return {
+    ...base,
+    caption: thin.caption,
+    author: thin.authorName,
+    images: thin.images,
+    videos: [],
+    provider: link.platform === "x" ? "oembed" : "og",
+    slidesUnavailable: thin.slidesUnavailable,
+    note: thin.note,
+  };
+}
+
+/**
+ * Download one media file through the guard, re-vetting every redirect.
+ * Returns null when it is too big or unreachable; the caller says so.
+ */
+export async function fetchMedia(
+  rawUrl: string,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+  try {
+    let url = assertFetchable(rawUrl);
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const res = await fetch(url.toString(), {
+        redirect: "manual",
+        headers: { "User-Agent": UA },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) return null;
+        url = assertFetchable(new URL(location, url).toString());
+        continue;
+      }
+      if (!res.ok) return null;
+      const declared = Number(res.headers.get("content-length") ?? "0");
+      if (declared > maxBytes) {
+        await res.body?.cancel();
+        return null;
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length > maxBytes) return null;
+      return { bytes, mimeType: res.headers.get("content-type")?.split(";")[0] ?? "application/octet-stream" };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

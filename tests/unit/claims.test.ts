@@ -20,12 +20,13 @@ describe("claimsCompletedAction", () => {
 
 describe("isWriteTool", () => {
   test("reads are not writes", () => {
-    for (const name of ["task.list", "email.search", "linear.get_issue", "saved.search", "link.read"]) {
+    for (const name of ["task.list", "email.search", "linear.get_issue", "saved.search", "saved.recent", "list.query"]) {
       expect(isWriteTool(name)).toBe(false);
     }
   });
   test("writes are writes", () => {
-    for (const name of ["task.complete", "task.bulk_update", "email.archive", "context.set"]) {
+    // link.read files the post, so "I saved it" after one is a true claim.
+    for (const name of ["task.complete", "task.bulk_update", "email.archive", "context.set", "link.read", "list.mark_done"]) {
       expect(isWriteTool(name)).toBe(true);
     }
   });

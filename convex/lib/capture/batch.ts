@@ -19,7 +19,8 @@
 // So a batch is captured, shown, stored, and applied — never streamed
 // straight into a write.
 
-export type CaptureDestination = "notes" | "tasks";
+/** "list" = a Notion list database (Movies, Tools); `category` names which. */
+export type CaptureDestination = "notes" | "tasks" | "list";
 
 export interface CaptureItem {
   /** The thing itself: a movie title, a task, a fact. */
@@ -117,7 +118,9 @@ export function describeBatch(
 ): string {
   const noun = count === 1 ? "item" : "items";
   const where =
-    destination === "tasks"
+    destination === "list"
+      ? `your ${category ?? "Notion"} list`
+      : destination === "tasks"
       ? category
         ? `your task board, labelled ${category}`
         : "your task board"

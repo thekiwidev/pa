@@ -12,6 +12,7 @@ import { returnsUnknowableContent } from "./catalog";
 import { IMPORTANCE_ICON } from "../email/classification";
 import { nextRung } from "../email/gmailQuery";
 import { formatDay, formatDayTime } from "../time";
+import { renderSavedItem, type SavedItemView } from "../saved/extract";
 
 export interface ToolOutcome {
   name: string;
@@ -809,6 +810,20 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
           .join("\n");
       }
 
+      if (str(r, "destination") === "list") {
+        const attempted = field(r, "attempted");
+        const failed = field(r, "failed");
+        const lines = [
+          `✅ Added **${n}**${typeof attempted === "number" && attempted !== n ? ` of ${attempted}` : ""} to your ${
+            str(r, "category") ?? ""
+          } list in Notion.`,
+        ];
+        if (Array.isArray(failed) && failed.length > 0) {
+          lines.push(`⚠️ Not added: ${failed.map(String).join("; ")}`);
+        }
+        return lines.join("\n");
+      }
+
       const attempted = field(r, "attempted");
       const total = typeof attempted === "number" ? attempted : n;
       // On the Linear backend these are STAGED, not written — saying "added"
@@ -822,7 +837,23 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "link.read": {
       const lines: string[] = [];
       const author = str(r, "authorName");
-      lines.push(`🔗 **${str(r, "platform") ?? "post"}**${author ? ` — ${author}` : ""}`);
+      const title = str(r, "title");
+      lines.push(`🔗 **${title ?? str(r, "platform") ?? "post"}**${author ? ` — ${author}` : ""}`);
+      const summary = str(r, "summary");
+      if (summary) lines.push(summary);
+      const entities = field(r, "entities");
+      if (Array.isArray(entities) && entities.length > 0) {
+        lines.push(
+          "",
+          `**In it (${entities.length})**`,
+          ...entities.map((e, n) => {
+            const name = str(e, "name") ?? "?";
+            const detail = str(e, "detail");
+            const status = str(e, "status");
+            return `${n + 1}. ${name}${detail ? ` — ${detail}` : ""}${status === "in_list" ? " ✓ on a list" : ""}`;
+          }),
+        );
+      }
 
       const caption = str(r, "caption");
       if (caption) lines.push("", "**Caption**", caption);
@@ -849,31 +880,82 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       // were reachable is a different answer from one where ten were, and the
       // difference has to be visible before anything is built on it.
       const read = field(r, "imagesRead");
-      const skipped = field(r, "imagesSkipped");
       if (typeof read === "number" && read > 1) {
         lines.push("", `_Read ${read} slides._`);
       }
-      if (typeof skipped === "number" && skipped > 0) {
-        lines.push(
-          "",
-          `⚠️ ${skipped} further slide${skipped === 1 ? "" : "s"} were not read — ` +
-            `the cap is 20 per post.`,
-        );
-      }
+      if (str(r, "videoTranscript")) lines.push("", "_Watched the video too._");
 
+      const note = str(r, "note");
       if (field(r, "slidesUnavailable") === true) {
         lines.push(
           "",
-          "⚠️ Only the cover slide is public here. If the rest of the carousel " +
-            "is what you want, screenshot the slides and send them — I'll read them.",
+          `⚠️ Not all of this post could be read${note ? ` (${note})` : ""}. If the ` +
+            "slides are what you want, screenshot them and send them — I'll read them.",
         );
-      } else {
-        const note = str(r, "note");
-        if (note) lines.push("", `_${note}_`);
+      } else if (note) {
+        lines.push("", `_${note}_`);
+      }
+      if (caption || imageText) {
+        lines.push("", field(r, "fresh") === false ? "📌 Already saved — I'll remember this." : "📌 Saved. Ask me about it any time.");
       }
 
       return lines.join("\n");
     }
+
+    case "saved.search": {
+      const items = field(r, "items");
+      if (!Array.isArray(items) || items.length === 0) {
+        return `🔎 Nothing in your saved posts matches "${str(r, "query") ?? ""}".`;
+      }
+      return [
+        `🔎 ${items.length} saved post${items.length === 1 ? "" : "s"} for "${str(r, "query") ?? ""}":`,
+        ...items.map((item) => renderSavedItem(item as SavedItemView, false)),
+      ].join("\n\n");
+    }
+
+    case "saved.get":
+      return renderSavedItem(r as SavedItemView, true);
+
+    case "saved.recent": {
+      const items = field(r, "items");
+      if (!Array.isArray(items) || items.length === 0) return "📌 You haven't saved any posts yet.";
+      return [
+        "📌 Recently saved:",
+        ...items.map(
+          (i, n) =>
+            `${n + 1}. ${str(i, "title") ?? "(untitled)"}${str(i, "author") ? ` — ${str(i, "author")}` : ""} ` +
+            `(${str(i, "savedAt") ?? ""}) [${str(i, "itemId") ?? ""}]`,
+        ),
+      ].join("\n");
+    }
+
+    case "saved.forget":
+      return `🗑️ I'll stop bringing up "${str(r, "title") ?? "that post"}".`;
+
+    case "list.query": {
+      const items = field(r, "items");
+      const list = str(r, "list") ?? "list";
+      if (!Array.isArray(items) || items.length === 0) {
+        return field(r, "source") === "notion"
+          ? `Your ${list} list has nothing left on it.`
+          : `There's no "${list}" list in Notion, and no saved posts mention any.`;
+      }
+      const head =
+        field(r, "source") === "notion"
+          ? `📋 ${list} — ${String(field(r, "unfinished") ?? items.length)} not done yet:`
+          : `📋 No Notion list called "${list}"; from your saved posts:`;
+      return [
+        head,
+        ...items.map(
+          (i, n) =>
+            `${n + 1}. ${str(i, "name") ?? "?"}${str(i, "detail") ? ` — ${str(i, "detail")}` : ""}` +
+            `${str(i, "status") ? ` [${str(i, "status")}]` : ""}`,
+        ),
+      ].join("\n");
+    }
+
+    case "list.mark_done":
+      return `✅ Marked **${str(r, "name") ?? "it"}** as ${str(r, "status") ?? "done"} on your ${str(r, "list") ?? ""} list.`;
 
     case "meeting.ingest": {
       const lines: string[] = [`📋 **${str(r, "title") ?? "Meeting"}**`, ""];

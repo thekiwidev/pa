@@ -13,6 +13,13 @@
 // database (notes become rows). Both work; `parentKind` probes which.
 
 import { blocksToMarkdown, markdownToBlocks } from "../../lib/notion/blocks";
+import {
+  buildRowProperties,
+  finishedStatus,
+  isFinishedStatus,
+  pickListColumns,
+  type ListColumns,
+} from "../../lib/notion/lists";
 
 const BASE = "https://api.notion.com/v1";
 
@@ -443,4 +450,106 @@ export async function checkAccess(): Promise<{ ok: true; title: string; kind: st
 
   const page = await notionFetch<NotionPage>(`/pages/${parentId}`, { method: "GET" });
   return { ok: true, kind: "page", title: titleOf(page) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// List databases (2026-10-15): Movies, Tools, Reading. One ROW per item, so
+// a list can be filtered by Status ("to watch") — a note per batch could not.
+// Which database a list name means is NOTION_LISTS; see lib/notion/lists.ts.
+// ─────────────────────────────────────────────────────────────────────────
+
+
+export async function getListColumns(databaseId: string): Promise<ListColumns> {
+  const db = await notionFetch<{ properties?: Record<string, { type?: string }> }>(`/databases/${databaseId}`, {
+    method: "GET",
+  });
+  const cols = pickListColumns((db.properties ?? {}) as Parameters<typeof pickListColumns>[0]);
+  if (!cols) throw new Error("that Notion list has no title column");
+  return cols;
+}
+
+export async function addListRows(
+  databaseId: string,
+  rows: { name: string; detail?: string; sourceUrl?: string; type?: string }[],
+): Promise<{ name: string; pageId?: string; error?: string }[]> {
+  const cols = await getListColumns(databaseId);
+  const addedIso = new Date().toISOString().slice(0, 10);
+  const out: { name: string; pageId?: string; error?: string }[] = [];
+  for (const row of rows) {
+    try {
+      const page = await notionFetch<{ id: string }>("/pages", {
+        method: "POST",
+        body: { parent: { database_id: databaseId }, properties: buildRowProperties(cols, { ...row, addedIso }) },
+      });
+      out.push({ name: row.name, pageId: page.id });
+    } catch (error) {
+      out.push({ name: row.name, error: error instanceof Error ? error.message.slice(0, 160) : String(error) });
+    }
+  }
+  return out;
+}
+
+export interface ListRow {
+  pageId: string;
+  name: string;
+  status?: string;
+  detail?: string;
+  source?: string;
+  finished: boolean;
+}
+
+type NotionValue = {
+  type?: string;
+  title?: { plain_text?: string }[];
+  rich_text?: { plain_text?: string }[];
+  status?: { name?: string } | null;
+  select?: { name?: string } | null;
+  url?: string | null;
+};
+
+function plain(v: NotionValue | undefined): string | undefined {
+  if (!v) return undefined;
+  if (v.type === "title") return (v.title ?? []).map((t) => t.plain_text ?? "").join("") || undefined;
+  if (v.type === "rich_text") return (v.rich_text ?? []).map((t) => t.plain_text ?? "").join("") || undefined;
+  if (v.type === "status") return v.status?.name;
+  if (v.type === "select") return v.select?.name;
+  if (v.type === "url") return v.url ?? undefined;
+  return undefined;
+}
+
+/** The newest `limit` rows of a list, read back with their status. */
+export async function queryList(databaseId: string, limit = 100): Promise<ListRow[]> {
+  const cols = await getListColumns(databaseId);
+  const res = await notionFetch<{ results: { id: string; properties: Record<string, NotionValue> }[] }>(
+    `/databases/${databaseId}/query`,
+    { method: "POST", body: { page_size: Math.min(100, limit), sorts: [{ timestamp: "created_time", direction: "descending" }] } },
+  );
+  return res.results.map((page) => {
+    const status = cols.status ? plain(page.properties[cols.status.name]) : undefined;
+    return {
+      pageId: page.id,
+      name: plain(page.properties[cols.title]) ?? "(untitled)",
+      ...(status ? { status } : {}),
+      ...(cols.detail && plain(page.properties[cols.detail]) ? { detail: plain(page.properties[cols.detail]) } : {}),
+      ...(cols.source && plain(page.properties[cols.source]) ? { source: plain(page.properties[cols.source]) } : {}),
+      finished: isFinishedStatus(status),
+    };
+  });
+}
+
+/** Set a list row's status to its "finished" option (Watched, Done, Read). */
+export async function markListRowFinished(databaseId: string, pageId: string): Promise<{ status: string }> {
+  const cols = await getListColumns(databaseId);
+  if (!cols.status) throw new Error("that Notion list has no Status column to mark");
+  const done = finishedStatus(cols.status.options);
+  if (!done) throw new Error(`that list's Status has no "done" option (it has: ${cols.status.options.join(", ")})`);
+  await notionFetch(`/pages/${pageId}`, {
+    method: "PATCH",
+    body: {
+      properties: {
+        [cols.status.name]: cols.status.kind === "status" ? { status: { name: done } } : { select: { name: done } },
+      },
+    },
+  });
+  return { status: done };
 }

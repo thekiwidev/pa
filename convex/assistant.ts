@@ -44,6 +44,9 @@ import { CALLBACK_PREFIX } from "./notify";
 import { AllProvidersFailed } from "./ai/types";
 import { formatInstant } from "./lib/time";
 import { normalizeCategory } from "./lib/userContext";
+import { parseNotionLists } from "./lib/notion/lists";
+import { recallForMessage, toView } from "./saved";
+import { renderSavedItem } from "./lib/saved/extract";
 
 /** Verbatim turns in the prompt. Older turns live on in the running summary. */
 const CONVERSATION_TURNS = 20;
@@ -256,6 +259,7 @@ export async function converseDetailed(
     customInstructions: instructions.map((i) => i.text),
     activeSkills,
     userContext: userContext.map((c) => ({ category: c.category, text: c.text })),
+    lists: Object.keys(parseNotionLists(process.env.NOTION_LISTS)),
   });
 
   // ── What "this" means ──────────────────────────────────────────────────
@@ -294,6 +298,17 @@ export async function converseDetailed(
       label: "replying_to",
       content: `REPLYING TO (the message the user pressed Reply on):\n${reply.replyToText}`,
     });
+  }
+
+  // Saved posts that look relevant to this message. Untrusted: their text
+  // came from strangers on the internet. Never fatal.
+  try {
+    const recalled = await recallForMessage(ctx, userId, intentText ?? text);
+    if (recalled) {
+      untrustedContext.push({ label: "saved_posts", content: `SAVED POSTS THAT MAY BE RELEVANT:\n${recalled}` });
+    }
+  } catch (error) {
+    console.warn(`saved_recall_failed: ${String(error).slice(0, 200)}`);
   }
 
   const transcript = renderConversation(
@@ -1440,6 +1455,27 @@ export const handleCallback = internalAction({
           hours: 24,
         });
         await sendMessage(args.chatId, muted.muted ? "🔕 Muted for 24 hours." : "That alert is gone already.");
+        return;
+      }
+      if (args.data.startsWith("savedshow:")) {
+        const item = await ctx.runQuery(internal.model.saved.get, {
+          itemId: args.data.slice("savedshow:".length) as Id<"savedItems">,
+        });
+        if (!item || item.userId !== userId || item.hidden) {
+          await sendMessage(args.chatId, "That saved post is gone.");
+          return;
+        }
+        const entities = await ctx.runQuery(internal.model.saved.entitiesFor, { itemId: item._id });
+        await sendMessage(args.chatId, renderSavedItem(toView(item, entities), false));
+        return;
+      }
+      if (args.data.startsWith("savedfb:")) {
+        const [, vote, itemId] = args.data.split(":");
+        const item = itemId ? await ctx.runQuery(internal.model.saved.get, { itemId: itemId as Id<"savedItems"> }) : null;
+        if (item && item.userId === userId) {
+          await ctx.runMutation(internal.model.saved.surfaced, { itemId: item._id, feedback: vote });
+        }
+        await sendMessage(args.chatId, vote === "down" ? "👍 Noted. I'll be pickier about that one." : "👍 Glad it helped.");
         return;
       }
       if (args.data.startsWith("opshealth:")) {

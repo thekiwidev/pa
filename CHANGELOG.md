@@ -9,6 +9,45 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — saved posts (2026-10-15, `docs/status-and-social-ingest-plan.md` §4)
+
+- **Every post link is read in full and kept.** `link.read` now fetches X
+  posts through FxTwitter and Instagram carousels through Apify (falling back
+  to the embed page, then og: tags), downloads up to 20 slides into Convex
+  file storage, reads every slide in one vision call, transcribes a short
+  video when Gemini is configured, and files the result as a `savedItems`
+  row with its films/tools/places as `savedEntities`. A link sent twice is
+  not fetched twice.
+- **Ask about it later.** `saved.search` (meaning via 768-d embeddings +
+  words via full-text, fused), `saved.get`, `saved.recent`, `saved.forget`.
+  Each message also pulls in up to 3 saved posts that clear a similarity bar.
+- **Notion lists.** `NOTION_LISTS` maps names to databases. `capture.propose`
+  gains `destination: "list"` (one row per item, Status set to "To watch");
+  `list.query` reads a list live; `list.mark_done` ticks one off.
+- **Proactive.** When a Linear issue moves to In Progress, a saved post that
+  matches and passes a relevance check is offered — at most one a day, the
+  same post at most once a fortnight, 👎 raises its bar. Saturday 10:00 a
+  film is picked from the Movies list (`WEEKEND_PICK=off` disables).
+
+### Added — ops alerts (2026-10-15, plan §3)
+
+- Failures in the assistant, webhooks, mail sync, briefs and connectors are
+  recorded in `opsIncidents` and sent to the owner on Telegram once per
+  fingerprint per hour, with Mute 24h and Health buttons. Secrets are
+  scrubbed. `/health` and `debug:health` show every connection.
+- Daily 06:30 connection check (Google per mailbox, Linear, Notion, OpenAI,
+  Gemini, Apify, Microsoft secret expiry); 10-minute heartbeat to
+  `HEALTHCHECK_PING_URL`; 19:00 digest of repeating warnings.
+
+### Fixed — Linear (2026-10-15)
+
+- `task.list` returns every open issue across all projects (and issues in no
+  project), paginated, with a total; `limit` is clamped instead of rejected.
+- New `task.bulk_update` moves many issues in one Apply card; after applying,
+  each issue is re-read and anything that did not move is reported.
+- A reply that claims a write no tool performed is sent back once for
+  correction, then replaced with what actually happened.
+
 ### Changed — the assistant behaves like a PA (2026-10-15 cleanup, `docs/BEHAVIOUR.md`)
 
 - **Email in focus.** Replying to an alert (or any email the bot showed)

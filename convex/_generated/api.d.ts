@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as ai_embed from "../ai/embed.js";
 import type * as ai_providers_anthropic from "../ai/providers/anthropic.js";
 import type * as ai_providers_gemini from "../ai/providers/gemini.js";
 import type * as ai_providers_openai from "../ai/providers/openai.js";
@@ -56,16 +57,20 @@ import type * as lib_linear_apiKey from "../lib/linear/apiKey.js";
 import type * as lib_meetings_transcript from "../lib/meetings/transcript.js";
 import type * as lib_net_urlGuard from "../lib/net/urlGuard.js";
 import type * as lib_notion_blocks from "../lib/notion/blocks.js";
+import type * as lib_notion_lists from "../lib/notion/lists.js";
 import type * as lib_ops_health from "../lib/ops/health.js";
 import type * as lib_ops_incident from "../lib/ops/incident.js";
 import type * as lib_prompts_assistant from "../lib/prompts/assistant.js";
 import type * as lib_prompts_brief from "../lib/prompts/brief.js";
 import type * as lib_prompts_format from "../lib/prompts/format.js";
 import type * as lib_prompts_knowledge from "../lib/prompts/knowledge.js";
+import type * as lib_saved_extract from "../lib/saved/extract.js";
+import type * as lib_saved_rank from "../lib/saved/rank.js";
 import type * as lib_scope from "../lib/scope.js";
 import type * as lib_skills from "../lib/skills.js";
 import type * as lib_social_detect from "../lib/social/detect.js";
 import type * as lib_social_parse from "../lib/social/parse.js";
+import type * as lib_social_sources from "../lib/social/sources.js";
 import type * as lib_tasks_backend from "../lib/tasks/backend.js";
 import type * as lib_telegram_html from "../lib/telegram/html.js";
 import type * as lib_telegram_richtext from "../lib/telegram/richtext.js";
@@ -97,6 +102,7 @@ import type * as model_people from "../model/people.js";
 import type * as model_preferences from "../model/preferences.js";
 import type * as model_projects from "../model/projects.js";
 import type * as model_reminders from "../model/reminders.js";
+import type * as model_saved from "../model/saved.js";
 import type * as model_skills from "../model/skills.js";
 import type * as model_tasks from "../model/tasks.js";
 import type * as model_userContext from "../model/userContext.js";
@@ -104,6 +110,7 @@ import type * as model_users from "../model/users.js";
 import type * as notify from "../notify.js";
 import type * as ops from "../ops.js";
 import type * as reminders from "../reminders.js";
+import type * as saved from "../saved.js";
 import type * as security_crypto from "../security/crypto.js";
 import type * as security_hash from "../security/hash.js";
 import type * as tools_router from "../tools/router.js";
@@ -115,6 +122,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "ai/embed": typeof ai_embed;
   "ai/providers/anthropic": typeof ai_providers_anthropic;
   "ai/providers/gemini": typeof ai_providers_gemini;
   "ai/providers/openai": typeof ai_providers_openai;
@@ -163,16 +171,20 @@ declare const fullApi: ApiFromModules<{
   "lib/meetings/transcript": typeof lib_meetings_transcript;
   "lib/net/urlGuard": typeof lib_net_urlGuard;
   "lib/notion/blocks": typeof lib_notion_blocks;
+  "lib/notion/lists": typeof lib_notion_lists;
   "lib/ops/health": typeof lib_ops_health;
   "lib/ops/incident": typeof lib_ops_incident;
   "lib/prompts/assistant": typeof lib_prompts_assistant;
   "lib/prompts/brief": typeof lib_prompts_brief;
   "lib/prompts/format": typeof lib_prompts_format;
   "lib/prompts/knowledge": typeof lib_prompts_knowledge;
+  "lib/saved/extract": typeof lib_saved_extract;
+  "lib/saved/rank": typeof lib_saved_rank;
   "lib/scope": typeof lib_scope;
   "lib/skills": typeof lib_skills;
   "lib/social/detect": typeof lib_social_detect;
   "lib/social/parse": typeof lib_social_parse;
+  "lib/social/sources": typeof lib_social_sources;
   "lib/tasks/backend": typeof lib_tasks_backend;
   "lib/telegram/html": typeof lib_telegram_html;
   "lib/telegram/richtext": typeof lib_telegram_richtext;
@@ -204,6 +216,7 @@ declare const fullApi: ApiFromModules<{
   "model/preferences": typeof model_preferences;
   "model/projects": typeof model_projects;
   "model/reminders": typeof model_reminders;
+  "model/saved": typeof model_saved;
   "model/skills": typeof model_skills;
   "model/tasks": typeof model_tasks;
   "model/userContext": typeof model_userContext;
@@ -211,6 +224,7 @@ declare const fullApi: ApiFromModules<{
   notify: typeof notify;
   ops: typeof ops;
   reminders: typeof reminders;
+  saved: typeof saved;
   "security/crypto": typeof security_crypto;
   "security/hash": typeof security_hash;
   "tools/router": typeof tools_router;

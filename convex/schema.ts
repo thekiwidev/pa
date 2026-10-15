@@ -431,6 +431,75 @@ export default defineSchema({
     revisedAt: v.optional(v.number()),
   }).index("by_user_date", ["userId", "date"]),
 
+  // ── Saved posts (2026-10-15) ───────────────────────────────────
+  /**
+   * Every social link the owner sends, read in full and kept: caption,
+   * every slide's text, a video transcript, and what is IN it. This is the
+   * long-term memory for "what was that scanner I sent you".
+   *
+   * Slide images are copied into file storage (`storageId`) so a post that
+   * is later deleted is still readable here.
+   */
+  savedItems: defineTable({
+    userId: v.id("users"),
+    platform: v.string(),
+    url: v.string(), // canonical
+    author: v.optional(v.string()),
+    userNote: v.optional(v.string()),
+    caption: v.optional(v.string()),
+    slides: v.array(
+      v.object({ index: v.number(), text: v.string(), storageId: v.optional(v.id("_storage")) }),
+    ),
+    videoTranscript: v.optional(v.string()),
+    title: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    kind: v.optional(v.string()),
+    tags: v.array(v.string()),
+    status: v.string(), // fetching | ready | partial | failed
+    provider: v.optional(v.string()), // fxtwitter | apify | embed | og | screenshots
+    note: v.optional(v.string()), // what could not be read, in words
+    searchText: v.string(),
+    embedding: v.optional(v.array(v.float64())),
+    savedAt: v.number(),
+    lastSurfacedAt: v.optional(v.number()),
+    downvotes: v.optional(v.number()),
+    hidden: v.optional(v.boolean()),
+  })
+    .index("by_user_url", ["userId", "url"])
+    .index("by_user_saved", ["userId", "savedAt"])
+    .searchIndex("search_text", { searchField: "searchText", filterFields: ["userId"] })
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 768,
+      filterFields: ["userId"],
+    }),
+
+  /** The things inside a saved post: one row per film, tool, tip. */
+  savedEntities: defineTable({
+    userId: v.id("users"),
+    itemId: v.id("savedItems"),
+    type: v.string(),
+    name: v.string(),
+    detail: v.optional(v.string()),
+    url: v.optional(v.string()),
+    status: v.string(), // saved | in_list | done | dismissed
+    list: v.optional(v.string()),
+    notionPageId: v.optional(v.string()),
+  })
+    .index("by_item", ["itemId"])
+    .index("by_user_type", ["userId", "type"])
+    .searchIndex("search_name", { searchField: "name", filterFields: ["userId", "type"] }),
+
+  /** Proactive nudges sent, and work signals already considered. */
+  savedNudges: defineTable({
+    userId: v.id("users"),
+    key: v.string(), // "issue:<id>:started" or "sent:<itemId>"
+    itemId: v.optional(v.id("savedItems")),
+    at: v.number(),
+  })
+    .index("by_user_key", ["userId", "key"])
+    .index("by_user_at", ["userId", "at"]),
+
   // ── Ops — failures the owner hears about (2026-10-15) ─────────
   /**
    * One row per distinct failure (fingerprint = source + normalised

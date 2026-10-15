@@ -47,6 +47,14 @@ crons.cron("connection check", "30 5 * * *", internal.ops.checkConnections, {});
 crons.interval("heartbeat", { minutes: 10 }, internal.ops.heartbeat, {});
 crons.cron("ops digest", "0 18 * * *", internal.ops.digest, {});
 
+/**
+ * Saved posts (2026-10-15). Look for a saved post that helps with a Linear
+ * issue that was just started: every 30 min, 08:00-20:59 WAT (07-19 UTC).
+ * Weekend film pick: Saturday 10:00 WAT (09:00 UTC).
+ */
+crons.cron("saved-post nudges", "*/30 7-19 * * *", internal.saved.nudgeRelevant, {});
+crons.cron("weekend pick", "0 9 * * 6", internal.saved.weekendPick, {});
+
 // Phase 12 adds: evening brief 0 19 * * *
 
 export default crons;

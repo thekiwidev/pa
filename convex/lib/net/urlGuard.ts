@@ -35,6 +35,15 @@ const ALLOWED_HOSTS = [
   "linkedin.com",
   "facebook.com",
   "fb.watch",
+  // Added 2026-10-15 for saved posts. Media CDNs and the share shortener of
+  // the same platforms: an Instagram slide is served from fbcdn.net, an X
+  // photo from pbs.twimg.com, an X video from video.twimg.com, and x.com
+  // share links go through t.co. FxTwitter is the public JSON reader for X.
+  "instagr.am",
+  "fbcdn.net",
+  "twimg.com",
+  "t.co",
+  "fxtwitter.com",
 ] as const;
 
 /** Enough to follow a share-link shortener to its post; not enough to loop. */

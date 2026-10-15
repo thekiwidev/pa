@@ -50,6 +50,17 @@ export const TASKS = {
   COMPOSE_BRIEF:       { tier: "DRAFT" },             // Phase 12
   // Folds older chat turns into a short running summary — memory.
   SUMMARIZE_CONVERSATION: { tier: "CHEAP_STRUCTURED" },
+  // Saved posts (2026-10-15). One call reads every slide of a post and files
+  // it: title, summary, the films / tools / tips in it. VISION because the
+  // slides are the content.
+  EXTRACT_POST:        { tier: "VISION" },
+  // A short video from a post. TRANSCRIBE because only providers that take
+  // audio/video inline (Gemini) are on that tier.
+  TRANSCRIBE_VIDEO:    { tier: "TRANSCRIBE" },
+  // "Is this saved item genuinely useful for what they are doing now?"
+  JUDGE_RELEVANCE:     { tier: "CHEAP_STRUCTURED" },
+  // Not a chat task: names the EMBED tier for AI_ROUTE_EMBED_TEXT.
+  EMBED_TEXT:          { tier: "EMBED" },
 } as const satisfies Record<string, { tier: Tier }>;
 
 export type TaskName = keyof typeof TASKS;

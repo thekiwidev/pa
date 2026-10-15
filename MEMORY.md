@@ -9,6 +9,35 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-15 — Saved posts, ops alerts, Linear: what bit and why
+
+- **Linear "no open tasks" was a filter in the wrong place.** `listIssues`
+  fetched the newest N issues of ANY state and filtered in code, so 8 open
+  issues behind 25+ closed ones read as zero. Filter by `state.type in
+  [triage, backlog, unstarted, started]` server-side and paginate.
+- **The planner said "Done" with no tool call.** Prompt rules did not stop
+  it; `lib/assistant/claims.ts` does. `link.read` counts as a write now,
+  because it saves.
+- **Instagram carousels need Apify.** The public embed page carries slide 1
+  only (sometimes all, unreliably). `apify~instagram-scraper` with
+  `resultsType: "details"` returns `childPosts`; free tier is $5/month of
+  credit, roughly 1,000+ posts. FxTwitter needs no key for X.
+- **Embeddings are 768-d on both providers** (`gemini-embedding-001` with
+  `outputDimensionality`, OpenAI `text-embedding-3-small` with
+  `dimensions`), normalised, so switching provider does not break the index.
+  Vectors from different models are not comparable, though: after a switch,
+  old items are still found by words, not meaning, until re-embedded.
+- **No auto-ingest of every link.** The planner calls `link.read` when a
+  link arrives; ingesting before planning would double the vision cost on
+  every message carrying a link.
+- **Nudges have two gates**: cosine ≥ 0.78 and a cheap-model "is this
+  actually useful" check. Similarity alone surfaced near-misses.
+- **Alert dedupe is by fingerprint** of source + normalised message (ids,
+  numbers, emails stripped), so one broken token is one alert an hour, not
+  one per sync.
+
+---
+
 ## 2026-10-15 — The cleanup: decisions and why
 
 - **PLAN_TOOLS moved to REASON.** On the cheap tier the planner treated every

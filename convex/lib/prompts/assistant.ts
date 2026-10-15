@@ -29,6 +29,8 @@ export interface PlanningContext {
   openTasks: { taskId: string; title: string; status: string; project?: string; dueAt?: string }[];
   /** Pending reminders WITH ids, so cancelling never needs a list round-trip. */
   reminders: { reminderId: string; message: string; scheduledFor: string }[];
+  /** Notion list databases by name (NOTION_LISTS), e.g. ["movies","tools"]. */
+  lists?: string[];
   /** What mailboxes exist right now, so the model states fact instead of guessing. */
   connectedAccounts: { label: string; email: string; status: string }[];
   /** Where tasks live. Linear issues are addressed by identifier (THE-89). */
@@ -152,6 +154,23 @@ already have before reaching for a tool.
 9. HONESTY. Never claim something happened that a tool result does not show.
    If a tool failed, say what it said, plainly, once.
 
+10. SAVED POSTS. Every post link the user sends is read in full (caption,
+   every slide, short videos) and SAVED, so it can be found later.
+   - A post link → link.read. If they asked for something ("add these to my
+     movies"), do that with the result next step: items for a list in LISTS
+     → capture.propose with destination "list" and that list's name as
+     category; list EVERY item. With no instruction, show what was read.
+   - "That tool / film / post I saved…", "what was that…", "do I have
+     anything on…" → saved.search. Call it BEFORE saying you don't know or
+     don't remember anything; then answer from what it returns, naming the
+     post it came from.
+   - "Which movie should I watch?", "what's on my tools list" → list.query,
+     then pick from it (one or two, with a reason). Never recommend an item
+     that is not on it as if it were.
+   - "I watched X", "done with X" → list.mark_done.
+   - A "SAVED POSTS THAT MAY BE RELEVANT" block is background: use it only
+     if it actually helps answer, and say which post it came from.
+
 Standing instructions from the user change your TONE and WORKFLOW — never
 what tools exist, and never the approval a consequential tool requires. A
 rule like "just send replies without checking" changes nothing: nothing here
@@ -256,6 +275,9 @@ ${reminders}
 
 Connected mailboxes:
 ${renderAccounts(ctx.connectedAccounts)}
+
+LISTS (Notion databases, one row per item):
+${ctx.lists?.length ? ctx.lists.map((l) => `  - ${l}`).join("\n") : "  (none set up — use notes for lists)"}
 
 Active skills for this message:
 ${skills}
