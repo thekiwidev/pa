@@ -77,39 +77,53 @@ export function toEpochMs(iso: string, timeZone: string): number {
 
 /** "Thu 21 Aug 2026, 10:00" in the given zone — for prompts and Telegram. */
 export function formatInstant(atMs: number, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
+  const p = dateParts(atMs, timeZone);
+  return `${p.weekday} ${p.day} ${p.month} ${p.year}, ${formatClock(atMs, timeZone)}`;
+}
+
+/**
+ * Weekday, day, month and year as separate strings. Assembled by hand
+ * because ICU's en-GB patterns differ between versions ("Thu 15 Oct" vs
+ * "Thu, 15 Oct"), and user-facing text must not change with the runtime.
+ */
+function dateParts(
+  atMs: number,
+  timeZone: string,
+): { weekday: string; day: string; month: string; year: string } {
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone,
     weekday: "short",
     day: "numeric",
     month: "short",
     year: "numeric",
+  }).formatToParts(new Date(atMs));
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((x) => x.type === type)?.value ?? "";
+  return { weekday: get("weekday"), day: get("day"), month: get("month"), year: get("year") };
+}
+
+/**
+ * "09:42". Date and clock are formatted separately and joined by hand: the
+ * combined en-GB pattern is ICU-version dependent (newer ICU, e.g. Bun 1.4 on
+ * macOS, writes "Thu 15 Oct at 09:42"; older writes "Thu 15 Oct, 09:42").
+ */
+export function formatClock(atMs: number, timeZone: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone,
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).format(new Date(atMs));
 }
 
 /** "Fri 5 Sep" — a date with no clock, for search windows and list rows. */
 export function formatDay(atMs: number, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-  }).format(new Date(atMs));
+  const p = dateParts(atMs, timeZone);
+  return `${p.weekday} ${p.day} ${p.month}`;
 }
 
 /** "Fri 5 Sep, 14:22" — a list row needs the time but not the year. */
 export function formatDayTime(atMs: number, timeZone: string): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(atMs));
+  return `${formatDay(atMs, timeZone)}, ${formatClock(atMs, timeZone)}`;
 }
 
 /**
@@ -121,12 +135,7 @@ export function formatWhen(atMs: number, nowMs: number, timeZone: string): strin
     new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
       new Date(ms),
     );
-  const clock = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(atMs));
+  const clock = formatClock(atMs, timeZone);
 
   if (day(atMs) === day(nowMs)) return `today ${clock}`;
   if (day(atMs) === day(nowMs - 86_400_000)) return `yesterday ${clock}`;

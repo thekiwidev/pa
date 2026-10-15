@@ -15,7 +15,7 @@ import {
   type CalendarItem,
 } from "../../convex/lib/calendar/availability";
 import { dateWindow, resolveWindow } from "../../convex/lib/calendar/window";
-import { formatWhen } from "../../convex/lib/time";
+import { formatClock, formatDayTime, formatInstant, formatWhen } from "../../convex/lib/time";
 import { backendForAccounts } from "../../convex/lib/tasks/backend";
 import { parseToolPlan } from "../../convex/lib/tools/plan";
 import { cardAsHistory } from "../../convex/notify";
@@ -209,5 +209,20 @@ describe("rankBriefTasks", () => {
       endOfToday,
     );
     expect(ranked.map((t) => t.title)).toEqual(["overdue", "today", "doing", "later", "blocked"]);
+  });
+});
+
+describe("date formatting does not depend on the runtime's ICU version", () => {
+  // Bun 1.4 on macOS formats the combined en-GB pattern as "Thu 15 Oct at
+  // 09:42"; older ICU writes "Thu 15 Oct, 09:42". Pin the exact strings.
+  const t = at("2026-10-15T08:42:00Z");
+  test("formatDayTime", () => {
+    expect(formatDayTime(t, TZ)).toBe("Thu 15 Oct, 09:42");
+  });
+  test("formatInstant", () => {
+    expect(formatInstant(t, TZ)).toBe("Thu 15 Oct 2026, 09:42");
+  });
+  test("midnight is 00:00, never 24:00", () => {
+    expect(formatClock(at("2026-10-14T23:00:00Z"), TZ)).toBe("00:00");
   });
 });

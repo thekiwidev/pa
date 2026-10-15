@@ -1,6 +1,8 @@
 // Pure. "Am I free then?" across every calendar, with the near misses a good
 // assistant mentions unprompted ("yes — but you have a call at 4:15").
 
+import { formatClock } from "../time";
+
 export interface CalendarItem {
   title: string;
   startMs: number;
@@ -84,12 +86,7 @@ export function nudgeText(
   timeZone: string,
 ): string {
   const minutes = Math.max(1, Math.round((event.startMs - nowMs) / 60_000));
-  const clock = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(event.startMs));
+  const clock = formatClock(event.startMs, timeZone);
   const where = event.link
     ? `\nJoin: ${event.link}`
     : event.location

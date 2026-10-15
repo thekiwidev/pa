@@ -38,6 +38,13 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 - Draft-a-reply button now drafts (it said "isn't built yet").
 - Debug: `debug:skillOverrides`, `debug:resetSkill` for skills edited in the DB.
 
+### Fixed — dates read differently depending on the runtime
+
+`formatDayTime`, `formatInstant` and `formatDay` now assemble their text
+from parts. ICU's en-GB patterns differ between versions ("Thu 15 Oct at
+09:42" on Bun 1.4 for macOS, "Thu 15 Oct, 09:42" elsewhere), so the same
+alert read differently on a laptop, in CI and on Convex.
+
 ### Added — social posts: every slide, then one tap to save the lot
 
 `capture.propose` / `capture.apply`. An instruction that would create more

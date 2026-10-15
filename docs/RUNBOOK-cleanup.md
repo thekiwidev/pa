@@ -3,21 +3,29 @@
 Everything below needs you: a key, a console, or your Telegram. Run from the
 repo root. Nothing here touches production.
 
-## 1. Get the code onto a branch
+## 1. Get the code onto the branch
 
-The changed files are already in your folder. This puts them on the branch
-with history, so `main` stays as it was:
+If you are already on `cleanup/assistant-behaviour`, pull the latest bundle
+(fast-forward only, so nothing of yours is overwritten):
+
+```bash
+git status --short                              # should show nothing tracked
+git pull --ff-only ./cleanup.bundle cleanup/assistant-behaviour
+bun install
+bun run typecheck && bun test                   # expect 743 pass, 0 fail
+```
+
+First time only, from `main`:
 
 ```bash
 git fetch ./cleanup.bundle cleanup/assistant-behaviour:cleanup/assistant-behaviour
-git diff --stat cleanup/assistant-behaviour    # should print nothing
 git checkout -f cleanup/assistant-behaviour
-bun install
-bun run typecheck && bun test                  # expect 740 pass, 0 fail
 ```
 
-If `git diff` prints anything, stop: something in the folder changed after
-the copy. `-f` is safe otherwise, since the branch already holds every change.
+`-f` is safe here: the branch's first commit is your uncommitted work, saved
+as-is. (A `git diff --stat` against the branch beforehand lists your new,
+untracked files as "deleted" because git does not compare untracked files.
+That is expected and not a loss.)
 
 ## 2. OpenAI key and models (free daily tier)
 
