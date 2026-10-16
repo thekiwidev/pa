@@ -171,6 +171,7 @@ this covers dev and prod together.
 **Expect:**
 - Items 1 to 4 already match. Day 0 set them up.
 - Publishing status reads **In production**. A "needs verification" notice is normal for a personal app.
+- **Leave verification unsubmitted.** The PA is yours alone. An unverified app in production keeps working: sign-in shows a "Google hasn't verified this app" screen (step 8), and Google caps it at 100 users, which doesn't matter for one owner. Submit for verification only if other people will ever sign in.
 
 **If different:**
 - **A redirect URI is missing**: add it and save. ✅
