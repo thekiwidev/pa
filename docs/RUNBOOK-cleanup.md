@@ -149,6 +149,12 @@ Then, in Telegram:
 
 ## 6. Google: stop the weekly disconnects
 
+> **Deliberate change from your Day 0 guide.** Guide §1.2 B2 says "Testing —
+> leave it there, do not publish". That advice protected you while the app
+> had no approval desk. That desk exists now. Testing mode is exactly why
+> tokens expire every 7 days. Publishing changes only the token lifetime and
+> who may sign in. Your scopes, client, redirect URIs and Pub/Sub stay as they are.
+
 This is the actual fix for "reconnect my calendar over and over". While the
 OAuth app is in **Testing**, Google expires refresh tokens after 7 days.
 **In production** they don't expire.
