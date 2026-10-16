@@ -20,8 +20,9 @@ flowchart LR
   C --> D[7 Linear test]
   D --> E[8-9 Alerts + heartbeat]
   E --> F[10-12 Saved posts]
-  F --> G[13 Finish]
-  G --> H[14 Review]
+  F --> G[13 Merge]
+  G --> P[P Production]
+  P --> H[14 Review]
 ```
 
 Already done by you, so skip: the Linear 401 fix (step 7 of the old
@@ -313,37 +314,201 @@ There is nothing to run here. Check these over the next few days:
 
 **If different:** a nudge that isn't relevant is fine. Tap 👎 and it gets pickier. ✅
 
-## 13. Finish
+## 13. Merge and tidy up
 
 **Do:**
 
-1. Delete `cleanup.bundle` and `.cleanup-transfer.tgz`, if it exists, from the repo folder.
-2. When you're happy, merge:
+1. Delete `cleanup.bundle` (and `.cleanup-transfer.tgz` / `.git/stale-maintenance-lock` if present).
+2. Merge:
 
 ```bash
 git checkout main && git merge --ff-only cleanup/assistant-behaviour
+git status --short          # expect nothing tracked
 ```
 
-3. **Production is your call.** Before you run `bunx convex deploy`, set the same environment variables on prod with `bunx convex env set --prod …`:
-   - `HEALTHCHECK_PING_URL`. Use a second healthchecks.io check, not the dev one.
-   - `APIFY_TOKEN`
-   - `NOTION_LISTS`
-   - the OpenAI variables
-4. After the deploy, run `/reconnect` for each mailbox on the prod bot, then send `/health`.
+**Expect:** `Fast-forward`, clean tree.
+**If different:** `Not possible to fast-forward` means `main` moved. 🛑
+
+## P. Production (your call, after 1–13 passed on dev)
+
+This follows your Day 0 setup (Developer Implementation Guide §1 and
+`docs/DEPLOYMENT.md` Part 2). I checked your env files (names and
+"same/different" only, no values): it already matches the guide.
+
+| | dev | prod |
+|---|---|---|
+| Convex deployment | `coordinated-owl-164` | `wonderful-fish-292` |
+| Bot | dev bot | prod bot |
+| OAuth redirect | `coordinated-owl-164.convex.site/oauth/google/callback` | `wonderful-fish-292.convex.site/oauth/google/callback` |
+| Pub/Sub topic | `gmail-push-dev` | `gmail-push-prod` |
+| `ENCRYPTION_KEY`, bot token, webhook secret | own | own (confirmed different) |
+
+Google needs **nothing new** for prod: one OAuth client already lists both
+redirect URIs, both topics and push subscriptions were made on Day 0, and
+step 6 published the one consent screen that both deployments share.
+
+```mermaid
+flowchart LR
+  A[P1 Check Google] --> B[P2 Copy env to prod] --> C[P3 Deploy]
+  C --> D[P4 Verify CLI] --> E[P5 Webhook] --> F[P6 Connect accounts]
+  F --> G[P7 Smoke test] --> H[P8 Dev cleanup]
+```
+
+### P1. Confirm the Google side (2 minutes, read-only)
+
+**Do,** in Google Cloud Console:
+
+1. **Clients** → your web client → Authorized redirect URIs.
+2. **Pub/Sub** → Subscriptions → the one on `gmail-push-prod`.
 
 **Expect:**
+1. Both callback URLs above are listed.
+2. Push endpoint is `https://wonderful-fish-292.convex.site/webhooks/gmail`, authentication **on**.
 
-- The merge says `Fast-forward`.
-- On prod, `/health` shows all ✅.
+**If different:** add the missing redirect URI / fix the endpoint, save. ✅
+If the prod subscription doesn't exist at all, 🛑 (it needs the
+service-account setup from guide §1.2 B4).
 
-**If different:** if the merge says `Not possible to fast-forward`, `main` has moved. 🛑
+### P2. Copy the environment to prod
+
+`.env.prod` only has the Day 0 variables. Everything you set on dev since
+(OpenAI, Notion, Linear team, routes, the new ops/saved-posts ones) lives
+only on the dev deployment. Find the gap by **name**:
+
+```bash
+diff <(bunx convex env list | cut -d= -f1 | sort) \
+     <(bunx convex env list --prod | cut -d= -f1 | sort)
+```
+
+**Expect:** lines starting `<` = on dev, missing on prod. Typically:
+`OPENAI_*`, `AI_ROUTE_*`, `NOTION_API_KEY`, `NOTION_NOTES_DATABASE_ID`,
+`LINEAR_TEAM_KEY`, `MEETING_NUDGE_MINUTES`, `APIFY_TOKEN`, `NOTION_LISTS`,
+`HEALTHCHECK_PING_URL`, `MS_CLIENT_SECRET_EXPIRES_AT`.
+
+For each, set it on prod with the **same value as dev**:
+
+```bash
+bunx convex env set --prod NAME 'value'
+```
+
+Exceptions, which must **differ** (sharing any one is an incident):
+
+- `ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `GOOGLE_REDIRECT_URI`, `GOOGLE_PUBSUB_TOPIC`: already set from `.env.prod`. Don't touch.
+- `HEALTHCHECK_PING_URL`: make a **second** healthchecks.io check for prod.
+
+Then re-run the `diff`.
+
+**Expect:** no `<` lines left. A `>` line (on prod only) is fine.
+**If different:** `env list --prod` errors with "not logged in / no
+deployment" → run `bunx convex login`, retry. ✅
+Add the new names to `.env.prod` too, or a future `--from-file` reverts them.
+
+### P3. Deploy
+
+```bash
+git status --short        # must be clean, on main
+bun run typecheck && bun test
+bunx convex deploy
+```
+
+**Expect:** it names `wonderful-fish-292`, asks to confirm, then `Deployed
+Convex functions to https://wonderful-fish-292.convex.cloud`.
+**If different:** a schema error means old prod rows don't fit the new
+schema. Prod keeps running the old code (safe). 🛑 Send me the error.
+
+### P4. Verify from the CLI, before any Telegram traffic
+
+```bash
+curl -s https://wonderful-fish-292.convex.site/health
+bunx convex run --prod debug:pingAI '{"task":"PLAN_TOOLS"}'
+bunx convex run --prod debug:cryptoSelfTest '{}'
+```
+
+**Expect:** `{"status":"ok","configOk":true}`; an OpenAI model named; the
+crypto test passes.
+**If different:**
+- `configOk:false`: a required variable is missing. Redo the P2 diff. 🛑 if it is clean and still false.
+- `pingAI` fails: an AI key/model var didn't copy. Fix in P2. ✅
+
+### P5. Point the prod bot at prod
+
+```bash
+./scripts/register-telegram-webhook.sh prod
+./scripts/register-telegram-webhook.sh prod --info
+```
+
+**Expect:** `url` is `https://wonderful-fish-292.convex.site/webhooks/telegram`,
+`pending_update_count` 0, `last_error_message` null.
+**If different:** `could not determine the .convex.site URL` → run
+`bunx convex env set --prod CONVEX_SITE_URL https://wonderful-fish-292.convex.site`
+and retry. ✅ Any `last_error_message` after you send a message: 🛑.
+
+### P6. Connect your accounts on prod
+
+The prod database starts **empty**. Mailboxes, Linear, your saved context,
+standing instructions and saved posts on dev do not carry over.
+
+1. Send `hi` to the **prod** bot (creates your user row).
+2. `/connect <label>` for each real mailbox (same labels as dev), then `/accounts`.
+3. Linear:
+   ```bash
+   bunx convex run --prod debug:connectLinear '{}'
+   ```
+4. `/health` on the prod bot, and `bunx convex run --prod debug:testAlert '{}'`.
+
+**Expect:** each mailbox ACTIVE in `/accounts`; `connectLinear` prints your
+team keys; `/health` all ✅ (or "not set up"); a 🔴 test alert arrives **from
+the prod bot**.
+**If different:**
+- Google shows `redirect_uri_mismatch`: P1 step 1. ✅ after fixing.
+- `owner has no user row`: do step 1 first. ✅
+- No test alert: check `TELEGRAM_OWNER_ID` on prod. 🛑
+
+Re-teach the bot anything you want it to know (facts, rules) on prod; it
+starts with no memory.
+
+### P7. Smoke test on the prod bot
+
+Repeat a short version of steps 7 and 11 on the **prod** bot: "how many
+tasks do I have?", one post link, "which movie should I watch?".
+Then watch for ten minutes:
+
+```bash
+bunx convex logs --prod
+```
+
+**Expect:** same answers as on dev; no red errors in the logs.
+**If different:** note it. ✅ unless the bot is silent (🛑).
+
+### P8. Stop dev from doubling up on real mail
+
+If your real mailboxes are also connected on **dev**, both bots will alert
+on the same email, and the two daily Gmail watch renewals can override
+each other. Once prod works:
+
+- Convex dashboard → **dev** deployment → Data → `connectedAccounts`
+- set `status` to `REVOKED` on each **real** mailbox row (keep any throwaway one).
+
+This is reversible (`/reconnect` restores it). ✅
+
+### Rollback
+
+No `convex rollback`; redeploy the last good commit:
+
+```bash
+git checkout <last-good-sha> && bunx convex deploy && git checkout main
+```
+
+A failed deploy changes nothing: the old prod code keeps running until a
+deploy succeeds. A provider problem can be fixed without a deploy:
+`bunx convex env set --prod AI_PROVIDER_PRIORITY gemini`.
 
 ## 14. Send me one review
 
 Copy this, fill it in, and paste it in the thread:
 
 ```
-Steps done: 1-13 (or where I stopped: __)
+Steps done: 1-13 and P1-P8 (or where I stopped: __)
 Stopped at a 🛑? step __, what I saw: __
 Didn't match but continued (step: what happened):
 - 
