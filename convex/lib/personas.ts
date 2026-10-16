@@ -41,6 +41,34 @@ export interface Persona {
   voice: string;
   /** Unprompted check-ins, in time order. */
   checkins: CheckinSlot[];
+  /** Minimum minutes between two check-ins from this persona. */
+  minGapMinutes: number;
+  /** Extra check-ins driven by the calendar and by silence (Corporate PA). */
+  watch?: WatchConfig;
+}
+
+/**
+ * Between the fixed slots, a watching persona also checks in when:
+ *   - an event starts in eventLeadMinutes (before the 30-minute meeting
+ *     nudge), to make sure the user is ready for it;
+ *   - the user has gone quiet for a while with open work. The quiet period
+ *     shrinks as in-progress and due-today work piles up, and shifts by up
+ *     to `jitterMinutes` each day so it never feels like a timer.
+ */
+export interface WatchConfig {
+  /** Local "HH:MM" window the watch runs in. */
+  from: string;
+  until: string;
+  /** Prep check-in this many minutes before an event (window: lead ±15). */
+  eventLeadMinutes: number;
+  /** Quiet minutes before a status ping with no pressure. */
+  idleMinutes: number;
+  /** Never shorter than this, however much is pending. */
+  idleFloorMinutes: number;
+  /** Minutes taken off idleMinutes per in-progress or due-today task. */
+  perTaskMinutes: number;
+  /** Day-seeded random shift added to the quiet period. */
+  jitterMinutes: number;
 }
 
 export const PERSONAS: Record<PersonaId, Persona> = {
@@ -58,18 +86,25 @@ export const PERSONAS: Record<PersonaId, Persona> = {
 - No emojis beyond the occasional ✅ or ⏰. No pet names.`,
     checkins: [
       {
-        id: "midday",
-        time: "12:30",
+        id: "standup",
+        time: "09:00",
         purpose:
-          "Midday progress check. Ask for a status on the in-progress or most urgent task, and flag anything on the calendar for the rest of today.",
+          "Morning stand-up. Ask what they plan to get done today, what is first, and whether anything blocks them. Name today's meetings and anything due or overdue so the plan accounts for them.",
+      },
+      {
+        id: "afternoon",
+        time: "13:30",
+        purpose:
+          "Afternoon progress check. Ask where they are on what they planned this morning, starting with the in-progress or most urgent task, and flag anything left on the calendar today.",
       },
       {
         id: "eod",
-        time: "17:30",
+        time: "18:00",
         purpose:
-          "End-of-day update. Ask what got done today, what is blocked, and what is first tomorrow. Mention anything overdue.",
+          "End-of-day wrap. Ask what got done, what slipped and why, and what is first tomorrow. Mention anything overdue.",
       },
     ],
+    minGapMinutes: 120,
   },
   corporate_pa: {
     id: "corporate_pa",
@@ -85,18 +120,40 @@ export const PERSONAS: Record<PersonaId, Persona> = {
 - Say "you" and their first name; no slang, no emojis except a calendar 📅 where useful.`,
     checkins: [
       {
-        id: "afternoon",
+        id: "agenda",
+        time: "08:30",
+        purpose:
+          "Morning agenda. Lay out the first commitments of the day and the most important task, and ask how they would like to tackle it.",
+      },
+      {
+        id: "midday",
         time: "12:00",
         purpose:
-          "Afternoon outlook. Brief them on the rest of today's calendar and anything that needs attention before it, and politely ask how the morning's priority is going.",
+          "Midday check. Ask for an update on the morning's priority and brief them on the afternoon's calendar.",
+      },
+      {
+        id: "afternoon",
+        time: "15:30",
+        purpose:
+          "Afternoon check. Go through what is still open for today, ask whether each important item is done, and flag the next commitment.",
       },
       {
         id: "wrap",
-        time: "17:00",
+        time: "17:30",
         purpose:
-          "Wrap-up and tomorrow prep. Ask for an update on today's work, and preview tomorrow's first commitment if one is known. Offer to set reminders.",
+          "Wrap-up and tomorrow prep. Ask for an update on today's work and preview tomorrow's first commitment if one is known. Offer to set reminders.",
       },
     ],
+    minGapMinutes: 60,
+    watch: {
+      from: "08:00",
+      until: "19:00",
+      eventLeadMinutes: 60,
+      idleMinutes: 180,
+      idleFloorMinutes: 90,
+      perTaskMinutes: 20,
+      jitterMinutes: 45,
+    },
   },
   mom: {
     id: "mom",
@@ -112,24 +169,37 @@ export const PERSONAS: Record<PersonaId, Persona> = {
 - Still short — a mother's text, not a letter.`,
     checkins: [
       {
-        id: "lunch",
+        id: "wake",
+        time: "07:30",
+        purpose:
+          "Wake-up. Greet them good morning, ask if they slept well, and remind them to eat breakfast before work.",
+      },
+      {
+        id: "start",
+        time: "09:00",
+        purpose:
+          "Start of the day. Ask what they are working on today and gently point at the most important task and the first meeting.",
+      },
+      {
+        id: "midday",
         time: "13:00",
         purpose:
-          "Lunchtime check. Ask if they have eaten, then ask how the most important task is going and mention anything on the calendar this afternoon.",
+          "How the day is going. Ask if they have eaten lunch and how the most important task is going; mention anything on the calendar this afternoon.",
       },
       {
-        id: "evening",
+        id: "wrap",
         time: "18:00",
         purpose:
-          "Evening check. Ask how the day went and what they got done; gently remind them of anything still due today.",
+          "Time to wrap up. Ask what they got done, praise it, and gently remind them of anything still due today, then tell them to stop working soon.",
       },
       {
-        id: "night",
-        time: "21:30",
+        id: "bed",
+        time: "22:00",
         purpose:
-          "Wind-down. Encourage them to rest, mention tomorrow's first commitment if one is known, and ask if anything needs a reminder.",
+          "Bedtime. Tell them to rest, mention tomorrow's first commitment if one is known, and ask if anything needs a reminder for the morning.",
       },
     ],
+    minGapMinutes: 75,
   },
   friend: {
     id: "friend",
@@ -144,18 +214,25 @@ export const PERSONAS: Record<PersonaId, Persona> = {
 - Short and natural. An emoji or two is fine.`,
     checkins: [
       {
-        id: "afternoon",
-        time: "14:00",
+        id: "morning",
+        time: "10:00",
         purpose:
-          "Casual afternoon check-in. Ask how the day is going and how the main task is coming along; mention anything coming up on the calendar.",
+          "Morning hello. Ask what the plan is today and hype the main task a little.",
+      },
+      {
+        id: "afternoon",
+        time: "15:00",
+        purpose:
+          "Afternoon check-in. Ask how it is going, how far along the main task is, and mention anything coming up on the calendar.",
       },
       {
         id: "evening",
-        time: "19:00",
+        time: "20:30",
         purpose:
-          "Evening catch-up. Ask what they got done, celebrate it, and nudge them about anything still hanging.",
+          "Evening catch-up. Ask what they got done, celebrate it, and nudge them about anything still hanging. Maybe suggest they unwind.",
       },
     ],
+    minGapMinutes: 120,
   },
 };
 
@@ -221,7 +298,7 @@ export function describePersonas(current: PersonaId, checkinsOn: boolean): strin
   const lines = PERSONA_IDS.map((id) => {
     const p = PERSONAS[id];
     const times = p.checkins.map((c) => c.time).join(", ");
-    return `${id === current ? "▸" : "  "} ${p.emoji} **${p.name}**${id === DEFAULT_PERSONA ? " (default)" : ""} — ${p.tagline}. Checks in ${times}.`;
+    return `${id === current ? "▸" : "  "} ${p.emoji} **${p.name}**${id === DEFAULT_PERSONA ? " (default)" : ""} — ${p.tagline}. Checks in ${times}${p.watch ? ", plus whenever something is coming up or you go quiet" : ""}.`;
   });
   return [
     `Current: ${PERSONAS[current].emoji} ${PERSONAS[current].name}. Check-ins ${checkinsOn ? "on" : "off"}.`,
@@ -239,8 +316,6 @@ export function describePersonas(current: PersonaId, checkinsOn: boolean): strin
  */
 export const CHECKIN_WINDOW_MS = 90 * 60_000;
 
-/** No check-in this soon after the previous one, whichever persona sent it. */
-export const CHECKIN_MIN_GAP_MS = 2 * 60 * 60_000;
 
 /** Don't interrupt: a check-in waits while the user wrote this recently. */
 export const CHECKIN_QUIET_AFTER_USER_MS = 20 * 60_000;
@@ -289,13 +364,154 @@ export function decideCheckin(args: {
   if (!args.enabled) return { send: false, reason: "off" };
   const due = dueCheckin(args.persona, args.nowMs, args.timezone);
   if (!due) return { send: false, reason: "no_slot" };
-  if (args.lastCheckinMs !== undefined && args.nowMs - args.lastCheckinMs < CHECKIN_MIN_GAP_MS) {
+  if (
+    args.lastCheckinMs !== undefined &&
+    args.nowMs - args.lastCheckinMs < args.persona.minGapMinutes * 60_000
+  ) {
     return { send: false, reason: "too_soon" };
   }
   if (args.lastInboundMs !== undefined && args.nowMs - args.lastInboundMs < CHECKIN_QUIET_AFTER_USER_MS) {
     return { send: false, reason: "user_active" };
   }
   return { send: true, due };
+}
+
+/** Minutes since local midnight for "HH:MM". */
+function minutesOf(hhmm: string): number {
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h ?? 0) * 60 + (m ?? 0);
+}
+
+/** Local minutes since midnight at `atMs`. */
+function localMinutes(atMs: number, timezone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(atMs));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? "0");
+  return get("hour") * 60 + get("minute");
+}
+
+/** A stable 0..1 number for a day, so the jitter moves day to day but not tick to tick. */
+export function daySeed(date: string): number {
+  let h = 2166136261;
+  for (const ch of date) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return ((h >>> 0) % 10_000) / 10_000;
+}
+
+export interface WatchEvent {
+  id: string;
+  title: string;
+  startMs: number;
+}
+
+export interface WatchTask {
+  /** "THE-89 Item notes in the order payload" */
+  title: string;
+  status: string;
+  /** ms-epoch, when the task has a due date. */
+  dueMs?: number;
+}
+
+/**
+ * How long the user may stay quiet before a watching persona asks for an
+ * update: idleMinutes, minus perTaskMinutes for each in-progress or
+ * due-today task, never under the floor, plus the day's jitter.
+ */
+export function idleThresholdMinutes(
+  watch: WatchConfig,
+  pressure: number,
+  seed: number,
+): number {
+  const base = Math.max(watch.idleFloorMinutes, watch.idleMinutes - pressure * watch.perTaskMinutes);
+  return Math.round(base + seed * watch.jitterMinutes);
+}
+
+export type WatchDecision =
+  | { send: true; key: string; slot: CheckinSlot }
+  | { send: false; reason: "no_watch" | "off" | "outside_hours" | "user_active" | "too_soon" | "nothing" };
+
+/**
+ * The Corporate PA's in-between check-ins, as one pure decision. Runs on
+ * every tick that no fixed slot claimed. Dedupe (once per event, once per
+ * quiet stretch) is the caller's claim on `key`.
+ */
+export function decideWatch(args: {
+  persona: Persona;
+  enabled: boolean;
+  nowMs: number;
+  timezone: string;
+  lastInboundMs?: number;
+  lastCheckinMs?: number;
+  events: WatchEvent[];
+  tasks: WatchTask[];
+  endOfTodayMs: number;
+}): WatchDecision {
+  const watch = args.persona.watch;
+  if (!watch) return { send: false, reason: "no_watch" };
+  if (!args.enabled) return { send: false, reason: "off" };
+  const local = localMinutes(args.nowMs, args.timezone);
+  if (local < minutesOf(watch.from) || local >= minutesOf(watch.until)) {
+    return { send: false, reason: "outside_hours" };
+  }
+  if (
+    args.lastCheckinMs !== undefined &&
+    args.nowMs - args.lastCheckinMs < args.persona.minGapMinutes * 60_000
+  ) {
+    return { send: false, reason: "too_soon" };
+  }
+  if (args.lastInboundMs !== undefined && args.nowMs - args.lastInboundMs < CHECKIN_QUIET_AFTER_USER_MS) {
+    return { send: false, reason: "user_active" };
+  }
+
+  // 1. Something starts soon: make sure they are ready for it.
+  const leadMs = watch.eventLeadMinutes * 60_000;
+  const upcoming = args.events
+    .filter((e) => e.startMs - args.nowMs >= leadMs - 15 * 60_000 && e.startMs - args.nowMs <= leadMs + 15 * 60_000)
+    .sort((a, b) => a.startMs - b.startMs)[0];
+  if (upcoming) {
+    return {
+      send: true,
+      key: `watch:event:${upcoming.id}:${upcoming.startMs}`,
+      slot: {
+        id: "event",
+        time: "",
+        purpose: `"${upcoming.title}" starts in about ${Math.round((upcoming.startMs - args.nowMs) / 60_000)} minutes. Ask if they are ready for it and whether the task it depends on (if one fits) is done. Offer to pull up anything they need.`,
+      },
+    };
+  }
+
+  // 2. Quiet too long with work open: ask about the specific task.
+  const open = args.tasks.filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED");
+  if (open.length === 0) return { send: false, reason: "nothing" };
+  const pressing = open.filter(
+    (t) =>
+      t.status === "IN_PROGRESS" ||
+      t.status === "RESUMED" ||
+      (t.dueMs !== undefined && t.dueMs < args.endOfTodayMs),
+  );
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: args.timezone }).format(new Date(args.nowMs));
+  const thresholdMs = idleThresholdMinutes(watch, pressing.length, daySeed(date)) * 60_000;
+  // Quiet since the later of: their last message, the last check-in, or
+  // the start of the watch window today.
+  const windowStartMs = args.nowMs - (local - minutesOf(watch.from)) * 60_000;
+  const quietSince = Math.max(args.lastInboundMs ?? 0, args.lastCheckinMs ?? 0, windowStartMs);
+  if (args.nowMs - quietSince < thresholdMs) return { send: false, reason: "nothing" };
+
+  const focus = pressing[0] ?? open[0]!;
+  return {
+    send: true,
+    key: `watch:idle:${date}:${quietSince}`,
+    slot: {
+      id: "idle",
+      time: "",
+      purpose: `They have not sent an update in a while. Ask specifically whether "${focus.title}" is done, still going, or blocked${
+        pressing.length > 1 ? `, and mention there are ${pressing.length} things in progress or due today` : ""
+      }. If something on the calendar is coming up later today, name it.`,
+    },
+  };
 }
 
 /**

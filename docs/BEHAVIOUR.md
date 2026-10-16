@@ -126,10 +126,10 @@ default.** The choice sticks until the user changes it.
 
 | Personality | Voice | Checks in (WAT) |
 |---|---|---|
-| 📋 Project Manager | Your boss: direct, asks for status and blockers, pushes the next action. | 12:30 progress, 17:30 end-of-day update |
-| 💼 Corporate PA | Polished executive assistant: respectful, anticipates, offers to handle things. | 12:00 afternoon outlook, 17:00 wrap-up and tomorrow |
-| 👩🏾 Mom | Warm and caring: did you eat, did you rest, did you finish what you said. | 13:00 lunch, 18:00 evening, 21:30 wind-down |
-| 🤙🏾 Friend | Casual and encouraging, still nudges you toward what matters. | 14:00 afternoon, 19:00 evening |
+| 📋 Project Manager | Your boss: direct, asks for status and blockers, pushes the next action. | 09:00 stand-up, 13:30 progress, 18:00 end-of-day wrap |
+| 💼 Corporate PA | Polished executive assistant: respectful, anticipates, offers to handle things. | 08:30 agenda, 12:00, 15:30, 17:30 wrap — **plus** about an hour before each event, and whenever you go quiet with work open (sooner the more is in progress or due today, shifted randomly each day), 08:00–19:00 |
+| 👩🏾 Mom | Warm and caring: did you eat, did you rest, did you finish what you said. | 07:30 wake-up, 09:00 start of day, 13:00 how's it going, 18:00 wrap up, 22:00 bedtime |
+| 🤙🏾 Friend | Casual and encouraging, still nudges you toward what matters. | 10:00 morning, 15:00 afternoon, 20:30 evening |
 
 - **Switching:** "switch to mom", "be my PM again" (the `persona.set` tool),
   or `/persona mom`. `/persona` alone lists them and marks the current one.
@@ -138,8 +138,8 @@ default.** The choice sticks until the user changes it.
   important email), names the one thing that matters now, and asks for an
   update. The user's reply is an ordinary message, so "done with THE-89"
   updates Linear.
-- **Never pushy:** each slot at most once a day, never within two hours of
-  another check-in, held back while the user is mid-conversation, nothing
+- **Never pushy:** each slot at most once a day, never too soon after
+  another check-in (each personality has its own minimum gap: Mom 75 min, PA 60, PM and Friend 120), held back while the user is mid-conversation, nothing
   overnight. `/checkins off` stops them; the personality's voice stays.
 - The morning check-in (§5) is written in the active personality's voice.
 - A personality changes tone and timing only. §10 holds for all of them.

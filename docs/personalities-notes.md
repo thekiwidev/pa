@@ -35,3 +35,14 @@ when this landed. Paste each section into its file, then delete this one.
   `"persona":"mom"`), which bypasses the time slot and the once-a-day claim.
 - Not done yet: per-user custom check-in times, user-defined personalities,
   skipping a check-in when the facts are empty.
+
+## Check-in schedules v2 (2026-10-16, for CHANGELOG.md)
+
+- Mom 5×/day (07:30 wake, 09:00 start, 13:00, 18:00 wrap, 22:00 bed); PM
+  3× (09:00 stand-up, 13:30, 18:00); Corporate PA 4 fixed (08:30, 12:00,
+  15:30, 17:30) plus a watch 08:00–19:00; Friend 3× (10:00, 15:00, 20:30).
+- Minimum gap is per persona (`minGapMinutes`): Mom 75, PA 60, PM/Friend 120.
+- PA watch (`decideWatch`): a prep check-in ~60 min before each event
+  (once per event), and a status ping when the user has been quiet for
+  180 min minus 20 per in-progress/due-today task (floor 90) plus a
+  day-seeded 0–45 min jitter, naming the specific task.
