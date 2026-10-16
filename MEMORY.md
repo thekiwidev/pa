@@ -9,6 +9,20 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-16 — Google Calendar: `primary` is not "my calendar"
+
+`/calendars/primary/events` returns only the account's default calendar.
+People routinely keep plans on other calendars on the same account, and those
+need `/users/me/calendarList` (which needs `calendar.readonly` or `calendar`,
+not `calendar.events`) and one events call per calendar. The calendar list's
+`selected` flag mirrors the sidebar checkbox, so it is the closest thing to
+"what the user thinks of as their calendar". Same meeting on two calendars
+comes back twice; the existing title+start de-dupe absorbs it.
+
+Google's granular consent lets a user untick individual scopes, so
+`scopesGranted` can hold `calendar.events` without `calendar.readonly`.
+`calendar.events` can read events, so reading must accept either.
+
 ## 2026-10-16 — Floating Gemini aliases can land on a paid model
 
 Google retired `gemini-3.7-flash` in October 2026 and redirects its traffic to

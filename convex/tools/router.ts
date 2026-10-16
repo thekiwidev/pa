@@ -19,8 +19,10 @@ import {
   listEvents,
   getEvent,
   createEvent,
+  listCalendars,
   type CalendarEvent,
 } from "../connectors/gcal/client";
+import { calendarsToRead } from "../lib/calendar/calendars";
 import { resolveWindow } from "../lib/calendar/window";
 import {
   checkAvailability,
@@ -871,7 +873,11 @@ async function dispatch(
         const accessToken = await ctx.runAction(internal.gmail.accessTokenForAccount, {
           accountId: account._id,
         });
-        const event = await getEvent(accessToken, a.eventId as string);
+        let event = null;
+        for (const calendarId of await readableCalendars(accessToken)) {
+          event = await getEvent(accessToken, a.eventId as string, calendarId);
+          if (event) break;
+        }
         if (event) {
           return {
             found: true,
@@ -2588,7 +2594,14 @@ export async function flushStagedWrites(
   return { changesetId, count: staged.length };
 }
 
-const CALENDAR_READ_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+// Any of these lets us read events. Google's consent screen lets a user untick
+// scopes one by one, so an account can hold calendar.events without
+// calendar.readonly; it can still read every event, so it must not be skipped.
+const CALENDAR_READ_SCOPE = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar",
+];
 const CALENDAR_WRITE_SCOPE = "https://www.googleapis.com/auth/calendar.events";
 
 /**
@@ -2635,13 +2648,14 @@ async function googleAccountFor(ctx: ActionCtx, userId: Id<"users">, scope: stri
  * wrong for reading: "am I free Thursday" answered from one calendar out of
  * three is a confident wrong answer.
  */
-async function googleAccountsFor(ctx: ActionCtx, userId: Id<"users">, scope: string) {
+async function googleAccountsFor(ctx: ActionCtx, userId: Id<"users">, scope: string | string[]) {
+  const wanted = Array.isArray(scope) ? scope : [scope];
   const accounts = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId });
   const gmail = accounts.filter((acc) => acc.provider === "gmail" && acc.status === "ACTIVE");
   if (gmail.length === 0) {
     throw new Error("No Google account connected. Send /connect <label> to add one.");
   }
-  const granted = gmail.filter((acc) => acc.scopesGranted.includes(scope));
+  const granted = gmail.filter((acc) => wanted.some((s) => acc.scopesGranted.includes(s)));
   if (granted.length === 0) {
     throw new Error(
       "None of your connected Google accounts has Calendar access yet. Send " +
@@ -2654,6 +2668,19 @@ async function googleAccountsFor(ctx: ActionCtx, userId: Id<"users">, scope: str
 export interface OwnedEvent {
   event: CalendarEvent;
   calendarOf: string;
+  calendarId?: string;
+}
+
+/**
+ * The calendars to read on one account. If the calendar list itself can't be
+ * read, primary alone is still worth answering from.
+ */
+async function readableCalendars(accessToken: string): Promise<string[]> {
+  try {
+    return calendarsToRead(await listCalendars(accessToken));
+  } catch {
+    return ["primary"];
+  }
 }
 
 /**
@@ -2672,19 +2699,30 @@ export async function allCalendarEvents(
   const failures: string[] = [];
 
   for (const account of accounts) {
+    let accessToken: string;
+    let calendarIds: string[];
     try {
-      const accessToken = await ctx.runAction(internal.gmail.accessTokenForAccount, {
+      accessToken = await ctx.runAction(internal.gmail.accessTokenForAccount, {
         accountId: account._id,
       });
-      const items = await listEvents(accessToken, {
-        timeMinIso: new Date(win.startMs).toISOString(),
-        timeMaxIso: new Date(win.endMs).toISOString(),
-        limit: options.limit ?? 25,
-        query: options.query,
-      });
-      for (const event of items) events.push({ event, calendarOf: account.accountEmail });
+      calendarIds = await readableCalendars(accessToken);
     } catch (error) {
       failures.push(`${account.accountEmail}: ${error instanceof Error ? error.message : String(error)}`);
+      continue;
+    }
+    for (const calendarId of calendarIds) {
+      try {
+        const items = await listEvents(accessToken, {
+          timeMinIso: new Date(win.startMs).toISOString(),
+          timeMaxIso: new Date(win.endMs).toISOString(),
+          limit: options.limit ?? 25,
+          query: options.query,
+          calendarId,
+        });
+        for (const event of items) events.push({ event, calendarOf: account.accountEmail, calendarId });
+      } catch (error) {
+        failures.push(`${account.accountEmail} (${calendarId}): ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 

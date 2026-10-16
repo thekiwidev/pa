@@ -386,7 +386,11 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       const events = Array.isArray(rows) ? rows : [];
       const when = windowWords(str(r, "window"));
       const unread = couldNotRead(r);
-      if (events.length === 0) return `Nothing on your calendar ${when}.${unread}`;
+      if (events.length === 0) {
+        const checked = field(r, "calendarsChecked");
+        const names = Array.isArray(checked) && checked.length ? ` (checked ${checked.join(", ")})` : "";
+        return `Nothing on your calendar ${when}${names}.${unread}`;
+      }
 
       const lines = events.map((e) => {
         const guests = field(e, "guests");
