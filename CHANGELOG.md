@@ -9,6 +9,22 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fixed — calendar reads only saw the primary calendar (2026-10-16)
+
+- **Every calendar ticked in Google Calendar is read**, per account, not just
+  `primary`. Events on a "Work", shared or subscribed calendar were invisible,
+  so "what's on my calendar?" answered "nothing". Briefs, reminders, free
+  slots and availability use the same reader. Contacts-birthdays and
+  week-number calendars are skipped.
+- **An account holding only `calendar.events`** (a scope unticked on Google's
+  consent screen) is read too; it can read events, it was being skipped.
+- **An empty answer names the calendars checked**, and the planner is told
+  that empty is an answer, so it no longer says it "couldn't read" a calendar
+  that read fine.
+- **`debug:calendarCheck`** lists, per account, its calendar scopes, every
+  calendar, whether the bot reads it, and event counts for today and the
+  next 7 days.
+
 ### Added — `scripts/sync-env.ts` (2026-10-16)
 
 - Rebuilds `.env.dev` from the dev deployment and `.env.prod` from dev plus

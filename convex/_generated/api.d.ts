@@ -40,6 +40,7 @@ import type * as lib_ai_tiers from "../lib/ai/tiers.js";
 import type * as lib_assistant_claims from "../lib/assistant/claims.js";
 import type * as lib_assistant_refs from "../lib/assistant/refs.js";
 import type * as lib_calendar_availability from "../lib/calendar/availability.js";
+import type * as lib_calendar_calendars from "../lib/calendar/calendars.js";
 import type * as lib_calendar_events from "../lib/calendar/events.js";
 import type * as lib_calendar_window from "../lib/calendar/window.js";
 import type * as lib_capture_batch from "../lib/capture/batch.js";
@@ -158,6 +159,7 @@ declare const fullApi: ApiFromModules<{
   "lib/assistant/claims": typeof lib_assistant_claims;
   "lib/assistant/refs": typeof lib_assistant_refs;
   "lib/calendar/availability": typeof lib_calendar_availability;
+  "lib/calendar/calendars": typeof lib_calendar_calendars;
   "lib/calendar/events": typeof lib_calendar_events;
   "lib/calendar/window": typeof lib_calendar_window;
   "lib/capture/batch": typeof lib_capture_batch;

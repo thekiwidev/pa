@@ -175,6 +175,9 @@ export interface CalendarListEntry {
   primary?: boolean;
   accessRole?: string;
   timeZone?: string;
+  /** Ticked in Google Calendar's sidebar. */
+  selected?: boolean;
+  hidden?: boolean;
 }
 
 export async function listCalendars(accessToken: string): Promise<CalendarListEntry[]> {

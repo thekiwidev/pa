@@ -12,6 +12,9 @@ import { planningSystemPrompt, tldrOnlySystemPrompt } from "./lib/prompts/assist
 import { converse } from "./assistant";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { describeRoutes, routeWarnings } from "./lib/ai/routes";
+import { listCalendars, listEvents } from "./connectors/gcal/client";
+import { calendarsToRead } from "./lib/calendar/calendars";
+import { dayWindow, daysWindow } from "./lib/calendar/window";
 import { TASKS, modelEnvVar, type TaskName } from "./lib/ai/tiers";
 import { backendForAccounts } from "./lib/tasks/backend";
 import { listOpenLinearIssues } from "./tools/router";
@@ -637,6 +640,83 @@ export const aiRoutes = internalQuery({
       `${task} (${tier}): ${providers.length ? providers.map((p) => `${p.id}[${p.models.join(", ")}]`).join(" → ") : "NO PROVIDER"}`,
     );
     return { routes, warnings: routeWarnings(process.env) };
+  },
+});
+
+/**
+ * Why "what's on my calendar?" says what it says. For each connected Google
+ * account: whether it has a calendar scope, every calendar on it and whether
+ * the bot reads it, and how many events each holds today and in the next 7
+ * days. Counts only, no event titles.
+ *
+ *   bunx convex run --prod debug:calendarCheck '{}'
+ */
+export const calendarCheck = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Record<string, unknown>> => {
+    const telegramId = process.env.TELEGRAM_OWNER_ID;
+    if (!telegramId) throw new Error("TELEGRAM_OWNER_ID is not set");
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId });
+    if (!user) throw new Error("owner has no user row yet — message the bot once first");
+    const rows = await ctx.runQuery(internal.model.connectedAccounts.listForUser, { userId: user._id });
+
+    const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+    const now = Date.now();
+    const today = dayWindow(now, timezone);
+    const week = daysWindow(now, timezone, 7);
+    const calendarScopes = ["calendar.readonly", "calendar.events", "calendar"].map(
+      (s) => `https://www.googleapis.com/auth/${s}`,
+    );
+
+    const accounts = [];
+    for (const a of rows.filter((r) => r.provider === "gmail")) {
+      const scopes = calendarScopes.filter((s) => a.scopesGranted.includes(s)).map((s) => s.split("/").pop());
+      const entry: Record<string, unknown> = { email: a.accountEmail, status: a.status, calendarScopes: scopes };
+      if (a.status !== "ACTIVE" || scopes.length === 0) {
+        entry.verdict = scopes.length === 0 ? `no calendar scope — /reconnect ${a.label}` : `not active — /reconnect ${a.label}`;
+        accounts.push(entry);
+        continue;
+      }
+      try {
+        const token = await ctx.runAction(internal.gmail.accessTokenForAccount, { accountId: a._id });
+        let list: Awaited<ReturnType<typeof listCalendars>> = [];
+        try {
+          list = await listCalendars(token);
+        } catch (error) {
+          entry.calendarListError = String(error).slice(0, 200);
+        }
+        const read = new Set(calendarsToRead(list));
+        const count = async (id: string, w: { startMs: number; endMs: number }) =>
+          (await listEvents(token, {
+            timeMinIso: new Date(w.startMs).toISOString(),
+            timeMaxIso: new Date(w.endMs).toISOString(),
+            limit: 100,
+            calendarId: id,
+          })).length;
+        const ids = list.length ? list.map((c) => c.id) : ["primary"];
+        const calendars = [];
+        for (const id of ids) {
+          const meta = list.find((c) => c.id === id);
+          const row: Record<string, unknown> = {
+            name: meta?.summary ?? id,
+            primary: meta?.primary === true || id === "primary",
+            readByBot: read.has(id),
+          };
+          try {
+            row.today = await count(id, today);
+            row.next7Days = await count(id, week);
+          } catch (error) {
+            row.error = String(error).slice(0, 200);
+          }
+          calendars.push(row);
+        }
+        entry.calendars = calendars;
+      } catch (error) {
+        entry.verdict = `token failed: ${String(error).slice(0, 200)}`;
+      }
+      accounts.push(entry);
+    }
+    return { timezone, today: new Date(today.startMs).toISOString(), accounts };
   },
 });
 

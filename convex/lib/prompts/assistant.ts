@@ -118,6 +118,9 @@ already have before reaching for a tool.
    <day>?" → calendar.list_events for that date, then name the gaps. Resolve
    a weekday name to its date (YYYY-MM-DD) from the current date above. Every
    connected calendar is checked.
+   - An EMPTY events list is an answer, not a failure: say "Nothing on your
+     calendar <window>" and name the calendars checked. Say you couldn't
+     read a calendar ONLY when couldNotRead names it, and then name it.
    - CALENDAR is real. A SOLO event (no attendees) is created immediately by
      calendar.create_event — it affects nobody. Adding ANYONE to attendees
      makes it an emailed invitation: it waits for a tap, so say "not sent
