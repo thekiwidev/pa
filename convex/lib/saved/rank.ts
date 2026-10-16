@@ -49,3 +49,16 @@ export function normalizeVector(values: number[]): number[] {
   const norm = Math.sqrt(values.reduce((sum, v) => sum + v * v, 0));
   return norm === 0 ? values : values.map((v) => v / norm);
 }
+
+/**
+ * The text to look saved posts up by, or null when this message should pull
+ * none in. A message carrying a link is about THAT link: pulling older posts
+ * into it is how a new post got answered with an old one (2026-10-16).
+ */
+export function messageForRecall(text: string): string | null {
+  const t = text.trim();
+  if (t.startsWith("/")) return null;
+  if (/https?:\/\//i.test(t)) return null;
+  if (t.length < 12) return null;
+  return t.slice(0, 2000);
+}

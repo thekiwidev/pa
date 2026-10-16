@@ -11,6 +11,8 @@ export interface FullPost {
   videos: { url: string; durationSec?: number }[];
   /** A quoted tweet, kept apart so "what does the quoted one say" works. */
   quoted?: { author?: string; text?: string };
+  /** The post IS a video (a reel), whether or not a playable file was found. */
+  isVideo?: boolean;
 }
 
 const s = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v : undefined);
@@ -26,6 +28,9 @@ export function tweetIdFromUrl(url: string): string | null {
 
 /** "https://www.instagram.com/p/ABC123/?img_index=1" → "ABC123" (also /reel/ and /tv/). */
 export function instagramShortcode(url: string): string | null {
+  // "/share/reel/<code>" is a share code that redirects to the real post;
+  // it is not a shortcode, and the embed page 404s on it.
+  if (/instagram\.com\/share\//.test(url)) return null;
   const m = /instagram\.com\/(?:[^/]+\/)?(?:p|reel|reels|tv)\/([A-Za-z0-9_-]{5,})/.exec(url);
   return m?.[1] ?? null;
 }
@@ -139,6 +144,7 @@ export function parseApifyInstagram(body: string): FullPost | null {
     author: s(item.ownerUsername) ? `@${item.ownerUsername as string}` : undefined,
     images,
     videos,
+    isVideo: item.type === "Video" || item.productType === "clips" || Boolean(video),
   };
 }
 
@@ -156,15 +162,30 @@ function unescapeJsonString(v: string): string {
  * otherwise only the cover `EmbeddedMediaImage`. Best effort, by design.
  */
 export function parseInstagramEmbed(html: string): FullPost {
+  // The slide list sits inside a JSON document that is itself a STRING
+  // ("contextJSON":"{\"display_url\":...}"), so its quotes and slashes are
+  // escaped once or twice. Flatten the escaping before matching. Measured
+  // 2026-10-16: matching only bare quotes found the cover and nothing else,
+  // so an eight-slide carousel read as one slide.
+  const flat = html.replace(/\\+"/g, '"').replace(/\\+\//g, "/");
+  const clean = (raw: string) => unescapeJsonString(raw.replace(/\\+u0026/g, "&").replace(/\\+/g, "\\"));
+
   const images: string[] = [];
-  for (const m of html.matchAll(/"display_url"\s*:\s*"((?:[^"\\]|\\.)+)"/g)) {
-    const url = unescapeJsonString(m[1] ?? "");
+  for (const m of flat.matchAll(/"display_url"\s*:\s*"([^"]+)"/g)) {
+    const url = clean(m[1] ?? "");
     if (url.startsWith("https://") && !images.includes(url)) images.push(url);
   }
   if (images.length === 0) {
     const img = /class="EmbeddedMediaImage"[^>]*src="([^"]+)"/.exec(html);
     if (img?.[1]) images.push(img[1].replace(/&amp;/g, "&"));
   }
+  // A carousel's parent repeats its first child's URL; keep the children.
+  const videos: { url: string }[] = [];
+  for (const m of flat.matchAll(/"video_url"\s*:\s*"([^"]+)"/g)) {
+    const url = clean(m[1] ?? "");
+    if (url.startsWith("https://") && !videos.some((v) => v.url === url)) videos.push({ url });
+  }
+  const isVideo = /"is_video"\s*:\s*true/.test(flat) || videos.length > 0;
 
   const captionBlock = /<div class="Caption">([\s\S]*?)<div class="CaptionComments">/.exec(html)?.[1];
   const caption = captionBlock
@@ -181,5 +202,5 @@ export function parseInstagramEmbed(html: string): FullPost {
     : undefined;
   const author = /class="UsernameText">([^<]+)</.exec(html)?.[1];
 
-  return { caption: caption || undefined, author: author ? `@${author}` : undefined, images, videos: [] };
+  return { caption: caption || undefined, author: author ? `@${author}` : undefined, images, videos, isVideo };
 }

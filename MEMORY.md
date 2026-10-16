@@ -9,6 +9,28 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-16 — Saved posts in real use: what went wrong
+
+- **Instagram's embed page escapes its slide list.** The child slides are in
+  `contextJSON`, a JSON document stored as a string, so quotes appear as
+  `\"` (sometimes `\\\"`). Flatten the escaping before matching
+  `display_url` / `video_url`. Cover-only was the visible symptom.
+- **One item from eight slides was a reading problem, not just fetching.**
+  Slides like "CENTIPEDES / sprinkle salt" only make sense through the
+  caption ("household hacks"); without that frame the model filed one
+  literal item. The prompt now reads the caption first and counts against
+  the number the caption promises.
+- **A link message must not pull old posts in.** Recall by similarity on a
+  message that is mostly a URL matched the previous post; with the
+  conversation history that read as "still talking about the video".
+- **Gemini inline media cap is 15 MB in our provider** (Google's is 20 MB per
+  request). Videos above it are reported, not attempted. Video costs roughly
+  300 tokens per second on Gemini, about 18k for a one-minute reel, which
+  fits the free tier.
+- **`/share/` links are share codes, not shortcodes**: follow the redirect.
+
+---
+
 ## 2026-10-15 — Saved posts, ops alerts, Linear: what bit and why
 
 - **Linear "no open tasks" was a filter in the wrong place.** `listIssues`

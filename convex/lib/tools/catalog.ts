@@ -741,7 +741,9 @@ export const TOOL_SCHEMAS = {
       .describe("default 10"),
   }),
   "saved.forget": z.object({
-    itemId: z.string().min(1).describe("id of the saved post the user wants forgotten"),
+    itemId: z.string().optional().describe("id of the saved post, when you have one"),
+    url: z.string().optional().describe("the post's link, when the user gave it"),
+    titleFragment: z.string().optional().describe('a few words of what it was, e.g. "10 things video"'),
   }),
   "list.query": z.object({
     list: z.string().min(1).describe('which list, as the user said it: "movies", "tools", "reading"'),
@@ -1310,8 +1312,10 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
   },
   "saved.forget": {
     description:
-      "Stop using a saved post: it no longer comes up in search or reminders. " +
-      "Use for 'forget that post', 'stop suggesting that'.",
+      "Stop using a saved post: it no longer comes up in search, replies or " +
+      "reminders. Use for 'forget that post/video', 'stop suggesting that'. " +
+      "With no arguments it forgets the post saved most recently, which is " +
+      "what 'forget that' means right after a link.",
     consequential: false,
     requiresAccountId: false,
   },

@@ -1612,11 +1612,20 @@ async function dispatch(
     }
 
     case "saved.forget": {
-      const result = await ctx.runMutation(internal.model.saved.hide, {
-        userId,
-        itemId: a.itemId as Id<"savedItems">,
-      });
-      if (!result.hidden) throw new Error("no saved post with that id");
+      // Ids rarely survive into the conversation, so "forget that video"
+      // resolves here: an id, else the link, else a title match, else the
+      // most recent save.
+      const recent = await ctx.runQuery(internal.model.saved.recent, { userId, limit: 20 });
+      const wantUrl = typeof a.url === "string" ? (detectPlatform(a.url)?.canonicalUrl ?? a.url) : undefined;
+      const fragment = typeof a.titleFragment === "string" ? captureKey(a.titleFragment) : "";
+      const target =
+        (typeof a.itemId === "string" && a.itemId ? recent.find((i) => i._id === a.itemId) : undefined) ??
+        (wantUrl ? recent.find((i) => i.url === wantUrl) : undefined) ??
+        (fragment ? bestWordMatch(recent, fragment) : undefined) ??
+        (!a.itemId && !wantUrl && !fragment ? recent[0] : undefined);
+      if (!target) throw new Error("I couldn't tell which saved post you mean — say a few words of what it was");
+      const result = await ctx.runMutation(internal.model.saved.hide, { userId, itemId: target._id });
+      if (!result.hidden) throw new Error("no saved post like that");
       return result;
     }
 
@@ -3054,4 +3063,16 @@ async function resolveChangeset(
   const stored = rows.find((p) => p.key === `linear_changeset:${changesetId}`);
   if (!stored) throw new Error(`no proposed changeset "${changesetId}" — propose one first`);
   return (stored.value as { changes: ChangesetEntry[] }).changes;
+}
+
+/** The saved item sharing the most words (3+ letters) with the fragment. */
+function bestWordMatch<T extends { title?: string; summary?: string }>(items: T[], fragment: string): T | undefined {
+  const words = fragment.split(" ").filter((w) => w.length >= 3);
+  let best: { item: T; score: number } | undefined;
+  for (const item of items) {
+    const hay = ` ${captureKey(`${item.title ?? ""} ${item.summary ?? ""}`)} `;
+    const score = words.filter((w) => hay.includes(` ${w}`)).length;
+    if (score > 0 && (!best || score > best.score)) best = { item, score };
+  }
+  return best?.item;
 }

@@ -9,6 +9,28 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fixed — saved posts, from live testing (2026-10-16)
+
+- **Every carousel slide.** Instagram's embed page carries all slides, but
+  inside an escaped JSON string the parser never matched, so an eight-slide
+  post read as its cover. Slides whose CDN says `octet-stream` are now
+  identified from their bytes instead of being dropped.
+- **The caption frames the slides.** Extraction reads the caption first
+  ("6 household hacks…"), turns every slide into its own item the way the
+  post means it, ignores "follow us" slides, and says so when it found fewer
+  items than the post promises.
+- **Videos.** Reels are watched (Gemini): every point, including on-screen
+  text, then the speech. Up to 15 MB / 10 minutes. When the video can't be
+  read, the reply says why instead of answering from the cover. Instagram
+  `/share/` links are followed to the real post. A partly-read post is read
+  again when resent.
+- **A new link is a new topic.** Messages carrying a link no longer pull
+  older saved posts into the reply, and the planner is told not to answer a
+  new link from an older one. `saved.forget` works without an id ("forget
+  that video" = the latest save, or by link or a few words).
+- **Synthesis, not a dump.** After reading a post the reply is: what it is,
+  every item in one line each, what's worth knowing, and a next step.
+
 ### Added — saved posts (2026-10-15, `docs/status-and-social-ingest-plan.md` §4)
 
 - **Every post link is read in full and kept.** `link.read` now fetches X

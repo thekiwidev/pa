@@ -233,6 +233,23 @@ async function fetchInstagramEmbed(shortcode: string): Promise<FullPost | null> 
   }
 }
 
+/** Where a link redirects to (one hop, guarded), or null. */
+async function resolveRedirect(rawUrl: string): Promise<string | null> {
+  try {
+    const url = assertFetchable(rawUrl);
+    const res = await fetch(url.toString(), {
+      redirect: "manual",
+      headers: { "User-Agent": UA },
+      signal: AbortSignal.timeout(10_000),
+    });
+    await res.body?.cancel();
+    const location = res.headers.get("location");
+    return location ? assertFetchable(new URL(location, url).toString()).toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchFullPost(link: DetectedLink): Promise<FetchedFullPost> {
   const base = { platform: link.platform, url: link.canonicalUrl };
 
@@ -245,20 +262,27 @@ export async function fetchFullPost(link: DetectedLink): Promise<FetchedFullPost
   }
 
   if (link.platform === "instagram") {
-    const viaApify = await fetchApifyInstagram(link.canonicalUrl);
+    // "Share" links (instagram.com/share/reel/<code>) redirect to the real
+    // post; neither the embed page nor the shortcode work on the share code.
+    const postUrl = /\/share\//.test(link.canonicalUrl)
+      ? ((await resolveRedirect(link.canonicalUrl)) ?? link.canonicalUrl)
+      : link.canonicalUrl;
+    const viaApify = await fetchApifyInstagram(postUrl);
     if (viaApify && (viaApify.images.length > 0 || viaApify.caption)) {
       return { ...base, ...viaApify, provider: "apify", slidesUnavailable: false };
     }
-    const code = instagramShortcode(link.canonicalUrl);
+    const code = instagramShortcode(postUrl);
     const embed = code ? await fetchInstagramEmbed(code) : null;
-    if (embed && (embed.images.length > 1 || (embed.images.length > 0 && embed.caption))) {
+    if (embed && (embed.images.length > 1 || (embed.images.length > 0 && embed.caption) || embed.videos.length > 0)) {
+      // A reel has one cover by nature; only a carousel can be missing slides.
+      const coverOnly = embed.images.length <= 1 && !embed.isVideo;
       return {
         ...base,
         ...embed,
         provider: "embed",
-        slidesUnavailable: embed.images.length <= 1,
+        slidesUnavailable: coverOnly,
         note:
-          embed.images.length <= 1
+          coverOnly
             ? process.env.APIFY_TOKEN
               ? "Instagram only gave me the cover image this time."
               : "Instagram only shows the cover image without APIFY_TOKEN set."
