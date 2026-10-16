@@ -224,52 +224,37 @@ it can't guard.
 
 ## 4. Copy the environment to prod
 
-`.env.prod` only holds the Day 0 variables. Everything set on dev since then
-exists only on the dev deployment: OpenAI, routes, Notion, Linear team, the
-ops and saved-posts variables. Compare by **name**:
+Dev's deployment holds the current settings: OpenAI, routes, Notion, Linear
+team, the free Gemini ladders, the ops and saved-posts variables. Prod still
+has the Day 0 set. `scripts/sync-env.ts` rebuilds both local files from the
+deployments and prints names only, never values:
+
+- `.env.dev` = exactly what the dev deployment has.
+- `.env.prod` = everything from dev, except the seven that must be prod's own (`ENCRYPTION_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `GOOGLE_REDIRECT_URI`, `GOOGLE_PUBSUB_TOPIC`, `GOOGLE_PUBSUB_AUDIENCE`, `HEALTHCHECK_PING_URL`). Those come from the prod deployment, or the old `.env.prod` if the deployment lacks one.
+- It stops if any of those seven is missing, equals dev, or a value anywhere still points at `coordinated-owl-164` or `gmail-push-dev`.
+- The old files are kept as `.env.dev.bak` and `.env.prod.bak`.
 
 **Do:**
 
 ```bash
-diff <(bunx convex env list | cut -d= -f1 | sort) \
-     <(bunx convex env list --prod | cut -d= -f1 | sort)
+bun scripts/sync-env.ts
+bunx convex env set --prod --force --from-file .env.prod
+bunx convex run --prod debug:aiRoutes '{}'
 ```
-
-For each `<` line (on dev, missing on prod), run:
-
-```bash
-bunx convex env set --prod NAME 'value'
-```
-
-Use the **same value as dev**, except for the ones step 3 says to make different. Then:
-
-1. Add the same lines to `.env.prod`, so a later `--from-file` doesn't wipe them.
-2. Run the `diff` again.
 
 **Expect:**
-- The first diff lists names such as these:
-  - `OPENAI_API_KEY`, `OPENAI_MODEL_*`, `AI_ROUTE_*`
-  - `NOTION_API_KEY`, `NOTION_NOTES_DATABASE_ID`, `NOTION_LISTS`
-  - `LINEAR_TEAM_KEY`, `MEETING_NUDGE_MINUTES`
-  - `APIFY_TOKEN`, `HEALTHCHECK_PING_URL`, `MS_CLIENT_SECRET_EXPIRES_AT`
-- The second diff shows no `<` lines. A `>` line (on prod only) is fine.
+- The script ends with `✓ Ready`, and the kept list names the seven.
+- The `env set` prints the variables it changed.
+- `aiRoutes` on prod matches dev's: `openai[...]` where dev has it, Gemini models `gemini-3.5-flash,...`, and `"warnings": []`.
 
 **If different:**
-- **`env list --prod` says not logged in, or no deployment**: run `bunx convex login` and retry. ✅
-- **`AI_PROVIDER_PRIORITY` differs**: make prod match dev. ✅
+- **`✗ Fix before pushing to prod`, `HEALTHCHECK_PING_URL: no prod value`**: make a second check at healthchecks.io, then run `bunx convex env set --prod HEALTHCHECK_PING_URL '<url>'` and rerun the script. ✅
+- **`... prod value is the same as dev`**: that secret was copied at some point. Rotate it (step 3), then rerun. ✅
+- **`... value points at dev`**: set the prod value for that name with `bunx convex env set --prod NAME '<value>'`, then rerun. ✅
+- **`bunx convex env list --prod failed`**: run `bunx convex login` and retry. ✅
+- **Prod has a variable you deliberately made different (for example its own `LINEAR_API_KEY`)**: the script copied dev's over it in `.env.prod`. Edit that line in `.env.prod` before the `env set`. ✅
 
-Then set prod's model ladders. They already exist on prod from Day 0, so the
-name diff can't see that they still hold `gemini-3.7-flash`:
-
-```bash
-bunx convex env set --prod GEMINI_MODEL_REASON           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
-bunx convex env set --prod GEMINI_MODEL_DRAFT            "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
-bunx convex env set --prod GEMINI_MODEL_VISION           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
-bunx convex env set --prod GEMINI_MODEL_TRANSCRIBE       "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
-bunx convex env set --prod GEMINI_MODEL_CHEAP_STRUCTURED "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
-```
-
-**Continue?** ✅ when the second diff has no `<` lines.
+**Continue?** ✅ when prod's `aiRoutes` matches dev's.
 
 ## 5. Deploy
 
@@ -310,7 +295,7 @@ bunx convex run --prod debug:cryptoSelfTest '{}'
 Then run `bunx convex run --prod debug:aiRoutes '{}'`. **Expect:** the same lines as on dev, and `"warnings": []`.
 
 **If different:**
-- **`configOk: false`**: a required variable is missing. Redo step 4's diff. 🛑 if the diff is clean.
+- **`configOk: false`**: a required variable is missing. Rerun step 4's script. 🛑 if it says `✓ Ready` and this still fails.
 - **`pingAI` fails**: an AI variable didn't copy. Fix it in step 4. ✅
 
 **Continue?** ✅

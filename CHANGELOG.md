@@ -9,6 +9,14 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — `scripts/sync-env.ts` (2026-10-16)
+
+- Rebuilds `.env.dev` from the dev deployment and `.env.prod` from dev plus
+  prod's own seven secrets and URLs, refusing when one is missing, equals
+  dev, or points at dev. Prints names only. Runbook step 4 uses it in place
+  of the by-name diff, which missed variables that existed on both sides
+  with stale prod values (the Gemini ladders).
+
 ### Changed — free Gemini models, one embedding provider (2026-10-16)
 
 - **Model ladders moved off `gemini-3.7-flash`**, which Google retired and
