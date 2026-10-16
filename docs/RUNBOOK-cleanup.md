@@ -320,20 +320,34 @@ There is nothing to run here. Check these over the next few days:
 
 **If different:** a nudge that isn't relevant is fine. Tap 👎 and it gets pickier. ✅
 
-## 13. Merge and tidy up
+## 13. Merge into main and tidy up
+
+Production is deployed **from `main`**. `cleanup.bundle` is only the
+delivery envelope for my commits: once they are in your branch it has done
+its job. It is now in `.gitignore`, so it stops showing as untracked.
 
 **Do:**
 
-1. Delete `cleanup.bundle` (and `.cleanup-transfer.tgz` / `.git/stale-maintenance-lock` if present).
-2. Merge:
-
 ```bash
-git checkout main && git merge --ff-only cleanup/assistant-behaviour
-git status --short          # expect nothing tracked
+git switch cleanup/assistant-behaviour
+git pull --ff-only ./cleanup.bundle cleanup/assistant-behaviour   # latest commits
+git switch main
+git merge --ff-only cleanup/assistant-behaviour
+git log --oneline -1          # same commit as the branch
+git status --short            # expect nothing
+rm cleanup.bundle
+rm -f .cleanup-transfer.tgz .git/stale-maintenance-lock
 ```
 
-**Expect:** `Fast-forward`, clean tree.
-**If different:** `Not possible to fast-forward` means `main` moved. 🛑
+**Expect:** both git commands say `Fast-forward` (or "Already up to date"), and
+`main` now points at the branch's top commit.
+
+**If different:**
+- **`Not possible to fast-forward` on the merge**: `main` has commits the branch doesn't. Run `git merge cleanup/assistant-behaviour` instead (a normal merge commit). If that reports conflicts, `git merge --abort` and 🛑.
+- **`untracked working tree files would be overwritten`** on `switch`: move the named files aside (`mv <file> /tmp/`) and retry. ✅
+- Keep the branch afterwards. It costs nothing, and it is what a rollback points to.
+
+**Continue?** ✅ when `main` matches the branch.
 
 ## P. Production (your call, after 1–13 passed on dev)
 
@@ -412,7 +426,8 @@ Add the new names to `.env.prod` too, or a future `--from-file` reverts them.
 ### P3. Deploy
 
 ```bash
-git status --short        # must be clean, on main
+git branch --show-current  # must print: main
+git status --short        # must be empty
 bun run typecheck && bun test
 bunx convex deploy
 ```

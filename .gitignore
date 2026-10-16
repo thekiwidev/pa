@@ -24,3 +24,6 @@ dist/
 # Local editor and transfer artefacts
 .idea/
 .cleanup-transfer.tgz
+
+# Delivery envelope for commits from Claude; not part of the repo.
+*.bundle
