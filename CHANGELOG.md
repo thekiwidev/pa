@@ -9,6 +9,23 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Changed — free Gemini models, one embedding provider (2026-10-16)
+
+- **Model ladders moved off `gemini-3.7-flash`**, which Google retired and
+  now redirects to the billed `gemini-3.8-flash`, and off floating
+  `-latest` aliases, which follow Google to that same model. Docs and the
+  runbook set `gemini-3.5-flash → 3.6-flash → 3-flash-preview` (lite:
+  `3.5-flash-lite → 3.1-flash-lite`).
+- **`debug:aiRoutes`** prints every task's provider and model order from
+  env, spending no tokens, plus warnings for retired or floating model ids.
+  The daily health check carries the same warnings as an "AI model ladders"
+  row.
+- **Embeddings use one provider, never a fallback.** Gemini whenever its key
+  is set. Before, embeddings followed `AI_PROVIDER_PRIORITY`, so with OpenAI
+  first they went to OpenAI (billed, outside the free-token pool), and a
+  failure fell through to Gemini, mixing unrelated vector spaces in one
+  index.
+
 ### Fixed — saved posts, from live testing (2026-10-16)
 
 - **Every carousel slide.** Instagram's embed page carries all slides, but

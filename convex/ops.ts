@@ -20,6 +20,7 @@ import { formatInstant } from "./lib/time";
 import { linearApiKey } from "./tools/router";
 import { listTeams } from "./connectors/linear/client";
 import { checkAccess as notionCheckAccess } from "./connectors/notion/client";
+import { routeWarnings } from "./lib/ai/routes";
 
 const TZ = () => process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
@@ -166,6 +167,14 @@ export async function runConnectionChecks(ctx: ActionCtx, alert: boolean): Promi
     geminiKey
       ? await check("Gemini", () => getJson("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", { "x-goog-api-key": geminiKey }), "check GEMINI_API_KEY")
       : { name: "Gemini", ok: false, skipped: true },
+  );
+
+  // Model ladders: a retired id or a floating alias that can land on a paid model.
+  const modelWarnings = routeWarnings(process.env);
+  results.push(
+    modelWarnings.length === 0
+      ? { name: "AI model ladders", ok: true }
+      : { name: "AI model ladders", ok: false, detail: modelWarnings.join("; "), fix: "bunx convex run debug:aiRoutes '{}' and reset those variables" },
   );
 
   // Apify (saved posts from Instagram)

@@ -9,6 +9,27 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-16 — Floating Gemini aliases can land on a paid model
+
+Google retired `gemini-3.7-flash` in October 2026 and redirects its traffic to
+`gemini-3.8-flash`, quoting paid prices ($0.75 / $3.75 per 1M tokens in the
+deprecation email). The 2026-08-20 advice to end every ladder with
+`gemini-flash-latest` is reversed: the alias follows the newest Flash, which
+is that same model. Pinned names rot, but rot is loud (404, caught by
+`routeWarnings` and the health row); a silent move to a billed model is not.
+
+Whether anything is actually billed depends on the Google project: a project
+with no billing account stays on the free tier and gets 429s, not charges.
+Check AI Studio → API keys (the plan column) before assuming either.
+
+Embeddings: two providers emitting 768-d vectors fit the same Convex vector
+index without error, but their spaces are unrelated, so a cross-provider
+fallback corrupts search silently. `embedProvider` picks exactly one.
+
+OpenAI's free daily tokens (data sharing on) cover only the exact model names
+on its help page, in two pools (250K/day for the large models, 2.5M/day for
+mini/nano on usage tiers 1-2). Embedding models are not in either pool.
+
 ## 2026-10-16 — Saved posts in real use: what went wrong
 
 - **Instagram's embed page escapes its slide list.** The child slides are in

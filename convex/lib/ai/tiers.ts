@@ -74,7 +74,7 @@ export function modelEnvVar(providerId: string, tier: Tier): string {
  * A tier's model variable holds a COMMA-SEPARATED FALLBACK CHAIN, tried left
  * to right:
  *
- *   GEMINI_MODEL_REASON=gemini-3.7-flash,gemini-3.6-flash,gemini-2.5-flash
+ *   GEMINI_MODEL_REASON=gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview
  *
  * Why a chain and not one name: model availability is not stable. A newer
  * model can reject a field an older one accepts, get rate-limited on its own

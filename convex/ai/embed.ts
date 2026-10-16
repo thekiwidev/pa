@@ -1,11 +1,11 @@
 // Text embeddings for saved posts (the EMBED tier, Phase 17's slot).
 //
-// Gemini first: gemini-embedding-001 has a free tier and supports 768
-// output dimensions, which is what the vector indexes declare. OpenAI's
-// text-embedding-3-small takes `dimensions: 768` too, so either can fill the
-// same index. Switching provider later means re-embedding, not migrating.
+// One provider embeds, chosen by `embedProvider` (Gemini when its key is set:
+// gemini-embedding-001 is on the free tier). Both providers emit 768-d
+// vectors, so the index accepts either, but the spaces are unrelated: there
+// is no cross-provider fallback, and switching provider means re-embedding.
 
-import { resolveProviderChain } from "../lib/ai/resolve";
+import { DEFAULT_EMBED_MODEL, embedProvider } from "../lib/ai/routes";
 import { modelChain } from "../lib/ai/tiers";
 import { normalizeVector } from "../lib/saved/rank";
 
@@ -47,40 +47,29 @@ async function openaiEmbed(apiKey: string, model: string, texts: string[]): Prom
   return (json.data ?? []).map((d) => normalizeVector(d.embedding ?? []));
 }
 
-const DEFAULT_MODEL: Record<string, string> = {
-  gemini: "gemini-embedding-001",
-  openai: "text-embedding-3-small",
-};
-
 /** True when some provider can embed. Everything degrades to text search when not. */
 export function canEmbed(): boolean {
   return Boolean(process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY);
 }
 
 /**
- * Embed texts, trying providers in EMBED-tier order. Returns null rather
+ * Embed texts with the one embedding provider. Returns null rather
  * than throwing: a missing vector costs meaning-search for one item, and
  * must never cost the save itself.
  */
 export async function embedTexts(texts: string[], purpose: EmbedPurpose): Promise<number[][] | null> {
   if (texts.length === 0) return [];
-  let chain: string[];
+  const provider = embedProvider(process.env);
+  if (!provider) return null;
+  const model = modelChain(provider, "EMBED", process.env)[0] ?? DEFAULT_EMBED_MODEL[provider];
   try {
-    chain = resolveProviderChain(process.env, "EMBED", "EMBED_TEXT").filter((p) => p === "gemini" || p === "openai");
-  } catch {
-    return null;
-  }
-  for (const provider of chain) {
-    const model = modelChain(provider, "EMBED", process.env)[0] ?? DEFAULT_MODEL[provider];
-    try {
-      const vectors =
-        provider === "gemini"
-          ? await geminiEmbed(process.env.GEMINI_API_KEY ?? "", model!, texts, purpose)
-          : await openaiEmbed(process.env.OPENAI_API_KEY ?? "", model!, texts);
-      if (vectors.length === texts.length && vectors.every((v) => v.length === EMBED_DIMENSIONS)) return vectors;
-    } catch (error) {
-      console.warn(`embed_failed provider=${provider}: ${String(error).slice(0, 200)}`);
-    }
+    const vectors =
+      provider === "gemini"
+        ? await geminiEmbed(process.env.GEMINI_API_KEY ?? "", model, texts, purpose)
+        : await openaiEmbed(process.env.OPENAI_API_KEY ?? "", model, texts);
+    if (vectors.length === texts.length && vectors.every((v) => v.length === EMBED_DIMENSIONS)) return vectors;
+  } catch (error) {
+    console.warn(`embed_failed provider=${provider}: ${String(error).slice(0, 200)}`);
   }
   return null;
 }

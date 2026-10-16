@@ -11,6 +11,7 @@ import { parseToolPlan } from "./lib/tools/plan";
 import { planningSystemPrompt, tldrOnlySystemPrompt } from "./lib/prompts/assistant";
 import { converse } from "./assistant";
 import { resolveProviderChain } from "./lib/ai/resolve";
+import { describeRoutes, routeWarnings } from "./lib/ai/routes";
 import { TASKS, modelEnvVar, type TaskName } from "./lib/ai/tiers";
 import { backendForAccounts } from "./lib/tasks/backend";
 import { listOpenLinearIssues } from "./tools/router";
@@ -622,6 +623,20 @@ export const health = internalAction({
   args: {},
   handler: async (ctx): Promise<unknown> => {
     return await runConnectionChecks(ctx, false);
+  },
+});
+
+/**
+ * Which provider and models every AI task would use, from env alone. Spends
+ * no tokens. `bunx convex run debug:aiRoutes '{}'` (add `--prod` for prod).
+ */
+export const aiRoutes = internalQuery({
+  args: {},
+  handler: async (): Promise<{ routes: string[]; warnings: string[] }> => {
+    const routes = describeRoutes(process.env).map(({ task, tier, providers }) =>
+      `${task} (${tier}): ${providers.length ? providers.map((p) => `${p.id}[${p.models.join(", ")}]`).join(" → ") : "NO PROVIDER"}`,
+    );
+    return { routes, warnings: routeWarnings(process.env) };
   },
 });
 

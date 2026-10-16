@@ -210,7 +210,7 @@ tried left to right, ending in a floating alias — pinned model names get
 retired without notice, and free-tier quota is per-model.
 
 ```env
-GEMINI_MODEL_REASON=gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
+GEMINI_MODEL_REASON=gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview
 ```
 
 Prove the chain without sending a Telegram message:

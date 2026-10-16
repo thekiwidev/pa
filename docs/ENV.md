@@ -55,14 +55,22 @@ Every `*_MODEL_<TIER>` variable is a **comma-separated list, tried left to
 right**, not a single name:
 
 ```
-GEMINI_MODEL_REASON=gemini-3.7-flash,gemini-3.5-flash,gemini-flash-latest
-GEMINI_MODEL_VISION=gemini-3.5-flash,gemini-3.7-flash,gemini-flash-latest
+GEMINI_MODEL_REASON=gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview
+GEMINI_MODEL_VISION=gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview
+GEMINI_MODEL_CHEAP_STRUCTURED=gemini-3.5-flash-lite,gemini-3.1-flash-lite
 ```
 
 A single name still works — it is a ladder of one. Gemini free-tier quota is
 per-model, so a rung that 429s costs one wasted call and the next rung serves.
-End every ladder with a floating alias (`gemini-flash-latest`): pinned model
-names get retired without notice.
+**Do not end a ladder with a floating alias** (`gemini-flash-latest`). That
+was the advice until 2026-10-16: the alias follows Google to its newest model,
+and the newest Flash (`gemini-3.8-flash`) is the one Google bills. Pin names
+instead, and let `debug:aiRoutes` and the daily health check tell you when one
+is retired (they warn on `gemini-3.7-flash`, `gemini-2.5-*` and any
+`-latest` alias).
+
+`bunx convex run debug:aiRoutes '{}'` prints, for every task, the providers
+and models `runTask` would try, in order, without spending a token.
 
 Re-probe a ladder before trusting it — `bunx convex run debug:pingAI
 '{"model":"gemini-3.5-flash"}'` hits one model directly.
@@ -73,7 +81,7 @@ Re-probe a ladder before trusting it — `bunx convex run debug:pingAI
 |---|---|---|
 | `MEETING_NUDGE_MINUTES` | `30` | Minutes before an event the "📅 X in 30 min" nudge fires. `0` turns nudges off. Checked every 5 min, 06:00–22:59 Lagos. |
 | `OPENAI_API_KEY` | unset | Presence alone makes OpenAI a configured provider. |
-| `OPENAI_MODEL_REASON` / `_DRAFT` / `_CHEAP_STRUCTURED` | unset | Fallback ladders, like Gemini's. Keep to models in OpenAI's free daily tier (see `docs/RUNBOOK-cleanup.md`). |
+| `OPENAI_MODEL_REASON` / `_DRAFT` / `_CHEAP_STRUCTURED` / `_VISION` | unset | Fallback ladders, like Gemini's. An unset ladder means that tier never uses OpenAI. Free only for the exact names in OpenAI's complimentary-token list, and only with data sharing turned on for the organisation. |
 | `AI_PROVIDER_PRIORITY` | `gemini` | e.g. `openai,gemini` — first configured provider wins; the next is the fallback. |
 | `AI_ROUTE_<TASK>` | unset | Pin one task to one provider, e.g. `AI_ROUTE_CLASSIFY_IMPORTANCE=gemini`, `AI_ROUTE_TRANSCRIBE_VOICE=gemini`. |
 
@@ -91,7 +99,7 @@ runs on CHEAP_STRUCTURED.
 | `APIFY_TOKEN` | unset | Reads every slide of an Instagram carousel. Unset = cover slide + caption only. |
 | `APIFY_INSTAGRAM_ACTOR` | `apify~instagram-scraper` | Swap the actor without a code change. |
 | `NOTION_LISTS` | unset | JSON, e.g. `{"movies":"<db id>","tools":"<db id>"}`. The integration must be shared with each database. |
-| `GEMINI_MODEL_EMBED` | `gemini-embedding-001` | Embedding model (768-d). OpenAI uses `OPENAI_MODEL_EMBED`, default `text-embedding-3-small`. |
+| `GEMINI_MODEL_EMBED` | `gemini-embedding-001` | Embedding model (768-d). Embeddings use ONE provider, never a fallback: Gemini whenever `GEMINI_API_KEY` is set, OpenAI (`OPENAI_MODEL_EMBED`, default `text-embedding-3-small`, not in the free-token pool) only if it is the sole key or `AI_ROUTE_EMBED_TEXT=openai`. |
 | `WEEKEND_PICK` | on | `off` stops the Saturday film pick. |
 | `SAVED_RECALL` | on | `off` stops pulling saved posts into replies. |
 | `SAVED_NUDGES` | on | `off` stops "you saved something for this" nudges. |

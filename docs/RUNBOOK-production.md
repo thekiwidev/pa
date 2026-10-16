@@ -63,6 +63,33 @@ bun run typecheck && bun test
 bun run dev            # leave running; pushes to dev
 ```
 
+Then put every AI task on free Gemini models (added 2026-10-16).
+`gemini-3.7-flash` is retired and Google now redirects it to `gemini-3.8-flash`.
+The `gemini-flash-latest` alias floats to the newest model, so it can land on
+a paid one too. These ladders name only models that served on your free key:
+
+```bash
+bunx convex env set GEMINI_MODEL_REASON           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set GEMINI_MODEL_DRAFT            "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set GEMINI_MODEL_VISION           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set GEMINI_MODEL_TRANSCRIBE       "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set GEMINI_MODEL_CHEAP_STRUCTURED "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+bunx convex run debug:aiRoutes '{}'
+```
+
+Copy the same five lines into `.env.dev` and `.env.prod`, replacing the old
+`GEMINI_MODEL_*` lines, so a later `--from-file` doesn't bring 3.7 back.
+
+**Expect:** `aiRoutes` prints one line per task and `"warnings": []`. Each line
+reads `TASK (TIER): provider[models] → fallback[models]`. `TRANSCRIBE_VOICE`
+and `TRANSCRIBE_VIDEO` list only `gemini`, and `EMBED_TEXT` lists only
+`gemini[gemini-embedding-001]`.
+
+**If different:**
+- **A warning names an `OPENAI_MODEL_*` or `GEMINI_MODEL_*` variable**: set that variable again without the named model. ✅
+- **A task says `NO PROVIDER`**: its tier has no ladder on any provider. Set the `GEMINI_MODEL_<TIER>` it names. ✅
+- **An `openai[...]` model isn't in OpenAI's free-token list** ([the list](https://help.openai.com/en/articles/10306912-sharing-api-traffic-with-openai)): every call to it is billed. Change it to a listed name, or 🛑 and send me the `aiRoutes` output.
+
 Then send these to the **dev** bot:
 
 1. **The household-hacks carousel link.**
@@ -74,7 +101,7 @@ Then send these to the **dev** bot:
 4. **An unrelated link right after it.**
    - **Expect:** an answer about the new post only.
 
-**Expect:** the pull says `Fast-forward`. Typecheck is clean and the tests show `812 pass, 0 fail`.
+**Expect:** the pull says `Fast-forward`. Typecheck is clean and the tests show `824 pass, 0 fail`.
 
 **If different:**
 - **Still one item from the carousel, with "Not all of this post could be read"**: Instagram served the cover only.
@@ -228,7 +255,18 @@ Use the **same value as dev**, except for the ones step 3 says to make different
 
 **If different:**
 - **`env list --prod` says not logged in, or no deployment**: run `bunx convex login` and retry. ✅
-- **`AI_PROVIDER_PRIORITY` differs**: make prod match dev (`openai,gemini`). ✅
+- **`AI_PROVIDER_PRIORITY` differs**: make prod match dev. ✅
+
+Then set prod's model ladders. They already exist on prod from Day 0, so the
+name diff can't see that they still hold `gemini-3.7-flash`:
+
+```bash
+bunx convex env set --prod GEMINI_MODEL_REASON           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set --prod GEMINI_MODEL_DRAFT            "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set --prod GEMINI_MODEL_VISION           "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set --prod GEMINI_MODEL_TRANSCRIBE       "gemini-3.5-flash,gemini-3.6-flash,gemini-3-flash-preview"
+bunx convex env set --prod GEMINI_MODEL_CHEAP_STRUCTURED "gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+```
 
 **Continue?** ✅ when the second diff has no `<` lines.
 
@@ -265,8 +303,10 @@ bunx convex run --prod debug:cryptoSelfTest '{}'
 
 **Expect:**
 - `{"status":"ok","configOk":true}`
-- `pingAI` names an OpenAI model.
+- `pingAI` names the same provider and model as dev's `aiRoutes` line for `PLAN_TOOLS`.
 - The crypto self-test passes.
+
+Then run `bunx convex run --prod debug:aiRoutes '{}'`. **Expect:** the same lines as on dev, and `"warnings": []`.
 
 **If different:**
 - **`configOk: false`**: a required variable is missing. Redo step 4's diff. 🛑 if the diff is clean.
