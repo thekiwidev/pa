@@ -119,7 +119,32 @@ Reply "go" and I'll pull up THE-89, or "what else?" for the rest.
 - Notes and reference material live in Notion; it searches before claiming
   you saved nothing.
 
-## 9. Hard rules (never relaxed)
+## 9. Personalities
+
+The assistant speaks as one of four personalities. **Project Manager is the
+default.** The choice sticks until the user changes it.
+
+| Personality | Voice | Checks in (WAT) |
+|---|---|---|
+| 📋 Project Manager | Your boss: direct, asks for status and blockers, pushes the next action. | 12:30 progress, 17:30 end-of-day update |
+| 💼 Corporate PA | Polished executive assistant: respectful, anticipates, offers to handle things. | 12:00 afternoon outlook, 17:00 wrap-up and tomorrow |
+| 👩🏾 Mom | Warm and caring: did you eat, did you rest, did you finish what you said. | 13:00 lunch, 18:00 evening, 21:30 wind-down |
+| 🤙🏾 Friend | Casual and encouraging, still nudges you toward what matters. | 14:00 afternoon, 19:00 evening |
+
+- **Switching:** "switch to mom", "be my PM again" (the `persona.set` tool),
+  or `/persona mom`. `/persona` alone lists them and marks the current one.
+- **Check-ins come unprompted.** Each one reads the same facts as the
+  morning check-in (rest of today's calendar, Linear issues, reminders,
+  important email), names the one thing that matters now, and asks for an
+  update. The user's reply is an ordinary message, so "done with THE-89"
+  updates Linear.
+- **Never pushy:** each slot at most once a day, never within two hours of
+  another check-in, held back while the user is mid-conversation, nothing
+  overnight. `/checkins off` stops them; the personality's voice stays.
+- The morning check-in (§5) is written in the active personality's voice.
+- A personality changes tone and timing only. §10 holds for all of them.
+
+## 10. Hard rules (never relaxed)
 
 1. **No email is ever sent without your tap on [Send].** No wording, saved
    instruction or "urgent" label changes that.

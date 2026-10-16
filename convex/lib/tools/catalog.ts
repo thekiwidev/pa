@@ -884,6 +884,18 @@ export const TOOL_SCHEMAS = {
       .describe("what the brief should focus on or skip, in your own words"),
   }),
   "brief.preview": z.object({}),
+  "persona.set": z.object({
+    persona: z
+      .string()
+      .optional()
+      .describe(
+        '"project_manager" | "corporate_pa" | "mom" | "friend" — or the user\'s own word for one ("mum", "boss", "PA")',
+      ),
+    checkins: z
+      .boolean()
+      .optional()
+      .describe("true/false to turn the unprompted check-ins on or off"),
+  }),
   "context.set": z.object({
     category: z
       .string()
@@ -1444,6 +1456,17 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     consequential: false,
     requiresAccountId: false,
     contentIsUnknowable: true,
+  },
+  "persona.set": {
+    description:
+      "Switch the personality you speak in — Project Manager (default), " +
+      "Corporate PA, Mom or Friend — and/or turn its unprompted check-ins " +
+      'on or off. Use for "switch to mom", "be my PM again", "talk like a ' +
+      'friend", "stop checking in on me". With no arguments it returns ' +
+      "the current personality and the list, so it also answers \"who are " +
+      'you right now?". The switch takes effect from your next message.',
+    consequential: false,
+    requiresAccountId: false,
   },
   "context.set": {
     description:

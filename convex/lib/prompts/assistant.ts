@@ -15,6 +15,7 @@ import type { ContextEntry } from "../userContext";
 import { formatInstant } from "../time";
 import { TELEGRAM_FORMAT_CONTRACT } from "./format";
 import { buildKnowledgeBlock, type KnowledgeInput } from "./knowledge";
+import { DEFAULT_PERSONA, PERSONAS, personaVoiceBlock, type Persona } from "../personas";
 
 export interface ConversationTurn {
   direction: "in" | "out";
@@ -43,6 +44,8 @@ export interface PlanningContext {
   activeSkills: { title: string; content: string }[];
   /** Facts about the owner. Rendered on every message. */
   userContext: { category: string; text: string }[];
+  /** The personality to speak in. Project Manager when absent. */
+  persona?: Persona;
 }
 
 const SCOPE = `HOW TO WORK
@@ -273,6 +276,8 @@ export function planningSystemPrompt(ctx: PlanningContext): string {
   return `You are ${ctx.displayName}'s personal assistant, texting them on Telegram.
 
 Current time: ${formatInstant(ctx.nowMs, ctx.timezone)} (${ctx.timezone}).
+
+${personaVoiceBlock(ctx.persona ?? PERSONAS[DEFAULT_PERSONA])}
 
 ${buildKnowledgeBlock({
   userContext: ctx.userContext as ContextEntry[],

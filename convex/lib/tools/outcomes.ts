@@ -1154,6 +1154,22 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "brief.preview":
       return str(r, "text") ?? "(nothing to show)";
 
+    case "persona.set": {
+      if (field(r, "found") === false) {
+        const available = Array.isArray(field(r, "available")) ? (field(r, "available") as string[]) : [];
+        return `I don't have a "${str(r, "asked") ?? "?"}" personality. I can be: ${available.join(", ")}.`;
+      }
+      const times = Array.isArray(field(r, "times")) ? (field(r, "times") as string[]) : [];
+      const checkins =
+        field(r, "checkinsOn") === true
+          ? `I'll check in at ${joinTimes(times)}.`
+          : "Unprompted check-ins are off.";
+      if (field(r, "changed") === true) {
+        return `${str(r, "emoji") ?? ""} ${str(r, "name") ?? ""} mode on. ${checkins}`.trim();
+      }
+      return str(r, "listing") ?? `${str(r, "emoji") ?? ""} ${str(r, "name") ?? ""}. ${checkins}`.trim();
+    }
+
     case "context.set":
       return field(r, "created") === false
         ? "🧠 Already knew that."
@@ -1175,4 +1191,10 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     default:
       return `✅ ${outcome.name}`;
   }
+}
+
+/** "12:30 and 17:30", "13:00, 18:00 and 21:30". */
+function joinTimes(times: string[]): string {
+  if (times.length <= 1) return times.join("");
+  return `${times.slice(0, -1).join(", ")} and ${times.at(-1)}`;
 }

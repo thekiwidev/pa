@@ -29,3 +29,17 @@ export const all = internalQuery({
       .take(50);
   },
 });
+
+/** One key's value, or null when it was never set. */
+export const get = internalQuery({
+  args: { userId: v.id("users"), key: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("preferences")
+      .withIndex("by_user_key", (q) =>
+        q.eq("userId", args.userId).eq("key", args.key),
+      )
+      .unique();
+    return row?.value ?? null;
+  },
+});

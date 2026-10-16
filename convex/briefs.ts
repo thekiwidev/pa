@@ -20,6 +20,16 @@ import {
   toCalendarItems,
 } from "./tools/router";
 import { dayWindow } from "./lib/calendar/window";
+import {
+  CHECKINS_PREF_KEY,
+  PERSONA_PREF_KEY,
+  checkinInstructions,
+  checkinsEnabled,
+  personaOrDefault,
+  personaVoiceBlock,
+  type CheckinSlot,
+  type Persona,
+} from "./lib/personas";
 
 /* ── Pure: gathering + formatting. No ctx, no fetch — bun test runs this
    with no Convex runtime, same boundary as everything in convex/lib/. ── */
@@ -255,7 +265,27 @@ NON-NEGOTIABLE, regardless of any instruction above:
 
 ${TELEGRAM_FORMAT_CONTRACT}`;
 
-async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+/** The active personality and whether it may check in unprompted. */
+export async function loadPersona(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+): Promise<{ persona: Persona; checkinsOn: boolean }> {
+  const [stored, checkins] = await Promise.all([
+    ctx.runQuery(internal.model.preferences.get, { userId, key: PERSONA_PREF_KEY }),
+    ctx.runQuery(internal.model.preferences.get, { userId, key: CHECKINS_PREF_KEY }),
+  ]);
+  return { persona: personaOrDefault(stored), checkinsOn: checkinsEnabled(checkins) };
+}
+
+/**
+ * Everything the morning check-in and the personality check-ins read: the
+ * FACTS block and the user's knowledge block. One gatherer, so a check-in
+ * can never see less than the morning message does.
+ */
+async function gatherFacts(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+): Promise<{ facts: BriefFactsInput; knowledge: string }> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
 
   // instructions and userContext are in this list because they were NOT,
@@ -387,14 +417,6 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     ).slice(0, 10),
   };
 
-  // The user's morning_brief skill governs the brief's shape. Falls back to
-  // COMPOSE_FALLBACK when no skill exists, so this works before anyone
-  // writes one — and the invariants are appended either way.
-  const skill = await ctx.runQuery(internal.model.skills.getEffective, {
-    userId,
-    name: "morning_brief",
-  });
-
   // Order is load-bearing: what the user has TAUGHT comes first, the skill
   // (which they also author) governs shape, and the invariants land last so
   // nothing above can license inventing a fact or a data source.
@@ -409,12 +431,51 @@ async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<st
     customInstructions: instructions.map((i) => i.text),
   });
 
+  return { facts, knowledge };
+}
+
+async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  const [{ facts, knowledge }, { persona }] = await Promise.all([
+    gatherFacts(ctx, userId),
+    loadPersona(ctx, userId),
+  ]);
+
+  // The user's morning_brief skill governs the brief's shape. Falls back to
+  // MORNING_CHECKIN when no skill exists, so this works before anyone
+  // writes one — and the invariants are appended either way. The
+  // personality sets the voice; the skill still sets the shape.
+  const skill = await ctx.runQuery(internal.model.skills.getEffective, {
+    userId,
+    name: "morning_brief",
+  });
+
   const result = await runTask("COMPOSE_BRIEF", {
-    system: `${knowledge}\n\n${skill?.content ?? MORNING_CHECKIN}\n${COMPOSE_INVARIANTS}`,
+    system: `${knowledge}\n\n${personaVoiceBlock(persona)}\n\n${skill?.content ?? MORNING_CHECKIN}\n${COMPOSE_INVARIANTS}`,
     input: renderBriefFacts(facts),
     maxOutputTokens: 800,
   });
 
+  return result.text.trim();
+}
+
+/**
+ * One unprompted personality check-in (convex/checkins.ts). Same facts and
+ * the same invariants as the morning message; the personality's slot
+ * decides what it is for.
+ */
+export async function composeCheckin(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  persona: Persona,
+  slot: CheckinSlot,
+): Promise<string> {
+  const { facts, knowledge } = await gatherFacts(ctx, userId);
+  const nowLabel = formatInstant(facts.nowMs ?? Date.now(), facts.timezone);
+  const result = await runTask("COMPOSE_BRIEF", {
+    system: `${knowledge}\n\n${checkinInstructions(persona, slot, nowLabel)}\n${COMPOSE_INVARIANTS}`,
+    input: renderBriefFacts(facts),
+    maxOutputTokens: 500,
+  });
   return result.text.trim();
 }
 

@@ -51,6 +51,16 @@ import {
   findFreeSlots,
 } from "../lib/calendar/events";
 import {
+  CHECKINS_PREF_KEY,
+  PERSONAS,
+  PERSONA_IDS,
+  PERSONA_PREF_KEY,
+  checkinsEnabled,
+  describePersonas,
+  personaOrDefault,
+  resolvePersona,
+} from "../lib/personas";
+import {
   backendForAccounts,
   matchLabels,
   resolveStateForStatus,
@@ -2130,6 +2140,47 @@ async function dispatch(
     case "brief.preview": {
       const text = await ctx.runAction(internal.briefs.compose, { userId });
       return { text };
+    }
+
+    case "persona.set": {
+      if (typeof a.persona === "string") {
+        const id = resolvePersona(a.persona);
+        if (!id) {
+          return {
+            found: false,
+            asked: a.persona,
+            available: PERSONA_IDS.map((p) => PERSONAS[p].name),
+          };
+        }
+        await ctx.runMutation(internal.model.preferences.set, {
+          userId,
+          key: PERSONA_PREF_KEY,
+          value: id,
+        });
+      }
+      if (typeof a.checkins === "boolean") {
+        await ctx.runMutation(internal.model.preferences.set, {
+          userId,
+          key: CHECKINS_PREF_KEY,
+          value: a.checkins,
+        });
+      }
+      const [storedPersona, storedCheckins] = await Promise.all([
+        ctx.runQuery(internal.model.preferences.get, { userId, key: PERSONA_PREF_KEY }),
+        ctx.runQuery(internal.model.preferences.get, { userId, key: CHECKINS_PREF_KEY }),
+      ]);
+      const persona = personaOrDefault(storedPersona);
+      const checkinsOn = checkinsEnabled(storedCheckins);
+      return {
+        found: true,
+        changed: typeof a.persona === "string",
+        persona: persona.id,
+        name: persona.name,
+        emoji: persona.emoji,
+        checkinsOn,
+        times: persona.checkins.map((c) => c.time),
+        listing: describePersonas(persona.id, checkinsOn),
+      };
     }
 
     case "context.set": {

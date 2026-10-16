@@ -55,6 +55,14 @@ crons.cron("ops digest", "0 18 * * *", internal.ops.digest, {});
 crons.cron("saved-post nudges", "*/30 7-19 * * *", internal.saved.nudgeRelevant, {});
 crons.cron("weekend pick", "0 9 * * 6", internal.saved.weekendPick, {});
 
+/**
+ * Personality check-ins (2026-10-16). Every 30 minutes, 07:00-22:59 WAT
+ * (06-21 UTC). The tick sends only when the active personality has a slot
+ * due — see convex/lib/personas.ts for the times (12:30 and 17:30 WAT for
+ * the default Project Manager).
+ */
+crons.cron("personality check-ins", "*/30 6-21 * * *", internal.checkins.tick, {});
+
 // Phase 12 adds: evening brief 0 19 * * *
 
 export default crons;

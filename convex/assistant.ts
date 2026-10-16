@@ -47,6 +47,15 @@ import { normalizeCategory } from "./lib/userContext";
 import { parseNotionLists } from "./lib/notion/lists";
 import { recallForMessage, toView } from "./saved";
 import { renderSavedItem } from "./lib/saved/extract";
+import { loadPersona } from "./briefs";
+import {
+  CHECKINS_PREF_KEY,
+  PERSONAS,
+  PERSONA_IDS,
+  PERSONA_PREF_KEY,
+  describePersonas,
+  resolvePersona,
+} from "./lib/personas";
 
 /** Verbatim turns in the prompt. Older turns live on in the running summary. */
 const CONVERSATION_TURNS = 20;
@@ -230,6 +239,8 @@ export async function converseDetailed(
       }));
   }
 
+  const { persona } = await loadPersona(ctx, userId);
+
   // Deterministic keyword match, no model call spent deciding.
   const skillNames = relevantSkillNames(intentText ?? text);
   const activeSkills = [];
@@ -260,6 +271,7 @@ export async function converseDetailed(
     activeSkills,
     userContext: userContext.map((c) => ({ category: c.category, text: c.text })),
     lists: Object.keys(parseNotionLists(process.env.NOTION_LISTS)),
+    persona,
   });
 
   // ── What "this" means ──────────────────────────────────────────────────
@@ -609,6 +621,8 @@ async function handleCommand(
         "/blocked — what I'm waiting on, and on whom",
         "/reminders — what's scheduled",
         "/brief — compose today's morning brief now",
+        "/persona [name] — show or switch personality (project manager, corporate pa, mom, friend)",
+        "/checkins on|off — turn the personality's unprompted check-ins on or off",
         "/whoami — who I think you are",
         "/help — this",
       ].join("\n");
@@ -626,6 +640,10 @@ async function handleCommand(
       return await remindersCommand(ctx, userId);
     case "/brief":
       return await briefCommand(ctx, userId);
+    case "/persona":
+      return await personaCommand(ctx, userId, text);
+    case "/checkins":
+      return await checkinsCommand(ctx, userId, text);
     case "/connect":
       return await connectCommand(ctx, userId, text);
     case "/reconnect":
@@ -643,6 +661,39 @@ async function handleCommand(
     default:
       return `Unknown command: ${command}`;
   }
+}
+
+/** "/persona" lists; "/persona mom" switches. Deterministic — no model call. */
+async function personaCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const wanted = text.split(/\s+/).slice(1).join(" ").trim();
+  if (wanted) {
+    const id = resolvePersona(wanted);
+    if (!id) {
+      return `I don't have a "${wanted}" personality. I can be: ${PERSONA_IDS.map((p) => PERSONAS[p].name).join(", ")}.`;
+    }
+    await ctx.runMutation(internal.model.preferences.set, { userId, key: PERSONA_PREF_KEY, value: id });
+    const p = PERSONAS[id];
+    const { checkinsOn } = await loadPersona(ctx, userId);
+    return checkinsOn
+      ? `${p.emoji} ${p.name} mode on. I'll check in at ${p.checkins.map((c) => c.time).join(", ")}.`
+      : `${p.emoji} ${p.name} mode on. Check-ins are off ("/checkins on" to start them).`;
+  }
+  const { persona, checkinsOn } = await loadPersona(ctx, userId);
+  return describePersonas(persona.id, checkinsOn);
+}
+
+async function checkinsCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const arg = text.split(/\s+/)[1]?.toLowerCase();
+  if (arg !== "on" && arg !== "off") {
+    const { persona, checkinsOn } = await loadPersona(ctx, userId);
+    return `Check-ins are ${checkinsOn ? "on" : "off"} (${persona.name}: ${persona.checkins.map((c) => c.time).join(", ")}). Say "/checkins on" or "/checkins off".`;
+  }
+  await ctx.runMutation(internal.model.preferences.set, {
+    userId,
+    key: CHECKINS_PREF_KEY,
+    value: arg === "on",
+  });
+  return arg === "on" ? "Check-ins on." : "Check-ins off. I'll only message you when something needs you.";
 }
 
 function status(): string {
