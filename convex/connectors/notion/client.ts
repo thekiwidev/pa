@@ -415,6 +415,37 @@ export async function findNote(
   return matches[0] ?? null;
 }
 
+/** Append markdown to the end of an existing page. */
+export async function appendToPage(pageId: string, markdown: string): Promise<void> {
+  const blocks = markdownToBlocks(markdown);
+  for (let i = 0; i < blocks.length; i += 100) {
+    await notionFetch(`/blocks/${pageId}/children`, {
+      method: "PATCH",
+      body: { children: blocks.slice(i, i + 100) },
+    });
+  }
+}
+
+/**
+ * The page important links are kept on: a section or note whose title is
+ * "Important links" (any spelling of that), else a new section by that name.
+ */
+export async function importantLinksPage(): Promise<{ pageId: string; url?: string; title: string; created: boolean }> {
+  const isLinks = (t: string) => /^important\s*links?$/i.test(t.trim());
+  if ((await parentKind()) === "page") {
+    const section = (await listCategories()).find((c) => isLinks(c.name));
+    if (section) return { pageId: section.pageId, title: section.name, created: false };
+  }
+  const note = (await searchNotes("important links", 5)).find((n) => isLinks(n.title));
+  if (note) return { pageId: note.pageId, url: note.url, title: note.title, created: false };
+  if ((await parentKind()) === "page") {
+    const section = await ensureCategory("Important links");
+    return { pageId: section.pageId, title: section.name, created: true };
+  }
+  const created = await createNote({ title: "Important links", markdown: "Links saved through the assistant, newest last." });
+  return { pageId: created.pageId, url: created.url, title: created.title, created: true };
+}
+
 /** A page's body as markdown. Untrusted content — it is whatever was written. */
 export async function readNote(pageId: string): Promise<{ title: string; markdown: string; url: string }> {
   const [page, children] = await Promise.all([

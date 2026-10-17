@@ -98,6 +98,8 @@ runs on CHEAP_STRUCTURED.
 | `MS_CLIENT_SECRET_EXPIRES_AT` | unset | `YYYY-MM-DD` the Microsoft client secret expires; the daily check warns 14 days before. |
 | `APIFY_TOKEN` | unset | Reads every slide of an Instagram carousel. Unset = cover slide + caption only. |
 | `APIFY_INSTAGRAM_ACTOR` | `apify~instagram-scraper` | Swap the actor without a code change. |
+| `APIFY_TIKTOK_ACTOR` | `clockworks~tiktok-scraper` | Reads every slide (and the video file) of a TikTok post. Uses `APIFY_TOKEN`. |
+| `TIKWM` | on | `off` stops the free tikwm.com fallback for TikTok posts. |
 | `NOTION_LISTS` | unset | JSON, e.g. `{"movies":"<db id>","tools":"<db id>"}`. The integration must be shared with each database. |
 | `GEMINI_MODEL_EMBED` | `gemini-embedding-001` | Embedding model (768-d). Embeddings use ONE provider, never a fallback: Gemini whenever `GEMINI_API_KEY` is set, OpenAI (`OPENAI_MODEL_EMBED`, default `text-embedding-3-small`, not in the free-token pool) only if it is the sole key or `AI_ROUTE_EMBED_TEXT=openai`. |
 | `WEEKEND_PICK` | on | `off` stops the Saturday film pick. |

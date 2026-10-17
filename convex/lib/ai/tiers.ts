@@ -57,6 +57,9 @@ export const TASKS = {
   // A short video from a post. TRANSCRIBE because only providers that take
   // audio/video inline (Gemini) are on that tier.
   TRANSCRIBE_VIDEO:    { tier: "TRANSCRIBE" },
+  // A saved post written up as a full Notion note: prose the owner reads, so
+  // DRAFT. One call per "add this to my notes", not per message.
+  WRITE_POST_NOTE:     { tier: "DRAFT" },
   // "Is this saved item genuinely useful for what they are doing now?"
   JUDGE_RELEVANCE:     { tier: "CHEAP_STRUCTURED" },
   // Not a chat task: names the EMBED tier for AI_ROUTE_EMBED_TEXT.

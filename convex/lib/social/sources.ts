@@ -204,3 +204,141 @@ export function parseInstagramEmbed(html: string): FullPost {
 
   return { caption: caption || undefined, author: author ? `@${author}` : undefined, images, videos, isVideo };
 }
+
+// ── TikTok (2026-10-17) ─────────────────────────────────────────────────────
+//
+// Most TikToks the owner saves are PHOTO slideshows ("photo mode"), which
+// oEmbed reduces to one cover. Three readers, best first; each parser is
+// shape-tolerant because none of these payloads is a documented contract.
+
+/** "/@user/photo/123" and "/@user/video/123" → "123". */
+export function tiktokItemId(url: string): string | null {
+  const m = /\/(?:video|photo)\/(\d{8,25})/.exec(url);
+  return m ? m[1]! : null;
+}
+
+/** oEmbed and most readers only accept the /video/ form; the id is the same. */
+export function tiktokVideoUrl(url: string): string {
+  return url.replace(/\/photo\/(\d{8,25})/, "/video/$1");
+}
+
+/** Short share links (vm./vt.tiktok.com, tiktok.com/t/...) must be resolved first. */
+export function isTiktokShortLink(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return /^(vm|vt)\.tiktok\.com$/i.test(u.hostname) || /^\/t\//.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function firstUrl(v: unknown): string | undefined {
+  if (typeof v === "string") return s(v);
+  const o = obj(v);
+  if (!o) return undefined;
+  return s(arr(o.urlList)[0]) ?? s(arr(o.url_list)[0]) ?? s(o.downloadLink) ?? s(o.url);
+}
+
+/** clockworks~tiktok-scraper (Apify) dataset items. */
+export function parseApifyTiktok(body: string): FullPost | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const item = obj(arr(json)[0]);
+  if (!item || s(item.error)) return null;
+
+  const images: string[] = [];
+  for (const slide of [...arr(item.slideshowImageLinks), ...arr(item.imagePost && obj(item.imagePost)?.images)]) {
+    const u = firstUrl(slide) ?? firstUrl(obj(slide)?.imageURL);
+    if (u && !images.includes(u)) images.push(u);
+  }
+  const meta = obj(item.videoMeta);
+  const videos: { url: string; durationSec?: number }[] = [];
+  const duration = typeof meta?.duration === "number" ? meta.duration : undefined;
+  for (const u of [...arr(item.mediaUrls), meta?.downloadAddr, meta?.playAddr]) {
+    const url = s(u);
+    if (url && !videos.some((v) => v.url === url)) videos.push({ url, durationSec: duration });
+  }
+  const slideshow = item.isSlideshow === true || images.length > 0;
+  if (!slideshow) {
+    const cover = s(meta?.coverUrl) ?? s(meta?.originalCoverUrl);
+    if (cover) images.push(cover);
+  }
+  const author = s(obj(item.authorMeta)?.name) ?? s(obj(item.authorMeta)?.nickName);
+  return {
+    caption: s(item.text),
+    author: author ? `@${author.replace(/^@/, "")}` : undefined,
+    images,
+    videos: slideshow ? [] : videos,
+    isVideo: !slideshow,
+  };
+}
+
+/** The JSON TikTok's own web page embeds (`__UNIVERSAL_DATA_FOR_REHYDRATION__`). */
+export function parseTiktokPage(html: string): FullPost | null {
+  const m = /<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  if (!m) return null;
+  let json: unknown;
+  try {
+    json = JSON.parse(m[1]!);
+  } catch {
+    return null;
+  }
+  const scope = obj(obj(json)?.__DEFAULT_SCOPE__);
+  const struct = obj(obj(obj(scope?.["webapp.video-detail"])?.itemInfo)?.itemStruct);
+  if (!struct) return null;
+
+  const images: string[] = [];
+  for (const img of arr(obj(struct.imagePost)?.images)) {
+    const u = firstUrl(obj(img)?.imageURL);
+    if (u && !images.includes(u)) images.push(u);
+  }
+  const video = obj(struct.video);
+  const videos: { url: string; durationSec?: number }[] = [];
+  if (images.length === 0) {
+    for (const u of [video?.downloadAddr, video?.playAddr]) {
+      const url = s(u);
+      if (url && !videos.some((v) => v.url === url)) {
+        videos.push({ url, durationSec: typeof video?.duration === "number" ? video.duration : undefined });
+      }
+    }
+    const cover = s(video?.cover) ?? s(video?.originCover);
+    if (cover) images.push(cover);
+  }
+  const author = s(obj(struct.author)?.uniqueId);
+  return {
+    caption: s(struct.desc),
+    author: author ? `@${author}` : undefined,
+    images,
+    videos,
+    isVideo: arr(obj(struct.imagePost)?.images).length === 0,
+  };
+}
+
+/** tikwm.com's public reader: `{code:0, data:{images?, play?, title, author}}`. */
+export function parseTikwm(body: string): FullPost | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const root = obj(json);
+  const data = obj(root?.data);
+  if (!data || (typeof root?.code === "number" && root.code !== 0)) return null;
+  const images = arr(data.images).map(s).filter((u): u is string => Boolean(u));
+  const play = s(data.play) ?? s(data.wmplay);
+  const slideshow = images.length > 0;
+  if (!slideshow && s(data.cover)) images.push(data.cover as string);
+  const author = s(obj(data.author)?.unique_id);
+  return {
+    caption: s(data.title),
+    author: author ? `@${author}` : undefined,
+    images,
+    videos: !slideshow && play ? [{ url: play, durationSec: typeof data.duration === "number" ? data.duration : undefined }] : [],
+    isVideo: !slideshow,
+  };
+}

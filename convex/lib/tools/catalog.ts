@@ -745,6 +745,23 @@ export const TOOL_SCHEMAS = {
     url: z.string().optional().describe("the post's link, when the user gave it"),
     titleFragment: z.string().optional().describe('a few words of what it was, e.g. "10 things video"'),
   }),
+  "saved.to_note": z.object({
+    itemId: z.string().optional().describe("id of the saved post, when you have one"),
+    url: z.string().optional().describe("the post's link, when the user gave it"),
+    titleFragment: z.string().optional().describe("a few words of what it was"),
+    category: z
+      .string()
+      .optional()
+      .describe("only when the user named a section; otherwise omit and the best section is picked"),
+  }),
+  "link.save_important": z.object({
+    url: z.string().min(8).describe("the link, copied exactly from the user's message"),
+    about: z
+      .string()
+      .min(3)
+      .describe("what the link is and why it matters, in the user's own words — ask them first if they didn't say"),
+    title: z.string().optional().describe("a short name for it, e.g. \"Tax portal login\""),
+  }),
   "list.query": z.object({
     list: z.string().min(1).describe('which list, as the user said it: "movies", "tools", "reading"'),
     includeFinished: z.boolean().optional().describe("also show ones already watched / done"),
@@ -1342,6 +1359,27 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "reminders. Use for 'forget that post/video', 'stop suggesting that'. " +
       "With no arguments it forgets the post saved most recently, which is " +
       "what 'forget that' means right after a link.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "saved.to_note": {
+    description:
+      "Write a saved post (Instagram, TikTok, X…) up as a FULL Notion note: a " +
+      "walk-through, every point in detail, lessons, takeaways, the video " +
+      "transcript, every slide's text word for word and the source link. It " +
+      "picks the right section itself (Self-development, Work, Library…) and " +
+      "titles the note after the post. Use for 'add this to my notes', 'save " +
+      "this to Notion', 'put that in my notes' about a post. With no arguments " +
+      "it uses the post saved most recently. NEVER use note.save for a post.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "link.save_important": {
+    description:
+      "Add a link to the user's Important links page in Notion with what it " +
+      "is and the date and time it was saved. Use for 'save this link', 'keep " +
+      "this link', 'add to important links'. Needs `about`: if the user did " +
+      "not say what the link is, ASK them first and call this with their answer.",
     consequential: false,
     requiresAccountId: false,
   },

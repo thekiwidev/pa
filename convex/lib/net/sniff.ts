@@ -11,6 +11,8 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
     const ascii = (from: number, to: number) => String.fromCharCode(...b.subarray(from, to));
     if (ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
     if (ascii(0, 3) === "GIF") return "image/gif";
+    // TikTok slides are often HEIC: an ISO box "ftyp" with a heic/mif1 brand.
+    if (ascii(4, 8) === "ftyp" && /^(heic|heix|hevc|mif1|msf1)$/.test(ascii(8, 12))) return "image/heic";
   }
   return null;
 }

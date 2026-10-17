@@ -33,8 +33,23 @@ const CODE_LANGUAGES: Record<string, string> = {
   yml: "yaml",
 };
 
+const LINK = /https?:\/\/[^\s<>"')\]]+/g;
+
+/**
+ * Bare URLs become real links. Notion's API does not autolink, so a source
+ * URL pasted as plain text in a note could not be clicked.
+ */
 function richText(content: string): unknown[] {
-  return [{ type: "text", text: { content } }];
+  const parts: unknown[] = [];
+  let last = 0;
+  for (const m of content.matchAll(LINK)) {
+    const at = m.index ?? 0;
+    if (at > last) parts.push({ type: "text", text: { content: content.slice(last, at) } });
+    parts.push({ type: "text", text: { content: m[0], link: { url: m[0] } } });
+    last = at + m[0].length;
+  }
+  if (last < content.length || parts.length === 0) parts.push({ type: "text", text: { content: content.slice(last) } });
+  return parts;
 }
 
 /**

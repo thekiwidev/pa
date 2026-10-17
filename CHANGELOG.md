@@ -9,6 +9,24 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — TikTok slideshows, full post notes, important links (2026-10-17)
+
+- **TikTok posts are read in full.** Short links (vm./vt./`/t/`) resolve;
+  slideshows give every slide (OCR'd like an Instagram carousel), videos are
+  downloaded and transcribed. Readers in order: Apify (`APIFY_TIKTOK_ACTOR`,
+  needs `APIFY_TOKEN`), the post page's own JSON, tikwm.com (`TIKWM=off` to
+  stop), then oEmbed (cover only). HEIC slides are recognised.
+- **"Add this to my notes" needs no follow-up.** `saved.to_note` picks or
+  creates the section under the notes root and writes a new page titled
+  after the post: overview, full explanation, every point, lessons, key
+  takeaways, then the transcript, every slide's text word for word, the
+  caption and the source link. The planner no longer writes post notes with
+  `note.save`.
+- **Important links.** `link.save_important` appends to an "Important
+  links" page (found or created): what the link is, the link, and when it
+  was saved. The bot asks what a link is for when the user didn't say.
+- Bare URLs in Notion notes are now clickable.
+
 ### Fixed — calendar reads only saw the primary calendar (2026-10-16)
 
 - **Every calendar ticked in Google Calendar is read**, per account, not just

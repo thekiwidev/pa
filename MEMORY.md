@@ -1536,3 +1536,16 @@ The cron reconcile is `internal.reminders.reconcile`; the build plan names it
 Subtract one hour from every local time. 07:00 WAT is `0 6 * * *`. Every cron
 line carries the offset in a comment above it, because this is misread three
 months later otherwise.
+
+## TikTok reading (2026-10-17)
+
+- TikTok oEmbed returns only the cover image and caption, so a slideshow
+  read through it looked like a one-slide post. Apify's clockworks actor
+  gives `slideshowImageLinks`; the post page embeds the same data in
+  `__UNIVERSAL_DATA_FOR_REHYDRATION__` but is often blocked from datacenter
+  IPs; tikwm.com is a free fallback that works without a key.
+- Photo posts live at `/photo/<id>`; every reader wants `/video/<id>`.
+- TikTok serves some slides as HEIC; the sniffer must recognise `ftyp heic`.
+- Post notes are built from stored slide text and transcript verbatim; the
+  model only writes the explanation, points, lessons and takeaways. When the
+  planner wrote notes itself (`note.save`) they came out a few lines long.

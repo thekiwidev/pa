@@ -111,3 +111,11 @@ describe("blocksToMarkdown", () => {
     expect(() => blocksToMarkdown([{}, null, "nonsense"])).not.toThrow();
   });
 });
+
+import { markdownToBlocks as toBlocks } from "../../convex/lib/notion/blocks";
+test("bare URLs in a note become clickable links, text unchanged", () => {
+  const [b] = toBlocks("- Source: https://www.instagram.com/reel/abc/ (Instagram)") as any[];
+  const rt = b.bulleted_list_item.rich_text;
+  expect(rt.map((r: any) => r.text.content).join("")).toBe("Source: https://www.instagram.com/reel/abc/ (Instagram)");
+  expect(rt.find((r: any) => r.text.link)?.text.link.url).toBe("https://www.instagram.com/reel/abc/");
+});

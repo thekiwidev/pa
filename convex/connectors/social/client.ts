@@ -27,6 +27,11 @@ import {
   parseApifyInstagram,
   parseFxTwitter,
   parseInstagramEmbed,
+  parseApifyTiktok,
+  parseTiktokPage,
+  parseTikwm,
+  isTiktokShortLink,
+  tiktokVideoUrl,
   tweetIdFromUrl,
   type FullPost,
 } from "../../lib/social/sources";
@@ -131,7 +136,7 @@ export async function fetchPost(link: DetectedLink): Promise<FetchedPost> {
   // TikTok: public oEmbed gives caption + cover.
   if (link.platform === "tiktok") {
     const oembed = await fetchOEmbed(
-      `https://www.tiktok.com/oembed?url=${encodeURIComponent(url.toString())}`,
+      `https://www.tiktok.com/oembed?url=${encodeURIComponent(tiktokVideoUrl(url.toString()))}`,
     );
     if (oembed?.title) {
       return {
@@ -184,7 +189,7 @@ export async function fetchPost(link: DetectedLink): Promise<FetchedPost> {
 export interface FetchedFullPost extends FullPost {
   platform: string;
   url: string;
-  provider: "fxtwitter" | "apify" | "embed" | "og" | "oembed";
+  provider: "fxtwitter" | "apify" | "embed" | "og" | "oembed" | "tiktok-page" | "tikwm";
   /** True when we know slides exist that we could not get. */
   slidesUnavailable: boolean;
   note?: string;
@@ -218,6 +223,56 @@ async function fetchApifyInstagram(url: string): Promise<FullPost | null> {
     return parseApifyInstagram(await res.text());
   } catch (error) {
     console.warn(`apify_instagram_failed: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+async function fetchApifyTiktok(url: string): Promise<FullPost | null> {
+  const token = process.env.APIFY_TOKEN;
+  if (!token) return null;
+  const actor = process.env.APIFY_TIKTOK_ACTOR ?? "clockworks~tiktok-scraper";
+  try {
+    const res = await fetch(
+      `https://api.apify.com/v2/acts/${encodeURIComponent(actor)}/run-sync-get-dataset-items?timeout=100`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          postURLs: [tiktokVideoUrl(url)],
+          resultsPerPage: 1,
+          shouldDownloadSlideshowImages: true,
+          shouldDownloadVideos: true,
+          shouldDownloadCovers: false,
+          shouldDownloadSubtitles: false,
+        }),
+        signal: AbortSignal.timeout(115_000),
+      },
+    );
+    if (!res.ok) throw new Error(`apify ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    return parseApifyTiktok(await res.text());
+  } catch (error) {
+    console.warn(`apify_tiktok_failed: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+async function fetchTiktokPage(url: string): Promise<FullPost | null> {
+  try {
+    return parseTiktokPage(await guardedFetch(assertFetchable(url)));
+  } catch {
+    return null;
+  }
+}
+
+/** Public reader; `TIKWM=off` stops the bot sending TikTok links to it. */
+async function fetchTikwm(url: string): Promise<FullPost | null> {
+  if (process.env.TIKWM === "off") return null;
+  try {
+    const body = await guardedFetch(
+      assertFetchable(`https://www.tikwm.com/api/?hd=1&url=${encodeURIComponent(tiktokVideoUrl(url))}`),
+    );
+    return parseTikwm(body);
+  } catch {
     return null;
   }
 }
@@ -289,6 +344,24 @@ export async function fetchFullPost(link: DetectedLink): Promise<FetchedFullPost
             : undefined,
       };
     }
+  }
+
+  if (link.platform === "tiktok") {
+    const postUrl = isTiktokShortLink(link.canonicalUrl)
+      ? ((await resolveRedirect(link.canonicalUrl)) ?? link.canonicalUrl)
+      : link.canonicalUrl;
+    const usable = (p: FullPost | null): p is FullPost =>
+      Boolean(p && (p.images.length > 1 || p.videos.length > 0 || (p.images.length > 0 && p.caption)));
+
+    const viaApify = await fetchApifyTiktok(postUrl);
+    if (usable(viaApify)) return { ...base, ...viaApify, provider: "apify", slidesUnavailable: false };
+
+    const viaPage = await fetchTiktokPage(postUrl);
+    if (usable(viaPage)) return { ...base, ...viaPage, provider: "tiktok-page", slidesUnavailable: false };
+
+    const viaTikwm = await fetchTikwm(postUrl);
+    if (usable(viaTikwm)) return { ...base, ...viaTikwm, provider: "tikwm", slidesUnavailable: false };
+    // Then oEmbed below: caption and cover only, and it says so.
   }
 
   // Everything else, and the last resort for the two above: today's path.

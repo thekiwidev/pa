@@ -936,6 +936,13 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "saved.forget":
       return `🗑️ I'll stop bringing up "${str(r, "title") ?? "that post"}".`;
 
+    case "saved.to_note":
+      return `📝 Saved to your notes: **${str(r, "title") ?? "note"}** in ${str(r, "category") ?? "your notes"}` +
+        `${field(r, "createdCategory") === true ? " (new section)" : ""}${str(r, "url") ? `\n${str(r, "url")}` : ""}`;
+
+    case "link.save_important":
+      return `🔗 Saved to ${str(r, "page") ?? "Important links"}: ${str(r, "title") ?? str(r, "url") ?? "link"} (${str(r, "savedAt") ?? "now"})`;
+
     case "list.query": {
       const items = field(r, "items");
       const list = str(r, "list") ?? "list";

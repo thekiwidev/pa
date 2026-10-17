@@ -44,6 +44,16 @@ const ALLOWED_HOSTS = [
   "twimg.com",
   "t.co",
   "fxtwitter.com",
+  // Added 2026-10-17 for TikTok slideshows and videos. TikTok serves media
+  // from its own CDNs; tikwm.com is a public JSON reader; api.apify.com hosts
+  // the files an Apify run downloaded. Each is a fixed, named host.
+  "tiktokcdn.com",
+  "tiktokcdn-us.com",
+  "tiktokcdn-eu.com",
+  "tiktokv.com",
+  "ibyteimg.com",
+  "tikwm.com",
+  "api.apify.com",
 ] as const;
 
 /** Enough to follow a share-link shortener to its post; not enough to loop. */

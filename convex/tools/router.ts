@@ -83,6 +83,8 @@ import { captureKey } from "../lib/capture/batch";
 import {
   NotionUnavailable,
   addListRows,
+  appendToPage,
+  importantLinksPage,
   createNote,
   findNote,
   listCategories,
@@ -121,6 +123,15 @@ import {
 import { cleanLinearKey, LINEAR_RECONNECT_HINT } from "../lib/linear/apiKey";
 import { payloadHash } from "../security/hash";
 import { runTask } from "../ai/registry";
+import {
+  WRITE_POST_NOTE_SYSTEM,
+  parsePostNote,
+  pickCategory,
+  postNoteInput,
+  postNoteMarkdown,
+  type PostForNote,
+} from "../lib/saved/note";
+import { importantLinkMarkdown } from "../lib/notion/links";
 import type { ToolOutcome } from "../lib/tools/outcomes";
 
 /**
@@ -1632,18 +1643,68 @@ async function dispatch(
       // Ids rarely survive into the conversation, so "forget that video"
       // resolves here: an id, else the link, else a title match, else the
       // most recent save.
-      const recent = await ctx.runQuery(internal.model.saved.recent, { userId, limit: 20 });
-      const wantUrl = typeof a.url === "string" ? (detectPlatform(a.url)?.canonicalUrl ?? a.url) : undefined;
-      const fragment = typeof a.titleFragment === "string" ? captureKey(a.titleFragment) : "";
-      const target =
-        (typeof a.itemId === "string" && a.itemId ? recent.find((i) => i._id === a.itemId) : undefined) ??
-        (wantUrl ? recent.find((i) => i.url === wantUrl) : undefined) ??
-        (fragment ? bestWordMatch(recent, fragment) : undefined) ??
-        (!a.itemId && !wantUrl && !fragment ? recent[0] : undefined);
-      if (!target) throw new Error("I couldn't tell which saved post you mean — say a few words of what it was");
+      const target = await resolveSavedTarget(ctx, userId, a);
       const result = await ctx.runMutation(internal.model.saved.hide, { userId, itemId: target._id });
       if (!result.hidden) throw new Error("no saved post like that");
       return result;
+    }
+
+    case "saved.to_note": {
+      const target = await resolveSavedTarget(ctx, userId, a);
+      const item = await ctx.runQuery(internal.model.saved.get, { itemId: target._id });
+      if (!item || item.userId !== userId) throw new Error("no saved post like that");
+      const entities = await ctx.runQuery(internal.model.saved.entitiesFor, { itemId: item._id });
+      const existing = (await listCategories()).map((c) => c.name);
+
+      const post: PostForNote = {
+        platform: item.platform,
+        url: item.url,
+        author: item.author,
+        caption: item.caption,
+        slides: item.slides.map((sl) => ({ index: sl.index, text: sl.text })),
+        videoTranscript: item.videoTranscript,
+        savedAtText: formatInstant(item.savedAt, timezone),
+        isVideo: Boolean(item.videoTranscript) || /\/(reel|reels|video|tv)\//.test(item.url),
+      };
+      const result = await runTask("WRITE_POST_NOTE", {
+        system: WRITE_POST_NOTE_SYSTEM,
+        input:
+          `Existing note categories: ${existing.length ? existing.join(", ") : "(none yet)"}\n` +
+          (typeof a.category === "string" && a.category ? `The owner asked for the category: ${a.category}\n` : "") +
+          "Write the note for the post below.",
+        untrusted: [{ label: "post", content: postNoteInput(post, entities.map((e) => ({ name: e.name, detail: e.detail }))) }],
+        maxOutputTokens: 6000,
+        json: true,
+      });
+      const draft = parsePostNote(result.text, {
+        title: item.title ?? "Saved post",
+        summary: item.summary,
+        categories: existing,
+      });
+      if (typeof a.category === "string" && a.category.trim()) draft.category = pickCategory(a.category, existing);
+
+      const saved = await createNote({ title: draft.title, markdown: postNoteMarkdown(draft, post), category: draft.category });
+      return {
+        title: saved.title,
+        category: saved.category ?? draft.category,
+        createdCategory: !existing.some((c) => c === (saved.category ?? draft.category)),
+        url: saved.url,
+        points: draft.points.length,
+        slides: post.slides.length,
+        transcript: Boolean(post.videoTranscript),
+      };
+    }
+
+    case "link.save_important": {
+      const url = (a.url as string).trim();
+      if (!/^https?:\/\//i.test(url)) throw new Error("that doesn't look like a link");
+      const savedAt = formatInstant(Date.now(), timezone);
+      const page = await importantLinksPage();
+      await appendToPage(
+        page.pageId,
+        importantLinkMarkdown({ url, about: a.about as string, title: a.title as string | undefined, savedAt }),
+      );
+      return { page: page.title, createdPage: page.created, url, title: a.title, about: a.about, savedAt };
     }
 
     case "list.query": {
@@ -2758,6 +2819,24 @@ async function googleAccountsFor(ctx: ActionCtx, userId: Id<"users">, scope: str
     );
   }
   return granted;
+}
+
+/**
+ * Which saved post a message means. Ids rarely survive into the
+ * conversation, so: an id, else the link, else a title match, else (with
+ * no hint at all) the most recent save.
+ */
+async function resolveSavedTarget(ctx: ActionCtx, userId: Id<"users">, a: Record<string, unknown>) {
+  const recent = await ctx.runQuery(internal.model.saved.recent, { userId, limit: 20 });
+  const wantUrl = typeof a.url === "string" ? (detectPlatform(a.url)?.canonicalUrl ?? a.url) : undefined;
+  const fragment = typeof a.titleFragment === "string" ? captureKey(a.titleFragment) : "";
+  const target =
+    (typeof a.itemId === "string" && a.itemId ? recent.find((i) => i._id === a.itemId) : undefined) ??
+    (wantUrl ? recent.find((i) => i.url === wantUrl) : undefined) ??
+    (fragment ? bestWordMatch(recent, fragment) : undefined) ??
+    (!a.itemId && !wantUrl && !fragment ? recent[0] : undefined);
+  if (!target) throw new Error("I couldn't tell which saved post you mean — say a few words of what it was");
+  return target;
 }
 
 export interface OwnedEvent {
