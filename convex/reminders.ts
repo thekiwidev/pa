@@ -4,7 +4,14 @@ import { v } from "convex/values";
 import { sendMessage } from "./channels/telegram";
 import { allCalendarEvents } from "./tools/router";
 import { whenToMs, isAllDay } from "./lib/calendar/events";
-import { nudgeText } from "./lib/calendar/availability";
+import {
+  ASK_AHEAD_MS,
+  askText,
+  asMeetingPrep,
+  meetingPrepKey,
+  meetingStage,
+  readyText,
+} from "./lib/calendar/meetingFlow";
 
 /**
  * The scheduler's target. Not a poll — Convex invokes this at the instant the
@@ -70,18 +77,23 @@ export const reconcile = internalAction({
 });
 
 /**
- * "Standup in 30 min" — the assistant speaking first, without being asked
+ * The meeting flow — the assistant speaking first, without being asked
  * (docs/BEHAVIOUR.md §6). Polled every 5 minutes by crons.ts during waking
- * hours; each event is nudged exactly once (calendarNudges, check-then-insert
- * in one mutation). MEETING_NUDGE_MINUTES sets the lead time; "0" turns
- * nudges off.
+ * hours. Per event, at most two messages, each claimed once in
+ * calendarNudges:
+ *   1. up to three hours ahead (not before 07:00): "You have X at 10:00
+ *      today. Are you joining?"
+ *   2. MEETING_NUDGE_MINUTES before (default 10): "X in 10 min. Ready to
+ *      join?" plus the prep they gave via meeting.prep. Skipped when they
+ *      said they are not joining.
+ * MEETING_NUDGE_MINUTES="0" turns both off.
  */
 export const nudgeUpcoming = internalAction({
   args: {},
   handler: async (ctx) => {
     const ownerId = process.env.TELEGRAM_OWNER_ID;
     if (!ownerId) return;
-    const leadMinutes = Number(process.env.MEETING_NUDGE_MINUTES ?? "30");
+    const leadMinutes = Number(process.env.MEETING_NUDGE_MINUTES ?? "10");
     if (!Number.isFinite(leadMinutes) || leadMinutes <= 0) return;
 
     const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: ownerId });
@@ -89,15 +101,14 @@ export const nudgeUpcoming = internalAction({
 
     const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
     const nowMs = Date.now();
-    const leadMs = leadMinutes * 60_000;
 
     let found;
     try {
       found = await allCalendarEvents(
         ctx,
         user._id,
-        { startMs: nowMs, endMs: nowMs + leadMs + 60_000 },
-        { limit: 10 },
+        { startMs: nowMs, endMs: nowMs + ASK_AHEAD_MS + 60_000 },
+        { limit: 15 },
       );
     } catch {
       // No calendar connected (or no calendar scope yet): nothing to nudge.
@@ -107,24 +118,41 @@ export const nudgeUpcoming = internalAction({
     for (const { event, calendarOf } of found.events) {
       const startMs = whenToMs(event.start, timezone);
       if (startMs === null || isAllDay(event.start)) continue;
-      if (startMs <= nowMs || startMs > nowMs + leadMs) continue;
+      const stage = meetingStage(startMs, nowMs, timezone, leadMinutes);
+      if (!stage) continue;
 
+      const title = event.summary ?? "(no title)";
+      const prep = asMeetingPrep(
+        await ctx.runQuery(internal.model.preferences.get, {
+          userId: user._id,
+          key: meetingPrepKey(event.id),
+        }),
+      );
+      // They already answered: no need to ask again.
+      if (stage === "ask" && prep?.attending !== undefined) continue;
+      if (stage === "ready" && prep?.attending === false) continue;
+
+      // The ready nudge keeps the old key shape, so an event nudged before
+      // this change is not nudged twice.
+      const key =
+        stage === "ask"
+          ? `ask:${calendarOf}:${event.id}:${startMs}`
+          : `${calendarOf}:${event.id}:${startMs}`;
       const claimed = await ctx.runMutation(internal.model.messages.claimNudge, {
         userId: user._id,
-        key: `${calendarOf}:${event.id}:${startMs}`,
+        key,
       });
       if (!claimed) continue;
 
-      const text = nudgeText(
-        {
-          title: event.summary ?? "(no title)",
-          startMs,
-          link: event.hangoutLink,
-          location: event.location,
-        },
-        nowMs,
-        timezone,
-      );
+      const text =
+        stage === "ask"
+          ? askText(title, startMs, timezone)
+          : readyText(
+              { title, startMs, link: event.hangoutLink, location: event.location },
+              nowMs,
+              timezone,
+              prep,
+            );
       const channelMessageId = await sendMessage(user.telegramId, text);
       await ctx.runMutation(internal.model.messages.record, {
         userId: user._id,

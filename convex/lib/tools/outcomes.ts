@@ -1174,6 +1174,26 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       return str(r, "listing") ?? `${str(r, "emoji") ?? ""} ${str(r, "name") ?? ""}. ${checkins}`.trim();
     }
 
+    case "meeting.prep": {
+      if (field(r, "found") !== true) {
+        return "I couldn't find that meeting on your calendar in the next 7 days.";
+      }
+      const title = str(r, "title") ?? "the meeting";
+      const when = str(r, "when") ?? "";
+      const notes = Array.isArray(field(r, "notes")) ? (field(r, "notes") as string[]) : [];
+      const attending = field(r, "attending");
+      const head =
+        attending === false
+          ? `📅 Noted, you're skipping ${title} (${when}).`
+          : str(r, "added")
+            ? `📅 Added to your prep for ${title} (${when}).`
+            : attending === true
+              ? `📅 Noted, you're joining ${title} (${when}). I'll ping you a few minutes before.`
+              : `📅 ${title} (${when}).`;
+      if (attending === false || notes.length === 0) return head;
+      return [head, "Your prep so far:", ...notes.map((n) => `- ${n}`)].join("\n");
+    }
+
     case "context.set":
       return field(r, "created") === false
         ? "🧠 Already knew that."

@@ -177,11 +177,37 @@ describe("prompts carry the personality and keep the hard rules", () => {
     expect(prompt).toContain("This changes your tone only");
   });
 
-  test("a check-in asks for an update and only looks ahead", () => {
-    const text = checkinInstructions(PM, PM.checkins[0]!, "Fri 16 Oct 2026, 09:00");
-    expect(text).toContain("asking them for an update");
-    expect(text).toContain("never mention a meeting that has already ended");
-    expect(text).toContain(PM.checkins[0]!.purpose);
+  test("a check-in has one purpose and one question — except the PM", () => {
+    const mom = checkinInstructions(MOM, MOM.checkins[2]!, "Fri 16 Oct 2026, 13:00");
+    expect(mom).toContain("ONE purpose, ONE question");
+    expect(mom).toContain("Never ask a second question");
+    expect(mom).toContain("never ask about a meeting that has\nalready ended");
+    expect(mom).toContain(MOM.checkins[2]!.purpose);
+    const pm = checkinInstructions(PM, PM.checkins[1]!, "Fri 16 Oct 2026, 13:30");
+    expect(pm).toContain("Up to three items");
+    expect(pm).not.toContain("ONE purpose, ONE question");
+  });
+
+  test("only the PM bundles questions", () => {
+    expect(PERSONA_IDS.filter((id) => PERSONAS[id].multiAsk)).toEqual(["project_manager"]);
+  });
+
+  test("Mom is a corporate mom: no love, no pet names", () => {
+    expect(MOM.voice).toContain("corporate mom");
+    expect(MOM.voice).toContain('NEVER say "I love you"');
+    expect(MOM.voice).not.toMatch(/❤️|🙏/);
+  });
+
+  test("no slot purpose asks two unrelated things", () => {
+    // The feedback: "it's telling me to do one task, and at the same time
+    // asking how things are going". A purpose must not pair a task push
+    // with a how-is-your-day question.
+    for (const id of PERSONA_IDS) {
+      if (PERSONAS[id].multiAsk) continue;
+      for (const slot of PERSONAS[id].checkins) {
+        expect(`${id}:${slot.id}:${/how (is|was) (the|your) day/i.test(slot.purpose)}`).toBe(`${id}:${slot.id}:false`);
+      }
+    }
   });
 
   test("/persona listing marks the current one and the default", () => {

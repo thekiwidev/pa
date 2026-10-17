@@ -896,6 +896,20 @@ export const TOOL_SCHEMAS = {
       .optional()
       .describe("true/false to turn the unprompted check-ins on or off"),
   }),
+  "meeting.prep": z.object({
+    titleFragment: z
+      .string()
+      .optional()
+      .describe('words from the meeting\'s title, e.g. "standup"; omit for the next meeting on the calendar'),
+    note: z
+      .string()
+      .optional()
+      .describe("one thing they will cover or say: an update, a question, a blocker — in their words"),
+    attending: z
+      .boolean()
+      .optional()
+      .describe('true when they say they are joining, false when they are not'),
+  }),
   "context.set": z.object({
     category: z
       .string()
@@ -1465,6 +1479,17 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       'friend", "stop checking in on me". With no arguments it returns ' +
       "the current personality and the list, so it also answers \"who are " +
       'you right now?". The switch takes effect from your next message.',
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "meeting.prep": {
+    description:
+      "Record what the user will cover in an upcoming calendar meeting " +
+      '("for standup my updates are…", "I need to raise the API delay") ' +
+      'and/or whether they are joining ("yes I\'ll join" after "Are you ' +
+      'joining?"). Their notes are read back to them in the "ready to join?" ' +
+      "nudge before it starts. Call once per note. With only titleFragment " +
+      "it returns what is saved for that meeting.",
     consequential: false,
     requiresAccountId: false,
   },

@@ -46,3 +46,20 @@ when this landed. Paste each section into its file, then delete this one.
   (once per event), and a status ping when the user has been quiet for
   180 min minus 20 per in-progress/due-today task (floor 90) plus a
   day-seeded 0–45 min jitter, naming the specific task.
+
+## Tone, single-purpose check-ins, meeting flow (2026-10-17, for CHANGELOG.md)
+
+- Voices rewritten from live feedback: Mom is a "corporate mom" (persistent,
+  demanding, never "I love you"/pet names/hearts); PM a real delivery lead;
+  PA a real executive assistant; Friend unchanged.
+- Check-ins: one purpose, one question, two lines (`checkinInstructions`).
+  Only the PM (`multiAsk: true`) lists up to three tasks as status asks.
+  Every slot purpose and both PA watch purposes rewritten to a single ask.
+- Meeting flow (`convex/lib/calendar/meetingFlow.ts`, `reminders.nudgeUpcoming`):
+  "Are you joining?" up to 3 h ahead (not before 07:00), then "Ready to
+  join?" at MEETING_NUDGE_MINUTES (default now 10, was 30) with the prep
+  notes. Attending=false skips the ready nudge. The ready nudge keeps the
+  old calendarNudges key, so nothing is double-sent across the deploy.
+- New tool `meeting.prep` (titleFragment?, note?, attending?), stored in
+  `preferences` under `meeting.prep:<eventId>`. SCOPE rule 11 MEETINGS,
+  including writing up a blocker as a sayable update.

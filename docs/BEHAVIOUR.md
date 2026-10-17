@@ -99,8 +99,16 @@ Reply "go" and I'll pull up THE-89, or "what else?" for the rest.
   yes or no first. Then it mentions anything within an hour either side:
   *"Yes, 3–4 is free. Heads up: you have a call at 4:15."*
 - **"Am I free Thursday?"** lists what's on that day and the open gaps.
-- **Nudges:** 30 minutes before an event, without being asked:
-  *"📅 Standup in 30 min (10:00). Meet link: …"* Once per event.
+- **Meeting flow**, without being asked, two messages per event at most:
+  - up to 3 hours ahead (not before 07:00): *"📅 You have Standup at 10:00
+    today. Are you joining?"*
+  - 10 minutes before (`MEETING_NUDGE_MINUTES`): *"📅 Standup in 10 min
+    (10:00). Ready to join?"* with the link, then *"Remember, you're
+    covering: …"* listing the prep they told it. Skipped if they said they
+    are not joining.
+- Prep: "for standup my updates are X" or "I'll raise Y" is saved against
+  that meeting (`meeting.prep`). A blocker gets written up as a short update
+  they can say: what is blocked, the impact, what they need from whom.
 
 ## 7. Tasks
 
@@ -126,9 +134,9 @@ default.** The choice sticks until the user changes it.
 
 | Personality | Voice | Checks in (WAT) |
 |---|---|---|
-| 📋 Project Manager | Your boss: direct, asks for status and blockers, pushes the next action. | 09:00 stand-up, 13:30 progress, 18:00 end-of-day wrap |
-| 💼 Corporate PA | Polished executive assistant: respectful, anticipates, offers to handle things. | 08:30 agenda, 12:00, 15:30, 17:30 wrap — **plus** about an hour before each event, and whenever you go quiet with work open (sooner the more is in progress or due today, shifted randomly each day), 08:00–19:00 |
-| 👩🏾 Mom | Warm and caring: did you eat, did you rest, did you finish what you said. | 07:30 wake-up, 09:00 start of day, 13:00 how's it going, 18:00 wrap up, 22:00 bedtime |
+| 📋 Project Manager | A real delivery lead: stand-ups, status, ETAs, blockers. The only one that asks about several tasks at once. | 09:00 stand-up, 13:30 progress, 18:00 end-of-day wrap |
+| 💼 Corporate PA | A real executive assistant: formal, discreet, manages calendar and tasks, asks before acting. | 08:30 agenda, 12:00, 15:30, 17:30 wrap — **plus** about an hour before each event, and whenever you go quiet with work open (sooner the more is in progress or due today, shifted randomly each day), 08:00–19:00 |
+| 👩🏾 Mom | A corporate mom: persistent and demanding, pushes you to your best. Never "I love you", no pet names. | 07:30 wake-up, 09:00 start of day, 13:00 progress, 18:00 what you finished, 22:00 bedtime |
 | 🤙🏾 Friend | Casual and encouraging, still nudges you toward what matters. | 10:00 morning, 15:00 afternoon, 20:30 evening |
 
 - **Switching:** "switch to mom", "be my PM again" (the `persona.set` tool),
@@ -141,6 +149,9 @@ default.** The choice sticks until the user changes it.
 - **Never pushy:** each slot at most once a day, never too soon after
   another check-in (each personality has its own minimum gap: Mom 75 min, PA 60, PM and Friend 120), held back while the user is mid-conversation, nothing
   overnight. `/checkins off` stops them; the personality's voice stays.
+- **One purpose, one question.** Every check-in says why it is checking in
+  and asks one thing. Only the Project Manager lists several tasks, and
+  then as direct status asks ("THE-89: status? ETA?").
 - The morning check-in (§5) is written in the active personality's voice.
 - A personality changes tone and timing only. §10 holds for all of them.
 

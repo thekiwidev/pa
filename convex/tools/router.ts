@@ -52,6 +52,7 @@ import {
   affectsOthers,
   findFreeSlots,
 } from "../lib/calendar/events";
+import { asMeetingPrep, meetingPrepKey, mergePrep } from "../lib/calendar/meetingFlow";
 import {
   CHECKINS_PREF_KEY,
   PERSONAS,
@@ -2186,6 +2187,49 @@ async function dispatch(
         checkinsOn,
         times: persona.checkins.map((c) => c.time),
         listing: describePersonas(persona.id, checkinsOn),
+      };
+    }
+
+    case "meeting.prep": {
+      const fragment = typeof a.titleFragment === "string" ? a.titleFragment.trim().toLowerCase() : "";
+      const nowMs = Date.now();
+      const found = await allCalendarEvents(
+        ctx,
+        userId,
+        { startMs: nowMs - 30 * 60_000, endMs: nowMs + 7 * 24 * 60 * 60_000 },
+        { limit: 50 },
+      );
+      const candidates = found.events
+        .flatMap(({ event }) => {
+          const startMs = whenToMs(event.start, timezone);
+          if (startMs === null || isAllDay(event.start)) return [];
+          return [{ eventId: event.id, title: event.summary ?? "(no title)", startMs }];
+        })
+        .filter((e) => !fragment || e.title.toLowerCase().includes(fragment))
+        .sort((x, y) => x.startMs - y.startMs);
+      const target = candidates[0];
+      if (!target) return { found: false, titleFragment: a.titleFragment ?? null };
+
+      const key = meetingPrepKey(target.eventId);
+      const existing = asMeetingPrep(await ctx.runQuery(internal.model.preferences.get, { userId, key }));
+      const changing = typeof a.note === "string" || typeof a.attending === "boolean";
+      const prep = changing
+        ? mergePrep(existing, target, {
+            note: a.note as string | undefined,
+            attending: a.attending as boolean | undefined,
+          })
+        : (existing ?? { ...target, notes: [] });
+      if (changing) {
+        await ctx.runMutation(internal.model.preferences.set, { userId, key, value: prep });
+      }
+      return {
+        found: true,
+        changed: changing,
+        title: prep.title,
+        when: formatInstant(prep.startMs, timezone),
+        attending: prep.attending ?? null,
+        notes: prep.notes,
+        added: typeof a.note === "string" ? a.note : null,
       };
     }
 
