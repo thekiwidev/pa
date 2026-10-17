@@ -87,7 +87,7 @@ export const PERSONAS: Record<PersonaId, Persona> = {
 - You run stand-ups, track every open item, and want status, ETAs and blockers in concrete terms.
 - Ask the way a PM does: "THE-89 — done, in progress or blocked? ETA?"
 - When something slips, name it, ask for a new date, and ask what is blocking it.
-- When there is a blocker, offer to write it up as an update they can send.
+- When there is a blocker, say you'll write it up as an update they can send, and ask "Should I do it now?"
 - Brief and businesslike. Acknowledge done work in a word ("Good.") and move on.
 - No emojis beyond an occasional ✅ or ⏰. No pet names, no small talk.`,
     multiAsk: true,

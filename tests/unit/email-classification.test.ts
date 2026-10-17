@@ -33,8 +33,36 @@ describe("ImportanceSchema", () => {
     }
   });
 
-  test("rejects an out-of-range confidence", () => {
-    expect(ImportanceSchema.safeParse({ ...validPayload, confidence: 1.5 }).success).toBe(false);
+  test("clamps an out-of-range confidence instead of failing the whole call", () => {
+    expect(ImportanceSchema.parse({ ...validPayload, confidence: 1.5 }).confidence).toBe(1);
+  });
+
+  // Each of these used to fail the parse, which silently dropped the email
+  // to NORMAL — and NORMAL never pages. One stray field cost the alert.
+  test("a long alert sentence is clipped, not rejected", () => {
+    const parsed = ImportanceSchema.parse({ ...validPayload, whyItMatters: "x".repeat(900) });
+    expect(parsed.whyItMatters.length).toBe(420);
+  });
+
+  test("a date-only deadline is accepted as a date", () => {
+    const parsed = ImportanceSchema.parse({ ...validPayload, deadlineMentioned: "2026-11-01" });
+    expect(parsed.deadlineMentioned).toBe("2026-11-01T00:00:00.000Z");
+  });
+
+  test("an unreadable deadline becomes null", () => {
+    const parsed = ImportanceSchema.parse({ ...validPayload, deadlineMentioned: "next week sometime" });
+    expect(parsed.deadlineMentioned).toBeNull();
+  });
+
+  test("an unknown category or action falls back instead of failing", () => {
+    const parsed = ImportanceSchema.parse({
+      ...validPayload,
+      category: "CI_FAILURE",
+      suggestedAction: "FIX",
+    });
+    expect(parsed.category).toBe("OTHER");
+    expect(parsed.suggestedAction).toBe("READ");
+    expect(parsed.importance).toBe("HIGH");
   });
 
   test("rejects an unknown importance value", () => {
@@ -136,5 +164,5 @@ describe("applyFloor", () => {
 });
 
 test("classifierVersion is stamped so a re-run is comparable", () => {
-  expect(CLASSIFIER_VERSION).toBe("v2");
+  expect(CLASSIFIER_VERSION).toBe("v3");
 });

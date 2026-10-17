@@ -9,6 +9,41 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Fixed — important email never paged the phone (2026-10-17)
+
+- **Push-synced mail now alerts.** `syncFromHistory` (the Gmail push path)
+  classified new mail through `classifyBacklog`, which never sends an
+  alert, and the 10-minute poll then saw those rows as already stored and
+  skipped them. With push live, push won the race for nearly every message,
+  so only mail the poll happened to reach first ever paged. Both paths now
+  go through one `ingestFresh` (classify, then deliver).
+- **Bulk-sender headers no longer bury notices about you.** Any mail with
+  `List-Unsubscribe` from an unknown sender was marked LOW with no model
+  call — which is every GitHub, YouTube, Linear, WakaTime, payment and
+  shipping notice. Those now reach the classifier when they read
+  transactional (sign-in, payment failed, CI failed, payout, refund, API
+  key, …); plain newsletters are still skipped.
+- **One bad field no longer drops an alert.** The classifier's JSON failed
+  the whole parse on a sentence over 280 characters or a date-only
+  deadline, and a failed parse means NORMAL, which never pages. Every field
+  but `importance` is now clipped or defaulted.
+- `classifyBacklog` applies each mailbox's priority rules; the owner's own
+  SENT/DRAFT mail is never classified or alerted; alerts skip mail older
+  than 24 hours (a first sync or reconnect no longer pages for yesterday).
+
+### Changed — alerts and replies read like Hark (2026-10-17)
+
+- **The alert is the summary.** Classifier v3 writes one to three sentences:
+  what it says and what to do, with `[label](url)` links. Code makes a link
+  tappable only on the sender's own authenticated domain; any other address
+  is shown inert. Rubric adds failed CI, delayed payouts, refunds, API
+  changes and unrequested accounts as HIGH. Card header and buttons are
+  unchanged; link previews are off on cards.
+- **Decisive next steps.** The voice contract bans "If you want, I can…".
+  A reply that proposes a step sets `next`, and goes out with **Do it now**
+  / **Later** buttons (`nextgo` / `nextlater`, single-use, 24 h). Notes and
+  tasks written to Notion or Linear are told to be complete, not chat-short.
+
 ### Added — TikTok slideshows, full post notes, important links (2026-10-17)
 
 - **TikTok posts are read in full.** Short links (vm./vt./`/t/`) resolve;

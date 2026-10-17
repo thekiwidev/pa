@@ -11,6 +11,7 @@ export type PrefilterVerdict =
       reason:
         | "user_rule"
         | "noise_sender"
+        | "own_message"
         | "bulk_not_high_plus_sender"
         | "promotions_no_project_hit";
     }
@@ -36,6 +37,41 @@ export interface PrefilterInput {
    * needs the rule rows; applying it is pure and belongs here.
    */
   userRule?: EmailRule | null;
+  /**
+   * The subject or body reads like a transactional notice about the owner's
+   * own account, money or work (looksTransactional below). Bulk-sender
+   * headers alone must not bury these.
+   */
+  transactionalHint?: boolean;
+}
+
+/**
+ * Notices that arrive through bulk-mail infrastructure but are about the
+ * owner personally. GitHub, YouTube, Linear, WakaTime and every payment or
+ * shipping service send with a List-Unsubscribe header, so "has
+ * List-Unsubscribe" is NOT "is a newsletter" — the old rule skipped every one
+ * of these without a model call, which is most of what the owner missed.
+ *
+ * Deliberately broad: a match only buys a classifier call, it decides
+ * nothing. The classifier still calls a routine one NORMAL.
+ */
+const TRANSACTIONAL = new RegExp(
+  [
+    "sign[- ]?in", "log[- ]?in", "new device", "password", "security (alert|notice)",
+    "two-factor", "2fa", "suspicious", "unusual activity", "oauth", "third-party app",
+    "authori[sz]ed",
+    "payment (failed|declined|unsuccessful|issue|problem)", "(couldn.t|could not|unable to) (charge|process|bill)",
+    "card (declined|expired|expiring)", "billing", "invoice", "refund", "payout", "overdue",
+    "past due", "suspend", "paused", "cancel", "renewal",
+    "action (required|needed)", "(build|ci|run|check|deploy(ment)?|workflow|job)s? (failed|failing|errored)",
+    "failed", "api key", "deprecat", "breaking change", "shipment", "tracking number",
+    "account (created|opened|was created)", "verify your", "interview",
+  ].join("|"),
+  "i",
+);
+
+export function looksTransactional(subject?: string, body?: string): boolean {
+  return TRANSACTIONAL.test(`${subject ?? ""}\n${(body ?? "").slice(0, 2000)}`);
 }
 
 const HIGH_PLUS = new Set(["CRITICAL", "HIGH"]);
@@ -45,9 +81,12 @@ const HIGH_PLUS = new Set(["CRITICAL", "HIGH"]);
  *   0. user rule FLOOR_HIGH           → floor of HIGH, still classify
  *   1. user rule IGNORE               → LOW, no model call
  *   1b. user rule NEVER_ALERT         → classify, but suppress the alert
+ *   1c. the owner's own SENT/DRAFT    → LOW, no model call
  *   2. known noise sender             → LOW, no model call
- *   3. bulk AND sender not HIGH+      → LOW, no model call
- *   4. CATEGORY_PROMOTIONS, no hit    → LOW, no model call
+ *   3. bulk AND sender not HIGH+      → LOW, no model call,
+ *      unless it reads transactional
+ *   4. CATEGORY_PROMOTIONS, no hit    → LOW, no model call,
+ *      unless it reads transactional
  *   5. sender importance CRITICAL     → floor of HIGH, still classify
  *   6. otherwise                      → classify with no floor
  *
@@ -69,6 +108,10 @@ export function prefilter(input: PrefilterInput): PrefilterVerdict {
     if (rule.action === "NEVER_ALERT") return { skip: false, neverAlert: true };
   }
 
+  if (input.labelIds.includes("SENT") || input.labelIds.includes("DRAFT")) {
+    return { skip: true, importance: "LOW", reason: "own_message" };
+  }
+
   if (input.isNoiseSender) {
     return { skip: true, importance: "LOW", reason: "noise_sender" };
   }
@@ -76,11 +119,15 @@ export function prefilter(input: PrefilterInput): PrefilterVerdict {
   const senderIsHighPlus =
     input.senderImportance !== undefined && HIGH_PLUS.has(input.senderImportance);
 
-  if (input.hasListUnsubscribe && !senderIsHighPlus) {
+  if (input.hasListUnsubscribe && !senderIsHighPlus && !input.transactionalHint) {
     return { skip: true, importance: "LOW", reason: "bulk_not_high_plus_sender" };
   }
 
-  if (input.labelIds.includes("CATEGORY_PROMOTIONS") && !input.projectKeywordHit) {
+  if (
+    input.labelIds.includes("CATEGORY_PROMOTIONS") &&
+    !input.projectKeywordHit &&
+    !input.transactionalHint
+  ) {
     return { skip: true, importance: "LOW", reason: "promotions_no_project_hit" };
   }
 

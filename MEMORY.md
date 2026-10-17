@@ -9,6 +9,19 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-17 — Two sync paths must share one "new mail" handler
+
+The push path and the poll each stored mail and each decided what to do with
+a newly created row, and only the poll alerted. Because `upsert` reports
+`created` exactly once, whichever path stores a message first owns its
+alert forever. Push almost always wins, so the bug looked like "alerts mostly
+stopped after connecting", not like an error. Anything that happens to new
+mail (classify, alert, future auto-draft) belongs in `ingestFresh` only.
+
+`List-Unsubscribe` is not a newsletter signal: GitHub, YouTube, Linear,
+Stripe-style billing and shipping notices all carry it. Treat it as "bulk
+infrastructure", and rescue transactional wording before skipping.
+
 ## 2026-10-16 — Google Calendar: `primary` is not "my calendar"
 
 `/calendars/primary/events` returns only the account's default calendar.

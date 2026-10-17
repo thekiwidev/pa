@@ -23,7 +23,12 @@ export interface ToolPlan {
   rejected: RejectedCall[];
   /** The E-label of the email the reply is about ("E2"), when it names one. */
   focus?: string;
+  /** The one next step the reply proposes, for the Do it now / Later buttons. */
+  next?: string;
 }
+
+/** Long enough for a real step, short enough to sit in a preference row. */
+export const NEXT_STEP_MAX = 160;
 
 export function parseToolPlan(raw: string): ToolPlan {
   // Fence-stripping, the balanced object scan and the doubled-brace retry all
@@ -32,7 +37,7 @@ export function parseToolPlan(raw: string): ToolPlan {
   const parsed = parseJsonObject(raw);
   if (parsed === null) return { reply: raw.trim(), calls: [], rejected: [] };
 
-  const obj = parsed as { reply?: unknown; tools?: unknown; focus?: unknown };
+  const obj = parsed as { reply?: unknown; tools?: unknown; focus?: unknown; next?: unknown };
   const reply = typeof obj.reply === "string" ? obj.reply.trim() : "";
   const focus =
     typeof obj.focus === "string" && /^E\d+$/i.test(obj.focus.trim())
@@ -71,5 +76,16 @@ export function parseToolPlan(raw: string): ToolPlan {
     }
   }
 
-  return focus ? { reply, calls, rejected, focus } : { reply, calls, rejected };
+  const next =
+    typeof obj.next === "string" && obj.next.trim()
+      ? obj.next.trim().replace(/\s+/g, " ").slice(0, NEXT_STEP_MAX)
+      : undefined;
+
+  return {
+    reply,
+    calls,
+    rejected,
+    ...(focus ? { focus } : {}),
+    ...(next ? { next } : {}),
+  };
 }

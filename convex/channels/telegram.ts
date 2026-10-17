@@ -153,6 +153,9 @@ export async function sendCard(
       chat_id: chatId,
       text: capCard(text),
       parse_mode: "HTML",
+      // A card's link is an action, not something to preview: a full
+      // YouTube preview under a two-line alert buries the alert.
+      link_preview_options: { is_disabled: true },
       reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
     }),
   });
@@ -181,6 +184,9 @@ export async function editCard(
       message_id: Number(messageId),
       text: capCard(text),
       parse_mode: "HTML",
+      // A card's link is an action, not something to preview: a full
+      // YouTube preview under a two-line alert buries the alert.
+      link_preview_options: { is_disabled: true },
       reply_markup: { inline_keyboard: toInlineKeyboard(buttons) },
     }),
   });

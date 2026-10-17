@@ -8,6 +8,7 @@ import type { TelegramHtml } from "./lib/telegram/html";
 import { formatInstant, formatWhen } from "./lib/time";
 import { DEDUP_WINDOW_MS } from "./model/notifications";
 import { IMPORTANCE_ICON } from "./lib/email/classification";
+import { renderSummaryHtml, summaryAsPlainText } from "./lib/email/links";
 
 /**
  * 6/hour, replenishing continuously (a token bucket, not a fixed window) so
@@ -41,6 +42,9 @@ export interface CardEmail {
   fromName?: string;
   subject?: string;
   isSpam: boolean;
+  /** SPF/DKIM/DMARC verdicts. Decide whether a link in the sentence may be
+   *  tappable — see lib/email/links.ts. Absent = no link is. */
+  authResults?: { spf: string; dkim: string; dmarc: string };
   importance: "CRITICAL" | "HIGH" | "NORMAL" | "LOW" | "IGNORE";
   whyItMatters?: string;
   /** ISO 8601, Phase 4's ImportanceSchema.deadlineMentioned shape -- or
@@ -64,6 +68,10 @@ export interface ComposedCard {
  *   Your ₦150,000 transfer to Adedotun Gabriel went through.
  *   Transfer Successful
  *
+ * 2026-10-17: line 2 is now the whole alert — what it says and what to do,
+ * up to three sentences — with its links rendered by renderSummaryHtml,
+ * which only makes a link tappable when it provably belongs to the sender.
+ *
  * Line 1 says who, which mailbox and WHEN (the old card had no time at all,
  * which is why "when did this come in?" was the first follow-up). Line 2 is
  * the classifier's one sentence. The subject is kept, small, so the email can
@@ -85,7 +93,11 @@ export function composeCard(email: CardEmail, timezone: string, nowMs = Date.now
   const lines = [head.join(" · ")];
   lines.push(
     email.whyItMatters
-      ? escapeTelegramHtml(email.whyItMatters)
+      ? renderSummaryHtml(email.whyItMatters, {
+          fromAddress: email.fromAddress,
+          labelIds: email.isSpam ? ["SPAM"] : [],
+          authResults: email.authResults,
+        })
       : `From ${escapeTelegramHtml(email.fromName ? `${email.fromName} <${email.fromAddress}>` : email.fromAddress)}`,
   );
   lines.push(`<i>${escapeTelegramHtml(email.subject ?? "(no subject)")}</i>`);
@@ -100,8 +112,9 @@ export function composeCard(email: CardEmail, timezone: string, nowMs = Date.now
 
   const id = email.emailMessageId;
   return {
-    // Every interpolated value above went through escapeTelegramHtml; the
-    // literals joining them (newlines, the <b>/<i> tags, "·") are ours.
+    // Every interpolated value above went through escapeTelegramHtml or
+    // renderSummaryHtml (which escapes every text run itself); the literals
+    // joining them (newlines, the <b>/<i> tags, "·") are ours.
     text: alreadyHtml(lines.join("\n")),
     buttons: [
       [
@@ -121,7 +134,7 @@ export function cardAsHistory(email: CardEmail, timezone: string, nowMs = Date.n
   const when = email.receivedAt !== undefined ? `, ${formatWhen(email.receivedAt, nowMs, timezone)}` : "";
   return (
     `[Email alert] ${email.fromName?.trim() || email.fromAddress} (${email.accountLabel}${when}): ` +
-    `${email.whyItMatters ?? email.subject ?? "(no subject)"} — subject "${email.subject ?? "(no subject)"}"`
+    `${email.whyItMatters ? summaryAsPlainText(email.whyItMatters) : (email.subject ?? "(no subject)")} — subject "${email.subject ?? "(no subject)"}"`
   );
 }
 
@@ -137,6 +150,7 @@ export const sendAlert = internalAction({
     fromName: v.optional(v.string()),
     subject: v.optional(v.string()),
     isSpam: v.boolean(),
+    authResults: v.optional(v.object({ spf: v.string(), dkim: v.string(), dmarc: v.string() })),
     importance: v.string(),
     whyItMatters: v.optional(v.string()),
     deadlineMentioned: v.optional(v.string()),
@@ -150,6 +164,7 @@ export const sendAlert = internalAction({
       fromName: args.fromName,
       subject: args.subject,
       isSpam: args.isSpam,
+      authResults: args.authResults,
       importance: args.importance as CardEmail["importance"],
       whyItMatters: args.whyItMatters,
       deadlineMentioned: args.deadlineMentioned,

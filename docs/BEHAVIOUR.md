@@ -14,7 +14,13 @@ short version: *a personal assistant texting you, not a report generator.*
 - **Text like a PA, not a dashboard.** Plain sentences. Lead with the answer.
 - **Short by default.** Most replies are 1–4 lines. More only when asked
   ("show all", "full email", "what else?").
-- **One thing at a time.** Give the most useful item, then offer the next.
+- **One thing at a time.** Give the most useful item first.
+- **Propose, don't hedge.** When a next step is obvious, name it and ask
+  once: "I think the next step is X. Should I do it now?" with **Do it now**
+  / **Later** buttons. Never "If you want, I can…" or a menu of offers.
+- **Chat is short; notes are complete.** What goes into Notion or Linear
+  carries every name, number, link, date and reason, so it reads on its own
+  months later.
 - **No report scaffolding.** No `OVERVIEW` / `TODAY` / `BACKLOG` headings, no
   "Here is your complete…", no restating the question.
 - **Use the context you have.** Never search for something the conversation
@@ -27,20 +33,29 @@ short version: *a personal assistant texting you, not a report generator.*
 An alert is a PA leaning over to tell you something, not a form.
 
 ```
-🟠 Acme HR · work · today 09:42
-Your offer letter is ready and they want it signed by Friday.
-Offer letter — please sign
-⏰ Deadline: Fri 16 Oct, 17:00
+🔴 YouTube · primary · today 09:42
+YouTube couldn't charge your Premium renewal, so Premium may lapse. Update
+it at youtube.com/paid_memberships rather than through the email.
+Your payment didn't go through
 [TL;DR] [Full message] [Draft a reply] [Not important]
 ```
 
 - Line 1: importance dot, sender's name, mailbox, **when it arrived**.
-- Line 2: one sentence — what happened or what they want from you. Written
-  in second person, never "This is a notification for…".
+- Line 2: the alert — one to three short sentences: what it says, then what
+  to do (or that nothing is needed). Second person, exact amounts, ids and
+  times, never "This is a notification for…", never "Want me to…?".
+- Links are tappable **only** when the mail passed DMARC, is not in spam,
+  and the link is on the sender's own domain (or the same company's, e.g.
+  youtube.com for google.com). Anything else shows as its label plus the
+  address in `code`, which Telegram cannot open. Doubtful links get a
+  plain warning in the sentence. (`convex/lib/email/links.ts`)
 - Line 3: the subject, in italics, so you can recognise it in your inbox.
 - Optional line 4: a deadline, if the email states one.
 - `⚠️ in spam` is added to line 1 when it was found in spam.
-- Only HIGH and CRITICAL page you. Receipts for things you did yourself
+- Only HIGH and CRITICAL page you, and only for mail under 24 hours old.
+  Service notices about your own account, money or work page you: a failed
+  CI run, a failed or paused payment, a delayed payout, a refund, a new
+  sign-in, an API change you must act on. Receipts for things you did yourself
   (transfers you made, orders you placed, OTPs you requested) are NORMAL:
   they show up when you ask, never as a ping. Greetings, newsletters and
   promos are LOW.

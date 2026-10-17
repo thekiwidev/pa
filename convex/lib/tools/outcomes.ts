@@ -147,7 +147,7 @@ function offerNextRung(r: unknown): string {
   if (next === null) {
     return `That is as far back as I search — ${current} days.`;
   }
-  return `Want me to keep looking, back to ${next} days?`;
+  return `Should I search back to ${next} days?`;
 }
 
 function renderEmailList(r: unknown, timezone: string): string {

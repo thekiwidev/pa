@@ -4,7 +4,9 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
-import { sendMessage, downloadFile } from "./channels/telegram";
+import { sendMessage, sendCard, downloadFile } from "./channels/telegram";
+import { alreadyHtml } from "./lib/telegram/html";
+import { markdownToTelegramHtml } from "./lib/telegram/richtext";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { modelEnvVar } from "./lib/ai/tiers";
 import { parseToolPlan, type ToolPlan, type RejectedCall } from "./lib/tools/plan";
@@ -131,17 +133,7 @@ export const handleMessage = internalAction({
 
     // 3. Respond, then persist what we said — with what it was ABOUT, so the
     //    next "when did this come in?" has an answer without a search.
-    const outboundId = await sendMessage(args.chatId, reply.text);
-
-    await ctx.runMutation(internal.model.messages.record, {
-      userId,
-      channel: "telegram",
-      direction: "out",
-      channelMessageId: outboundId,
-      kind: "text",
-      text: reply.text,
-      ref: reply.ref,
-    });
+    await deliverReply(ctx, userId, args.chatId, reply);
 
     // 4. Keep the long-term summary current. Scheduled, so the reply above
     //    never waits on it.
@@ -153,6 +145,114 @@ export interface ConverseResult {
   text: string;
   /** What the reply is about, stored on the outbound message. */
   ref?: { kind: string; id: string };
+  /** The one next step the reply proposes — gets Do it now / Later buttons. */
+  next?: string;
+}
+
+/** Where the proposed next step waits for its button. One at a time: a newer
+ *  proposal replaces an older one, and the older card's buttons then say so. */
+const NEXT_STEP_PREF_KEY = "next.step";
+const NEXT_STEP_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Below Telegram's 4096 cap with room for the HTML the converter adds. */
+const CARD_SAFE_LEN = 3500;
+
+/**
+ * Send a reply and record it. A reply that proposes a next step goes out as
+ * a card with Do it now / Later, so "Should I do it now?" is one tap rather
+ * than a typed "yes" — docs/BEHAVIOUR.md §1.
+ */
+async function deliverReply(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  chatId: string,
+  reply: ConverseResult,
+): Promise<void> {
+  let channelMessageId = "";
+  if (reply.next && reply.text.length <= CARD_SAFE_LEN) {
+    try {
+      channelMessageId = await sendCard(
+        chatId,
+        // The same conversion sendMessage applies; it escapes every text run.
+        alreadyHtml(markdownToTelegramHtml(reply.text)),
+        [[
+          { text: "Do it now", data: "nextgo" },
+          { text: "Later", data: "nextlater" },
+        ]],
+      );
+      await ctx.runMutation(internal.model.preferences.set, {
+        userId,
+        key: NEXT_STEP_PREF_KEY,
+        value: { step: reply.next, channelMessageId, at: Date.now() },
+      });
+    } catch (error) {
+      // sendMessage has the plain-text retry a card lacks. Buttons are a
+      // convenience; the reply itself must still arrive.
+      console.warn(`next_step_card_failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (!channelMessageId) channelMessageId = await sendMessage(chatId, reply.text);
+
+  await ctx.runMutation(internal.model.messages.record, {
+    userId,
+    channel: "telegram",
+    direction: "out",
+    channelMessageId,
+    kind: "text",
+    text: reply.text,
+    ref: reply.ref,
+  });
+}
+
+/** "Do it now" / "Later" on a proposed next step. */
+async function handleNextStep(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  chatId: string,
+  tappedMessageId: string,
+  go: boolean,
+): Promise<void> {
+  const pending = (await ctx.runQuery(internal.model.preferences.get, {
+    userId,
+    key: NEXT_STEP_PREF_KEY,
+  })) as { step?: string; channelMessageId?: string; at?: number } | null;
+
+  const live =
+    pending?.step &&
+    pending.channelMessageId === tappedMessageId &&
+    Date.now() - (pending.at ?? 0) <= NEXT_STEP_TTL_MS;
+  if (!live) {
+    await sendMessage(chatId, "That suggestion is old now. Tell me what you'd like done.");
+    return;
+  }
+
+  // Single-use: clear before acting, so a double tap cannot run it twice.
+  await ctx.runMutation(internal.model.preferences.set, {
+    userId,
+    key: NEXT_STEP_PREF_KEY,
+    value: null,
+  });
+
+  if (!go) {
+    await sendAndRecord(ctx, userId, chatId, "Okay, parked. Say \"do it\" whenever you're ready.");
+    return;
+  }
+
+  // The tap is the user's go-ahead, so it enters the conversation as their
+  // turn. Anything consequential the step leads to still gets its own
+  // approval card — a tap here approves the PROPOSAL, never a send.
+  const text = `Yes, do it now: ${pending.step}`;
+  await ctx.runMutation(internal.model.messages.record, {
+    userId,
+    channel: "telegram",
+    direction: "in",
+    channelMessageId: `${tappedMessageId}:go`,
+    kind: "text",
+    text,
+  });
+  const user = await ctx.runQuery(internal.model.users.get, { userId });
+  const result = await converseDetailed(ctx, userId, user?.displayName ?? "owner", text);
+  await deliverReply(ctx, userId, chatId, result);
 }
 
 /** Compatibility wrapper: the image, document and voice paths want a string. */
@@ -457,7 +557,13 @@ export async function converseDetailed(
   const onlyOne = seenEmails.length === 1 ? seenEmails[0] : undefined;
   const about = named ?? onlyOne ?? (plan.focus === "E0" ? focusItem : undefined);
 
-  return { text: out, ref: about ? { kind: "email", id: about.id } : focusRef };
+  return {
+    text: out,
+    ref: about ? { kind: "email", id: about.id } : focusRef,
+    // A reply rescued by the deterministic render no longer says what the
+    // step was about, so its buttons would be a non sequitur.
+    ...(plan.next && out === plan.reply.trim() ? { next: plan.next } : {}),
+  };
 }
 
 /** The focus email, ownership-checked, as a labelled item. */
@@ -1191,6 +1297,7 @@ export const handleVoice = internalAction({
     });
 
     let reply: string;
+    let voiceResult: ConverseResult | undefined;
     let transcript = "";
 
     try {
@@ -1224,7 +1331,8 @@ export const handleVoice = internalAction({
 
       // The transcript is persisted on the message row and visible in the
       // dashboard, but it is NOT echoed back — the user knows what they said.
-      reply = await converse(ctx, userId, args.displayName, transcript);
+      voiceResult = await converseDetailed(ctx, userId, args.displayName, transcript);
+      reply = voiceResult.text;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       await ctx.runMutation(internal.model.audit.record, {
@@ -1240,15 +1348,7 @@ export const handleVoice = internalAction({
       reply = userFacingError(error, detail);
     }
 
-    const outboundId = await sendMessage(args.chatId, reply);
-    await ctx.runMutation(internal.model.messages.record, {
-      userId,
-      channel: "telegram",
-      direction: "out",
-      channelMessageId: outboundId,
-      kind: "text",
-      text: reply,
-    });
+    await deliverReply(ctx, userId, args.chatId, voiceResult ?? { text: reply });
   },
 });
 
@@ -1527,6 +1627,10 @@ export const handleCallback = internalAction({
           await ctx.runMutation(internal.model.saved.surfaced, { itemId: item._id, feedback: vote });
         }
         await sendMessage(args.chatId, vote === "down" ? "👍 Noted. I'll be pickier about that one." : "👍 Glad it helped.");
+        return;
+      }
+      if (args.data === "nextgo" || args.data === "nextlater") {
+        await handleNextStep(ctx, userId, args.chatId, args.channelMessageId, args.data === "nextgo");
         return;
       }
       if (args.data.startsWith("opshealth:")) {

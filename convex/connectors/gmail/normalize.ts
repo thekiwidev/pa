@@ -6,6 +6,7 @@
 //
 // There is NO LLM in this phase. Everything below is deterministic extraction.
 import type { GmailMessage, GmailPart } from "./client";
+import { extractLinks, type EmailLink } from "../../lib/email/links";
 
 /**
  * Three Convex limits stack here: a document is capped at 1 MiB, storage at
@@ -27,6 +28,10 @@ export interface NormalizedEmail {
   subject?: string;
   bodyText?: string;
   bodyTruncated: boolean;
+  /** https links with their visible text, read from the HTML part. NOT
+   *  persisted — like bodyTruncated, callers strip it before upsert. It
+   *  exists for the alert, which is built in the same action. */
+  links: EmailLink[];
   snippet?: string;
   hasAttachments: boolean;
   attachments: { filename: string; mimeType: string; sizeBytes: number }[];
@@ -197,6 +202,7 @@ export function normalizeMessage(message: GmailMessage): NormalizedEmail {
     subject: header(payload, "Subject"),
     bodyText: bodyText || undefined,
     bodyTruncated,
+    links: extractLinks(collected.html, collected.plain),
     snippet: cleanSnippet(message.snippet),
     hasAttachments: collected.attachments.length > 0,
     attachments: collected.attachments,

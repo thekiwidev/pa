@@ -25,7 +25,7 @@ import {
 } from "./connectors/gmail/client";
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
 import { runTask } from "./ai/registry";
-import { prefilter } from "./lib/email/prefilter";
+import { looksTransactional, prefilter } from "./lib/email/prefilter";
 import { applyPriorityRules, parsePriorityRules } from "./lib/email/priority";
 import { describeRule, matchRules } from "./lib/email/rules";
 import {
@@ -37,6 +37,7 @@ import {
   applyOverrides,
   type Importance,
 } from "./lib/email/classification";
+import { describeLinksForClassifier } from "./lib/email/links";
 import { sendMessage } from "./channels/telegram";
 
 /** How far back a sync looks. Gmail's `q` syntax. */
@@ -45,6 +46,13 @@ const SYNC_WINDOW = "newer_than:2d";
 /** What archive / label / mark-read need. Checked before every one of them. */
 const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
 const MAX_PER_SYNC = 40;
+
+/**
+ * An alert is for mail that just arrived. A first sync, a /reconnect or a
+ * history fallback stores up to two days of mail as "new" rows — paging the
+ * phone for yesterday's mail is noise, and the brief already covers it.
+ */
+const ALERT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Finish the OAuth handshake: swap the code for tokens, find out which mailbox
@@ -340,26 +348,24 @@ export const syncFromHistory = internalAction({
       try {
         const full = await getMessage(accessToken, messageId);
         const normalized = normalizeMessage(full);
-        const { bodyTruncated: _bodyTruncated, ...row } = normalized;
+        const { bodyTruncated: _bodyTruncated, links: _links, ...row } = normalized;
         const result = await ctx.runMutation(internal.model.emailMessages.upsert, {
           accountId: args.accountId,
           ...row,
         });
-        if (result.created) stored++;
+        if (result.created) {
+          stored++;
+          // Classify AND deliver, exactly as the polling sync does. This path
+          // used to hand new rows to classifyBacklog, which classifies but
+          // never alerts — and once a row exists the poll sees created=false
+          // and skips it too. With push live, push wins the race for almost
+          // every message, so almost nothing ever paged the phone.
+          await ingestFresh(ctx, account, result.emailMessageId, normalized);
+        }
       } catch (error) {
         // One unreadable message must not abandon the rest of the batch.
         console.warn(`gmail_history_message_failed id=${messageId}: ${String(error)}`);
       }
-    }
-
-    // Classify in one pass afterwards, exactly as the polling sync does —
-    // classification is the expensive half and batching it keeps a burst of
-    // pushes from becoming a burst of model calls.
-    if (stored > 0) {
-      await ctx.runAction(internal.gmail.classifyBacklog, {
-        accountId: args.accountId,
-        limit: Math.min(stored, 20),
-      });
     }
 
     if (history.historyId) {
@@ -465,7 +471,7 @@ export const deepSearch = internalAction({
     for (const ref of listed.messages ?? []) {
       const full = await getMessage(accessToken, ref.id);
       const normalized = normalizeMessage(full);
-      const { bodyTruncated: _bodyTruncated, ...row } = normalized;
+      const { bodyTruncated: _bodyTruncated, links: _links, ...row } = normalized;
 
       const result = await ctx.runMutation(internal.model.emailMessages.upsert, {
         accountId: args.accountId,
@@ -572,6 +578,7 @@ async function classifyMessage(
       senderImportance,
       projectKeywordHit,
       userRule,
+      transactionalHint: looksTransactional(normalized.subject, normalized.bodyText),
     });
 
     if (verdict.skip) {
@@ -604,8 +611,19 @@ async function classifyMessage(
         ownerFacts: ownerContext.map((c) => c.text),
       }),
       // The body reaches the model ONLY here — never merged into `input`.
-      untrusted: [{ label: "email_body", content: normalized.bodyText ?? "(no body)" }],
-      maxOutputTokens: 512,
+      // So do the links: their visible text is sender-written.
+      untrusted: [
+        { label: "email_body", content: normalized.bodyText ?? "(no body)" },
+        {
+          label: "email_links",
+          content: describeLinksForClassifier(normalized.links ?? [], {
+            fromAddress: normalized.fromAddress,
+            labelIds: normalized.labelIds,
+            authResults: normalized.authResults,
+          }),
+        },
+      ],
+      maxOutputTokens: 700,
     });
 
     const parsed = parseClassifierResponse(result.text);
@@ -687,16 +705,26 @@ export const classifyBacklog = internalAction({
     });
 
     for (const message of pending) {
-      await classifyMessage(ctx, account.userId, message._id, {
-        fromAddress: message.fromAddress,
-        fromName: message.fromName,
-        subject: message.subject,
-        bodyText: message.bodyText,
-        snippet: message.snippet,
-        labelIds: message.labelIds,
-        listUnsubscribe: message.listUnsubscribe,
-        authResults: message.authResults,
-      } as NormalizedEmail);
+      await classifyMessage(
+        ctx,
+        account.userId,
+        message._id,
+        {
+          fromAddress: message.fromAddress,
+          fromName: message.fromName,
+          subject: message.subject,
+          bodyText: message.bodyText,
+          snippet: message.snippet,
+          labelIds: message.labelIds,
+          listUnsubscribe: message.listUnsubscribe,
+          authResults: message.authResults,
+          links: [],
+        } as unknown as NormalizedEmail,
+        // The same per-mailbox rules the live sync applies — without them a
+        // backlog pass silently ignored "interviews are always CRITICAL".
+        account.priorityRules,
+        account.label,
+      );
     }
 
     const left = await ctx.runQuery(internal.model.emailMessages.unclassified, {
@@ -757,7 +785,7 @@ export const syncAccount = internalAction({
         const full = await getMessage(accessToken, ref.id);
         const normalized = normalizeMessage(full);
 
-        const { bodyTruncated: _bodyTruncated, ...row } = normalized;
+        const { bodyTruncated: _bodyTruncated, links: _links, ...row } = normalized;
         const result = await ctx.runMutation(internal.model.emailMessages.upsert, {
           accountId: args.accountId,
           ...row,
@@ -765,15 +793,7 @@ export const syncAccount = internalAction({
         stored++;
         if (result.created) {
           fresh++;
-          const classified = await classifyMessage(
-            ctx,
-            account.userId,
-            result.emailMessageId,
-            normalized,
-            account.priorityRules,
-            account.label,
-          );
-          await deliverIfDue(ctx, account, result.emailMessageId, normalized, classified);
+          await ingestFresh(ctx, account, result.emailMessageId, normalized);
         }
       }
 
@@ -894,17 +914,52 @@ function withinImmediateWindow(nowMs: number, timezone: string): boolean {
   return hour >= 7 && hour < 22;
 }
 
+/**
+ * Everything that happens to a message the first time it is stored: classify
+ * it, then page the phone if it deserves it. The ONE path for both the poll
+ * and the push sync, so the two can never again disagree about alerting.
+ */
+async function ingestFresh(
+  ctx: ActionCtx,
+  account: {
+    userId: Id<"users">;
+    label: string;
+    accountEmail: string;
+    priorityRules?: unknown;
+  },
+  emailMessageId: Id<"emailMessages">,
+  normalized: NormalizedEmail,
+): Promise<void> {
+  const classified = await classifyMessage(
+    ctx,
+    account.userId,
+    emailMessageId,
+    normalized,
+    account.priorityRules,
+    account.label,
+  );
+  await deliverIfDue(ctx, account, emailMessageId, normalized, classified);
+}
+
+/** The owner's own outgoing mail and drafts land in history too. */
+function isOwnMessage(normalized: NormalizedEmail, accountEmail: string): boolean {
+  if (normalized.labelIds.includes("SENT") || normalized.labelIds.includes("DRAFT")) return true;
+  return normalized.fromAddress.toLowerCase() === accountEmail.toLowerCase();
+}
+
 async function deliverIfDue(
   ctx: ActionCtx,
-  account: { userId: Id<"users">; label: string },
+  account: { userId: Id<"users">; label: string; accountEmail: string },
   emailMessageId: Id<"emailMessages">,
-  normalized: ReturnType<typeof normalizeMessage>,
+  normalized: NormalizedEmail,
   classified: ClassificationResult,
 ): Promise<void> {
   const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
   // A user rule saying "don't alert me about this" outranks importance.
   // Checked before the window so it holds at every hour of the day.
   if (classified.neverAlert) return;
+  if (isOwnMessage(normalized, account.accountEmail)) return;
+  if (Date.now() - normalized.receivedAt > ALERT_MAX_AGE_MS) return;
 
   const immediate =
     classified.importance === "CRITICAL" ||
@@ -928,6 +983,7 @@ async function deliverIfDue(
     fromName: normalized.fromName,
     subject: normalized.subject,
     isSpam: normalized.labelIds.includes("SPAM"),
+    authResults: normalized.authResults,
     importance: classified.importance,
     whyItMatters: classified.whyItMatters,
     deadlineMentioned: classified.deadlineMentioned ?? undefined,
