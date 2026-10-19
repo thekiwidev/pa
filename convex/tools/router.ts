@@ -78,6 +78,8 @@ import {
 } from "../lib/tasks/backend";
 import { detectPlatform, extractUrls } from "../lib/social/detect";
 import { ingestLink, searchSaved, toView } from "../saved";
+import { sendDevotional, updateSettings as updateScriptureSettings } from "../scripture";
+import { resolveNeed } from "../lib/scripture/needs";
 import { parseNotionLists, resolveListName } from "../lib/notion/lists";
 import { captureKey } from "../lib/capture/batch";
 import {
@@ -2249,6 +2251,29 @@ async function dispatch(
         times: persona.checkins.map((c) => c.time),
         listing: describePersonas(persona.id, checkinsOn),
       };
+    }
+
+    case "scripture.send": {
+      const result = await sendDevotional(ctx, userId, {
+        trigger: "asked",
+        ...(resolveNeed(a.need) ? { need: resolveNeed(a.need)! } : {}),
+        ...(typeof a.situation === "string" ? { ask: a.situation } : {}),
+      });
+      if (!result.sent && result.reason === "no_bible") {
+        throw new Error("no Bible is imported yet — docs/SCRIPTURE.md explains how to add one");
+      }
+      if (!result.sent) throw new Error(`the verse could not be sent (${result.reason})`);
+      return { ...result, note: "already sent as its own message; do not repeat the verse" };
+    }
+
+    case "scripture.settings": {
+      const result = await updateScriptureSettings(ctx, userId, {
+        ...(typeof a.enabled === "boolean" ? { enabled: a.enabled } : {}),
+        ...(typeof a.translation === "string" ? { translation: a.translation } : {}),
+        ...(typeof a.morning === "string" ? { morning: a.morning } : {}),
+        ...(typeof a.gapMinutes === "number" ? { gapMinutes: a.gapMinutes } : {}),
+      });
+      return result;
     }
 
     case "meeting.prep": {

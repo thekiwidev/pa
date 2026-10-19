@@ -170,6 +170,15 @@ default.** The choice sticks until the user changes it.
 - The morning check-in (§5) is written in the active personality's voice.
 - A personality changes tone and timing only. §10 holds for all of them.
 
+## 9b. Scripture
+
+A morning verse of thanks, a verse every couple of hours, and one right
+after a message that sounds like it needs it — each with a reflection,
+prayer points quoting the verse, and a prayer. The verse text always comes
+from the imported Bible, never from the model. At most 8 a day; never on
+top of an active conversation (except the morning one). `/scripture off`
+stops the unprompted ones. Details: `docs/SCRIPTURE.md`.
+
 ## 10. Hard rules (never relaxed)
 
 1. **No email is ever sent without your tap on [Send].** No wording, saved

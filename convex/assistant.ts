@@ -4,6 +4,13 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
+import {
+  scheduleMomentVerse,
+  sendDevotional,
+  updateSettings as updateScriptureSettings,
+  type SettingsPatch,
+} from "./scripture";
+import { resolveNeed } from "./lib/scripture/needs";
 import { sendMessage, sendCard, downloadFile } from "./channels/telegram";
 import { alreadyHtml } from "./lib/telegram/html";
 import { markdownToTelegramHtml } from "./lib/telegram/richtext";
@@ -138,6 +145,11 @@ export const handleMessage = internalAction({
     // 4. Keep the long-term summary current. Scheduled, so the reply above
     //    never waits on it.
     await ctx.scheduler.runAfter(0, internal.assistant.summarizeConversation, { userId });
+
+    // 5. "I'm so stressed", "applying for a job": a verse for the moment,
+    //    scheduled to land after the reply. A word check, no model call,
+    //    unless it matches.
+    if (!args.text.startsWith("/")) await scheduleMomentVerse(ctx, userId, args.text);
   },
 });
 
@@ -729,6 +741,8 @@ async function handleCommand(
         "/brief — compose today's morning brief now",
         "/persona [name] — show or switch personality (project manager, corporate pa, mom, friend)",
         "/checkins on|off — turn the personality's unprompted check-ins on or off",
+        "/verse [need or situation] — a Bible verse and prayer now (e.g. /verse calm, /verse job interview)",
+        "/scripture [on|off|KJV|morning 06:30] — verse settings and the Bibles imported",
         "/whoami — who I think you are",
         "/help — this",
       ].join("\n");
@@ -750,6 +764,10 @@ async function handleCommand(
       return await personaCommand(ctx, userId, text);
     case "/checkins":
       return await checkinsCommand(ctx, userId, text);
+    case "/verse":
+      return await verseCommand(ctx, userId, text);
+    case "/scripture":
+      return await scriptureCommand(ctx, userId, text);
     case "/connect":
       return await connectCommand(ctx, userId, text);
     case "/reconnect":
@@ -800,6 +818,41 @@ async function checkinsCommand(ctx: ActionCtx, userId: Id<"users">, text: string
     value: arg === "on",
   });
   return arg === "on" ? "Check-ins on." : "Check-ins off. I'll only message you when something needs you.";
+}
+
+/** "/verse", "/verse calm", "/verse I have an interview at 3". */
+async function verseCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const arg = text.split(/\s+/).slice(1).join(" ").trim();
+  const need = resolveNeed(arg);
+  const result = await sendDevotional(ctx, userId, {
+    trigger: "asked",
+    ...(need ? { need } : {}),
+    ...(arg && !need ? { ask: arg } : {}),
+  });
+  if (result.sent) return "🙏";
+  if (result.reason === "no_bible") {
+    return "No Bible is imported yet. Put a Bible file in assets/bibles/ and run `bun scripts/import-bible.ts assets/bibles/<file>` (docs/SCRIPTURE.md).";
+  }
+  return `I couldn't send a verse just now (${result.reason}${result.detail ? `: ${result.detail}` : ""}).`;
+}
+
+/** "/scripture", "/scripture off", "/scripture NIV", "/scripture morning 06:15", "/scripture every 3h". */
+async function scriptureCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const args = text.split(/\s+/).slice(1);
+  const first = args[0]?.toLowerCase();
+  let patch: SettingsPatch = {};
+  if (first === "on" || first === "off") patch = { enabled: first === "on" };
+  else if (first === "morning") {
+    const time = args[1] ?? "";
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return 'Give the morning time as 24-hour HH:MM, e.g. "/scripture morning 06:15".';
+    patch = { morning: time };
+  } else if (first === "every") {
+    const hours = Number((args[1] ?? "").replace(/h(ours?)?$/i, ""));
+    if (!Number.isFinite(hours) || hours < 1 || hours > 12) return 'Say how often in hours, 1 to 12, e.g. "/scripture every 3h".';
+    patch = { gapMinutes: Math.round(hours * 60) };
+  } else if (first) patch = { translation: first };
+  const result = await updateScriptureSettings(ctx, userId, patch);
+  return result.text;
 }
 
 function status(): string {

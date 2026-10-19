@@ -62,6 +62,13 @@ export const TASKS = {
   WRITE_POST_NOTE:     { tier: "DRAFT" },
   // "Is this saved item genuinely useful for what they are doing now?"
   JUDGE_RELEVANCE:     { tier: "CHEAP_STRUCTURED" },
+  // Scripture (2026-10-19). Choosing the passage is a judgement about the
+  // owner's day and about what a verse means in context: REASON. It emits
+  // references only — the text comes from the imported Bible.
+  CHOOSE_SCRIPTURE:    { tier: "REASON" },
+  // The reflection, prayer points and prayer: prose they will read. A few
+  // calls a day.
+  WRITE_PRAYER:        { tier: "DRAFT" },
   // Not a chat task: names the EMBED tier for AI_ROUTE_EMBED_TEXT.
   EMBED_TEXT:          { tier: "EMBED" },
 } as const satisfies Record<string, { tier: Tier }>;

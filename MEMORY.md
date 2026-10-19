@@ -9,6 +9,34 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-10-19 — Scripture: what the files actually look like
+
+- **Bible files disagree on everything but the numbers.** scrollmapper
+  names books "I Samuel" and "Revelation of John"; thiagobodruk's English
+  files carry Portuguese book names (`"name": "Gênesis"`) and rely on array
+  position; Beblia and SuperSearch use book numbers 1-66. Store the
+  number; resolve names only on the way in.
+- **Psalm titles sit inside verse 1** in scrollmapper and Bible
+  SuperSearch ("A Psalm of David. The LORD is my shepherd…"); Beblia drops
+  them. Source data, not a parse bug — left as printed.
+- **KJV markup to strip:** "[but]" brackets (translator-supplied words,
+  21k in SuperSearch's KJV), "¶" paragraph marks (4k), and "‹ ›" red
+  letters (2.6k). Keep the words, drop the marks.
+- **The repo is public**, and Beblia hosts NIV/ESV/NKJV/NLT/AMP/NASB/CSB.
+  Committing those here would be redistribution; `assets/bibles/private/`
+  is gitignored for them. BSB went public domain in 2023; WEB is public
+  domain but neither Beblia nor scrollmapper has it under the obvious name.
+- **`convex import --table … --append --yes file.jsonl`** loads 31k verses
+  in one call. Rejected: `convex run` per batch — Linux caps a single argv
+  string at 128 KB (MAX_ARG_STRLEN), so ~400 verses a call, ~80 calls a
+  Bible. `--replace` would wipe every translation, so re-import deletes one
+  translation in 4,000-row mutations first.
+- **The model never supplies verse text.** It proposes references; code
+  reads the text from `bibleVerses`. Same shape as invariant 1: a
+  misremembered verse cannot reach the owner. The prayer is tied to the
+  text by `checkPrayer` (anchors must be in the passage), not by prompt.
+
+
 ## 2026-10-17 — Two sync paths must share one "new mail" handler
 
 The push path and the poll each stored mail and each decided what to do with

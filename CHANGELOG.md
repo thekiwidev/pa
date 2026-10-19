@@ -9,6 +9,33 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — scripture: verses and prayer through the day (2026-10-19)
+
+- **Bible verses that fit what is going on, from your own Bible.** A
+  morning verse of thanks (06:30, mostly Psalms), one every ~2½ hours
+  through the day, and one ~45 s after a message that sounds like it needs
+  it ("I'm so stressed", "applying for a job", "I want to give up",
+  "tempted to…", "I got the job!"). `/verse [need or situation]` and the
+  `scripture.send` tool send one on request. Ten needs: thanksgiving,
+  affirmation, walk, faith, perseverance, joy, check, peace, work, guidance.
+- **Two-stage pipeline.** `CHOOSE_SCRIPTURE` (REASON) reads the
+  conversation and proposes references only; code looks them up in the
+  imported Bible and skips anything sent in the last 30 days, falling back
+  to full-text search and a hand-picked shelf of ~145 passages.
+  `WRITE_PRAYER` (DRAFT) writes a reflection, prayer points and a prayer;
+  `checkPrayer` rejects any point whose quoted anchor is not in the passage,
+  repeats an anchor, or is filler, with one retry.
+- **Bible import.** `scripts/import-bible.ts` reads Bible SuperSearch,
+  scrollmapper, thiagobodruk and flat JSON, Beblia / Zefania / OSIS XML, and
+  CSV, verifies the shelf, and loads verses with one `convex import`. KJV is
+  committed at `assets/bibles/KJV.json`; `assets/bibles/private/` is
+  gitignored for copyrighted translations.
+- New tables `bibleTranslations`, `bibleVerses` (search index on text),
+  `scriptureSends`; cron "scripture verses"; `/scripture` settings
+  (on/off, translation, morning time, frequency). The morning brief sends
+  the morning verse first when it fires before 06:30's tick would.
+- Docs: `docs/SCRIPTURE.md`.
+
 ### Fixed — important email never paged the phone (2026-10-17)
 
 - **Push-synced mail now alerts.** `syncFromHistory` (the Gmail push path)

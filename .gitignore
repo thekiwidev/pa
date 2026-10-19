@@ -27,3 +27,8 @@ dist/
 
 # Delivery envelope for commits from Claude; not part of the repo.
 *.bundle
+
+# Copyrighted Bible translations (NIV, ESV, NKJV, NLT, AMP…). This repo is
+# public: only public-domain Bibles are committed to assets/bibles/. Import
+# these from your own machine — docs/SCRIPTURE.md.
+assets/bibles/private/

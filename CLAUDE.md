@@ -11,6 +11,7 @@ Telegram-first personal secretary on Convex. Single user, single owner.
 | the phase in flight | `docs/build/PHASE-XX-*.md` |
 | environment variables | `docs/ENV.md` — names only, never values |
 | what changed and why | `CHANGELOG.md`, `MEMORY.md` |
+| scripture, Bible import | `docs/SCRIPTURE.md` |
 
 Convex skills live in `.claude/skills/convex-*`. Reach for `convex-reviewer`
 before shipping a batch of backend code and `convex-authz` before any phase

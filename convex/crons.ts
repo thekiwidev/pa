@@ -63,6 +63,15 @@ crons.cron("weekend pick", "0 9 * * 6", internal.saved.weekendPick, {});
  */
 crons.cron("personality check-ins", "*/30 6-21 * * *", internal.checkins.tick, {});
 
+/**
+ * Scripture (2026-10-19). Every 30 minutes, 06:00-22:59 WAT (05-21 UTC).
+ * The tick sends only when lib/scripture/schedule.ts says a verse is due:
+ * the morning verse (06:30 WAT by default) and one every couple of hours
+ * from 10:00 to 21:30 WAT. Moment verses do not wait for this; they are
+ * scheduled straight from the inbound message.
+ */
+crons.cron("scripture verses", "*/30 5-21 * * *", internal.scripture.tick, {});
+
 // Phase 12 adds: evening brief 0 19 * * *
 
 export default crons;

@@ -2,6 +2,7 @@ import { internalAction } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { reportIncident } from "./ops";
+import { sendMorningBeforeBrief } from "./scripture";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
@@ -503,6 +504,9 @@ export const deliver = internalAction({
 
     const user = await ctx.runQuery(internal.model.users.get, { userId: args.userId });
     if (!user) return;
+
+    // The day opens with thanks before tasks: the morning verse first, once.
+    await sendMorningBeforeBrief(ctx, args.userId);
 
     let text: string;
     let outboundId: string;

@@ -913,6 +913,30 @@ export const TOOL_SCHEMAS = {
       .optional()
       .describe("true/false to turn the unprompted check-ins on or off"),
   }),
+  "scripture.send": z.object({
+    need: z
+      .string()
+      .optional()
+      .describe(
+        'what the verse is for: "thanksgiving" | "affirmation" | "walk" | "faith" | "perseverance" | "joy" | "check" | "peace" | "work" | "guidance" — or the user\'s word ("calm", "keep me in check"); omit to let the chooser decide',
+      ),
+    situation: z
+      .string()
+      .optional()
+      .describe("what is going on, in the user's words: \"applying for a job at Paystack\", \"I'm angry at my landlord\""),
+  }),
+  "scripture.settings": z.object({
+    enabled: z.boolean().optional().describe("true/false to turn the unprompted verses on or off"),
+    translation: z
+      .string()
+      .optional()
+      .describe('a translation code they imported, e.g. "KJV", "WEB", "NIV"'),
+    morning: TIME_OF_DAY.optional().describe('local time of the morning verse, 24-hour "HH:MM"'),
+    gapMinutes: z
+      .preprocess((v) => (typeof v === "string" ? Number(v) : v), z.number().int().min(60).max(720))
+      .optional()
+      .describe("minutes between the daytime verses, 60-720 (default 150)"),
+  }),
   "meeting.prep": z.object({
     titleFragment: z
       .string()
@@ -1517,6 +1541,28 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       'friend", "stop checking in on me". With no arguments it returns ' +
       "the current personality and the list, so it also answers \"who are " +
       'you right now?". The switch takes effect from your next message.',
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "scripture.send": {
+    description:
+      "Send the user a Bible verse for what they are going through, with a " +
+      "short reflection and prayer points drawn from the verse. It goes out " +
+      "as its OWN message, so after calling it reply in one short line at " +
+      "most and never quote or paraphrase the verse yourself. Use when they " +
+      'ask for a verse, a word, or prayer ("give me a verse", "pray with me", ' +
+      '"I need encouragement"), and when they share something heavy or big — ' +
+      "stress, anger, a job application, an interview, giving up, temptation, " +
+      "good news to thank God for. Pass their situation in their words.",
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "scripture.settings": {
+    description:
+      "Show or change the verse settings: unprompted verses on/off, which " +
+      "imported Bible translation to read from, the morning verse time, and " +
+      'how often the daytime verses come. With no arguments it reports the ' +
+      "current settings and the translations imported.",
     consequential: false,
     requiresAccountId: false,
   },

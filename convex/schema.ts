@@ -524,6 +524,45 @@ export default defineSchema({
     .index("by_fingerprint", ["fingerprint"])
     .index("by_last", ["lastAt"]),
 
+  // ── Scripture (2026-10-19) ─────────────────────────────────
+  // Bibles the owner imported (scripts/import-bible.ts). Shared reference
+  // data, not per-user: one row per translation, one row per verse. A verse
+  // is addressed by book NUMBER (1-66), so one reference resolves in every
+  // translation whatever the file called its books.
+  bibleTranslations: defineTable({
+    code: v.string(), // "KJV" — upper-case, what /scripture switches by
+    name: v.string(),
+    format: v.string(), // the BibleFormat it was parsed from
+    verseCount: v.number(),
+    importedAt: v.number(),
+  }).index("by_code", ["code"]),
+
+  bibleVerses: defineTable({
+    translation: v.string(), // bibleTranslations.code
+    book: v.number(),
+    chapter: v.number(),
+    verse: v.number(),
+    text: v.string(),
+  })
+    .index("by_ref", ["translation", "book", "chapter", "verse"])
+    .searchIndex("search_text", { searchField: "text", filterFields: ["translation"] }),
+
+  // Every verse sent: what decides "not that one again" and how many today.
+  scriptureSends: defineTable({
+    userId: v.id("users"),
+    trigger: v.string(), // morning | interval | moment | asked
+    need: v.string(), // lib/scripture/needs.ts NeedId
+    translation: v.string(),
+    book: v.number(),
+    chapter: v.number(),
+    verseStart: v.number(),
+    verseEnd: v.number(),
+    situation: v.optional(v.string()),
+    /** The closing prayer's opening, so the next one opens differently. */
+    prayerOpening: v.optional(v.string()),
+    sentAt: v.number(),
+  }).index("by_user_sent", ["userId", "sentAt"]),
+
   // ── Phase 17 — ONLY past the measured trigger ──────────────
   memories: defineTable({
     userId: v.id("users"),
