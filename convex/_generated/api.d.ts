@@ -50,6 +50,7 @@ import type * as lib_drive_query from "../lib/drive/query.js";
 import type * as lib_email_classification from "../lib/email/classification.js";
 import type * as lib_email_draftBody from "../lib/email/draftBody.js";
 import type * as lib_email_gmailQuery from "../lib/email/gmailQuery.js";
+import type * as lib_email_links from "../lib/email/links.js";
 import type * as lib_email_markdownToEmailHtml from "../lib/email/markdownToEmailHtml.js";
 import type * as lib_email_prefilter from "../lib/email/prefilter.js";
 import type * as lib_email_priority from "../lib/email/priority.js";
@@ -172,6 +173,7 @@ declare const fullApi: ApiFromModules<{
   "lib/email/classification": typeof lib_email_classification;
   "lib/email/draftBody": typeof lib_email_draftBody;
   "lib/email/gmailQuery": typeof lib_email_gmailQuery;
+  "lib/email/links": typeof lib_email_links;
   "lib/email/markdownToEmailHtml": typeof lib_email_markdownToEmailHtml;
   "lib/email/prefilter": typeof lib_email_prefilter;
   "lib/email/priority": typeof lib_email_priority;
