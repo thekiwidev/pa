@@ -47,6 +47,8 @@ export const CALLBACK_PREFIX = {
   DRAFT: "draft",
   NOT_IMPORTANT: "notimportant",
   NEVER_CATEGORY: "nevercat",
+  NEWS_UP: "newsup",
+  NEWS_DOWN: "newsdown",
 } as const;
 
 export interface CardEmail {

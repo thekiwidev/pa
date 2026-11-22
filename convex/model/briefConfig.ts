@@ -11,16 +11,32 @@ import { toEpochMs } from "../lib/time";
  */
 const KEY = "morning_brief";
 
+export type BriefSection = "email" | "calendar" | "news" | "verse";
+
+/** What the digest held before sections existed: the brief and the morning verse. */
+export const DEFAULT_SECTIONS: BriefSection[] = ["email", "calendar", "verse"];
+
+export interface BriefSlot {
+  timeOfDay: string;
+  sections: BriefSection[];
+}
+
 export interface BriefConfig {
   enabled: boolean;
   /** 24-hour local time, "HH:MM", in the user's timezone. */
   timeOfDay: string;
+  /** What the main digest contains. Absent = DEFAULT_SECTIONS. */
+  sections?: BriefSection[];
+  /** Further digests at other times of day, each with its own sections. */
+  extraTimes?: BriefSlot[];
   notes?: string;
   /** Set whenever a delivery is actually scheduled; unset while disabled. */
   scheduledJobId?: Id<"_scheduled_functions">;
 }
 
 const DEFAULT_CONFIG: BriefConfig = { enabled: false, timeOfDay: "07:00" };
+
+const sectionV = v.union(v.literal("email"), v.literal("calendar"), v.literal("news"), v.literal("verse"));
 
 /**
  * The next ms-epoch occurrence of `timeOfDay` in `timezone`, from `fromMs`.
@@ -40,6 +56,21 @@ function nextOccurrence(timeOfDay: string, timezone: string, fromMs: number): nu
 
   const candidate = toEpochMs(`${dateStr}T${timeOfDay}`, timezone);
   return candidate > fromMs ? candidate : candidate + 24 * 60 * 60 * 1000;
+}
+
+/** Every digest the owner has configured: the main one, then the extras. */
+export function slotsOf(config: BriefConfig): BriefSlot[] {
+  return [
+    { timeOfDay: config.timeOfDay, sections: config.sections ?? DEFAULT_SECTIONS },
+    ...(config.extraTimes ?? []),
+  ];
+}
+
+/** The earliest upcoming digest after `fromMs`, and which slot it is. */
+export function nextSlot(config: BriefConfig, timezone: string, fromMs = Date.now()): { at: number; slot: BriefSlot } {
+  return slotsOf(config)
+    .map((slot) => ({ at: nextOccurrence(slot.timeOfDay, timezone, fromMs), slot }))
+    .reduce((a, b) => (b.at < a.at ? b : a));
 }
 
 /** Exported so `briefs.ensureScheduled` can compute a next occurrence too,
@@ -80,6 +111,8 @@ export const configure = internalMutation({
     enabled: v.optional(v.boolean()),
     timeOfDay: v.optional(v.string()),
     notes: v.optional(v.string()),
+    sections: v.optional(v.array(sectionV)),
+    extraTimes: v.optional(v.array(v.object({ timeOfDay: v.string(), sections: v.array(sectionV) }))),
   },
   handler: async (ctx, args) => {
     const row = await ctx.db
@@ -92,6 +125,8 @@ export const configure = internalMutation({
       enabled: args.enabled ?? current.enabled,
       timeOfDay: args.timeOfDay ?? current.timeOfDay,
       notes: args.notes ?? current.notes,
+      sections: args.sections ?? current.sections,
+      extraTimes: args.extraTimes ?? current.extraTimes,
     };
 
     // Cancel the job the OLD config owns before scheduling a new one — never
@@ -102,9 +137,11 @@ export const configure = internalMutation({
 
     let nextAt: number | undefined;
     if (next.enabled) {
-      nextAt = nextOccurrence(next.timeOfDay, args.timezone, Date.now());
+      const upcoming = nextSlot(next, args.timezone, Date.now());
+      nextAt = upcoming.at;
       next.scheduledJobId = await ctx.scheduler.runAt(nextAt, internal.briefs.deliver, {
         userId: args.userId,
+        slotTime: upcoming.slot.timeOfDay,
       });
     } else {
       next.scheduledJobId = undefined;
@@ -130,7 +167,7 @@ export const configure = internalMutation({
  * live `scheduledJobId` — the safety net for a broken chain.
  */
 export const reschedule = internalMutation({
-  args: { userId: v.id("users"), nextAt: v.number() },
+  args: { userId: v.id("users"), timezone: v.string() },
   handler: async (ctx, args) => {
     const row = await ctx.db
       .query("preferences")
@@ -141,8 +178,11 @@ export const reschedule = internalMutation({
     // Turned off between the last delivery and this call — do not resurrect.
     if (!current.enabled) return;
 
-    const jobId = await ctx.scheduler.runAt(args.nextAt, internal.briefs.deliver, {
+    // 60 s past now, so the digest that just fired is not picked again.
+    const upcoming = nextSlot(current, args.timezone, Date.now() + 60_000);
+    const jobId = await ctx.scheduler.runAt(upcoming.at, internal.briefs.deliver, {
       userId: args.userId,
+      slotTime: upcoming.slot.timeOfDay,
     });
     const next: BriefConfig = { ...current, scheduledJobId: jobId };
 

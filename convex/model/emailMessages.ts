@@ -262,3 +262,28 @@ export const setLabels = internalMutation({
     await ctx.db.patch("emailMessages", args.emailMessageId, { labelIds: args.labelIds });
   },
 });
+
+/** Recent mail across accounts, newest first, for the newsletter source to filter by sender. */
+export const recentAcross = internalQuery({
+  args: { accountIds: v.array(v.id("connectedAccounts")), sinceMs: v.number(), limit: v.number() },
+  handler: async (ctx, args) => {
+    const out = [];
+    for (const accountId of args.accountIds.slice(0, 5)) {
+      const rows = await ctx.db
+        .query("emailMessages")
+        .withIndex("by_account_received", (q) => q.eq("accountId", accountId).gte("receivedAt", args.sinceMs))
+        .order("desc")
+        .take(Math.min(args.limit, 100));
+      for (const r of rows) {
+        out.push({
+          fromAddress: r.fromAddress,
+          subject: r.subject,
+          threadId: r.threadId,
+          receivedAt: r.receivedAt,
+          text: (r.bodyText ?? r.snippet ?? "").slice(0, 2000),
+        });
+      }
+    }
+    return out;
+  },
+});

@@ -3,13 +3,14 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { reportIncident } from "./ops";
 import { sendMorningBeforeBrief } from "./scripture";
+import { sendNewsletter } from "./news";
 import { allowProactive } from "./notify";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
 import { sendMessage } from "./channels/telegram";
 import { formatInstant, toEpochMs } from "./lib/time";
-import { nextOccurrenceOf } from "./model/briefConfig";
+import { slotsOf, type BriefSection } from "./model/briefConfig";
 import { TELEGRAM_FORMAT_CONTRACT } from "./lib/prompts/format";
 import { MORNING_CHECKIN } from "./lib/prompts/brief";
 import { buildKnowledgeBlock } from "./lib/prompts/knowledge";
@@ -434,11 +435,19 @@ async function gatherFacts(
   return { facts, knowledge };
 }
 
-async function gatherAndCompose(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
-  const [{ facts, knowledge }, { persona }] = await Promise.all([
-    gatherFacts(ctx, userId),
-    loadPersona(ctx, userId),
-  ]);
+async function gatherAndCompose(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  sections?: readonly BriefSection[],
+): Promise<string> {
+  const [gathered, { persona }] = await Promise.all([gatherFacts(ctx, userId), loadPersona(ctx, userId)]);
+  const { knowledge } = gathered;
+  // A digest without the email or calendar section leaves that part out of what the model sees.
+  const facts: BriefFactsInput = {
+    ...gathered.facts,
+    ...(sections && !sections.includes("email") ? { emails: [] } : {}),
+    ...(sections && !sections.includes("calendar") ? { calendar: [], calendarNote: undefined } : {}),
+  };
 
   // The user's morning_brief skill governs the brief's shape. Falls back to
   // MORNING_CHECKIN when no skill exists, so this works before anyone
@@ -496,10 +505,16 @@ export const compose = internalAction({
  * no cron and no redeploy.
  */
 export const deliver = internalAction({
-  args: { userId: v.id("users") },
+  args: { userId: v.id("users"), slotTime: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const config = await ctx.runQuery(internal.model.briefConfig.get, { userId: args.userId });
     if (!config.enabled) return; // turned off between schedule and fire
+
+    // Which digest fired: the slot whose time was scheduled, else the main one
+    // (the config may have been edited between schedule and fire).
+    const slots = slotsOf(config);
+    const slot = slots.find((s) => s.timeOfDay === args.slotTime) ?? slots[0]!;
+    const sections = slot.sections;
 
     const user = await ctx.runQuery(internal.model.users.get, { userId: args.userId });
     if (!user) return;
@@ -508,47 +523,58 @@ export const deliver = internalAction({
     // mode does not. A dropped digest still reschedules: the chain must live.
     if ((await allowProactive(ctx, args.userId, "digest")) === "send") {
       // The day opens with thanks before tasks: the morning verse first, once.
-      await sendMorningBeforeBrief(ctx, args.userId);
+      if (sections.includes("verse")) await sendMorningBeforeBrief(ctx, args.userId);
 
-      let text: string;
-      let outboundId: string;
-      try {
-        text = await gatherAndCompose(ctx, args.userId);
-        outboundId = await sendMessage(user.telegramId, text);
-      } catch (error) {
-        // The check-in silently not arriving is the failure the owner would
-        // otherwise only notice at lunch. Report, then rethrow so the
-        // ensureScheduled sweep still repairs the chain.
-        await reportIncident(ctx, { source: "brief.deliver", error, severity: "critical" });
-        throw error;
+      // The brief text carries tasks, reminders and projects too, so it is sent
+      // whenever the email or calendar section is on. A news-only digest skips it.
+      if (sections.includes("email") || sections.includes("calendar")) {
+        let text: string;
+        let outboundId: string;
+        try {
+          text = await gatherAndCompose(ctx, args.userId, sections);
+          outboundId = await sendMessage(user.telegramId, text);
+        } catch (error) {
+          // The check-in silently not arriving is the failure the owner would
+          // otherwise only notice at lunch. Report, then rethrow so the
+          // ensureScheduled sweep still repairs the chain.
+          await reportIncident(ctx, { source: "brief.deliver", error, severity: "critical" });
+          throw error;
+        }
+
+        await ctx.runMutation(internal.model.messages.record, {
+          userId: args.userId,
+          channel: "telegram",
+          direction: "out",
+          channelMessageId: outboundId,
+          kind: "text",
+          text,
+        });
+
+        await ctx.runMutation(internal.model.audit.record, {
+          actor: "scheduler",
+          action: "brief.deliver",
+          args: { chars: text.length },
+          result: "ok",
+        });
       }
 
-      await ctx.runMutation(internal.model.messages.record, {
-        userId: args.userId,
-        channel: "telegram",
-        direction: "out",
-        channelMessageId: outboundId,
-        kind: "text",
-        text,
-      });
-
-      await ctx.runMutation(internal.model.audit.record, {
-        actor: "scheduler",
-        action: "brief.deliver",
-        args: { chars: text.length },
-        result: "ok",
-      });
+      // A failing news section must not stop the chain below from rescheduling.
+      if (sections.includes("news")) {
+        try {
+          await sendNewsletter(ctx, args.userId, { count: 5 });
+        } catch (error) {
+          await reportIncident(ctx, { source: "brief.news", error, severity: "warn" });
+        }
+      }
     }
 
-    // Reschedule for +24h — the self-perpetuating chain. Lagos has no DST
-    // (see the note in crons.ts), so a flat +24h never drifts against the
-    // configured wall-clock time. If this step never runs at all — the
-    // action above threw before reaching here — ensureScheduled's daily
-    // sweep notices the config is enabled with no live scheduledJobId and
-    // repairs it.
+    // Schedule the next digest, whichever slot is soonest — the
+    // self-perpetuating chain. If this step never runs at all — the action
+    // above threw before reaching here — ensureScheduled's daily sweep
+    // notices the config is enabled with no live scheduledJobId and repairs it.
     await ctx.runMutation(internal.model.briefConfig.reschedule, {
       userId: args.userId,
-      nextAt: Date.now() + 24 * 60 * 60 * 1000,
+      timezone: process.env.USER_TIMEZONE ?? "Africa/Lagos",
     });
   },
 });
@@ -577,10 +603,7 @@ export const ensureScheduled = internalAction({
 
     console.warn(`brief_schedule_missing: user ${user._id}`);
     const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
-    await ctx.runMutation(internal.model.briefConfig.reschedule, {
-      userId: user._id,
-      nextAt: nextOccurrenceOf(config.timeOfDay, timezone),
-    });
+    await ctx.runMutation(internal.model.briefConfig.reschedule, { userId: user._id, timezone });
 
     await ctx.runMutation(internal.model.audit.record, {
       actor: "scheduler",

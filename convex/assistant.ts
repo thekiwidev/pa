@@ -28,6 +28,7 @@ import {
 import type { UntrustedBlock } from "./lib/ai/prompt";
 import type { Doc } from "./_generated/dataModel";
 import { updateNotify } from "./notify";
+import { handleNewsFeedback, sendNewsletter } from "./news";
 import { EMAIL_IMPORTANCE_CATEGORY, categoryCriterion } from "./lib/email/importance";
 import { parseHours, type NotifyMode } from "./lib/notify/policy";
 import {
@@ -748,6 +749,7 @@ async function handleCommand(
         "/resume — back to normal",
         "/notify — what I may message you about, and when",
         "/checkins on|off — turn the personality's unprompted check-ins on or off",
+        "/news [topic] — a tech newsletter now (e.g. /news, /news ai agents)",
         "/verse [need or situation] — a Bible verse and prayer now (e.g. /verse calm, /verse job interview)",
         "/scripture [on|off|KJV|morning 06:30] — verse settings and the Bibles imported",
         "/whoami — who I think you are",
@@ -776,6 +778,8 @@ async function handleCommand(
       return await notifyCommand(ctx, userId, text);
     case "/checkins":
       return await checkinsCommand(ctx, userId, text);
+    case "/news":
+      return await newsCommand(ctx, userId, text);
     case "/verse":
       return await verseCommand(ctx, userId, text);
     case "/scripture":
@@ -846,6 +850,14 @@ async function checkinsCommand(ctx: ActionCtx, userId: Id<"users">, text: string
 }
 
 /** "/verse", "/verse calm", "/verse I have an interview at 3". */
+/** "/news" or "/news ai agents". The newsletter is its own message; this returns only a failure. */
+async function newsCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const topic = text.split(/\s+/).slice(1).join(" ").trim();
+  const result = await sendNewsletter(ctx, userId, topic ? { topic } : {});
+  if (result.count > 0) return "📰";
+  return topic ? `Nothing new on "${topic}" right now.` : "Nothing new worth reading right now.";
+}
+
 async function verseCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
   const arg = text.split(/\s+/).slice(1).join(" ").trim();
   const need = resolveNeed(arg);
@@ -1805,6 +1817,12 @@ export const handleCallback = internalAction({
           return;
         case CALLBACK_PREFIX.NEVER_CATEGORY:
           await neverAlertForCategory(ctx, userId, args.chatId, emailMessageId);
+          return;
+        case CALLBACK_PREFIX.NEWS_UP:
+          await handleNewsFeedback(ctx, userId, args.chatId, emailMessageId, "up");
+          return;
+        case CALLBACK_PREFIX.NEWS_DOWN:
+          await handleNewsFeedback(ctx, userId, args.chatId, emailMessageId, "down");
           return;
         default:
           await sendMessage(args.chatId, `Unrecognized button: ${args.data}`);

@@ -9,6 +9,32 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-11-22 — News agent (Phase 25)
+
+- **News is pulled, never pushed.** It arrives only on a direct ask or in a
+  digest the owner configured (`brief.configure` sections/extraTimes); the
+  digest policy kind `digest` gates it, there is no breaking-news path.
+- **The model cannot choose a link.** `parseNewsletter` drops any item whose url
+  was not among the candidates handed to `WRITE_NEWSLETTER`; story text is only
+  in `untrusted`.
+- **Interest weight is computed at read time**, never stored decayed:
+  explicit holds until `expiresAt`, inferred halves every 14 days, negative
+  pushes down. Inferred never overwrites an explicit topic.
+- **Popularity is a percentile inside its own source**, and no source may take
+  more than half the list while others can fill it.
+- **`web.read` guard**: a url is allowed if the owner sent it, or if it is on
+  the same registrable domain as one the owner sent. Followed links are
+  offered, never crawled.
+- **Digest scheduling is slot-based**: `reschedule` picks the soonest of the
+  main time and `extraTimes`; `deliver` gets `slotTime`. The old flat +24 h
+  is gone. Old configs without `sections` still send brief plus verse.
+- **Newsletter mail**: a `newsletter` source's sender never alerts
+  (`runAlertStep`); each recent issue becomes one story from stored text.
+- **Unverified live**: all news endpoints, daily.dev's response shape, Google
+  News redirect links through Jina, the newsletter prompt output.
+
+---
+
 ## 2026-11-22 — Reading any link (Phase 24)
 
 - **Unknown hosts are `web`, and we never fetch them.** The allowlist stays the

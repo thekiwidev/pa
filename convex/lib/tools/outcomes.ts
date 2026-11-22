@@ -25,6 +25,11 @@ const field = (value: unknown, key: string): unknown =>
     ? (value as Record<string, unknown>)[key]
     : undefined;
 
+const listOf = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+const stringList = (value: unknown): string[] =>
+  listOf(value).filter((x): x is string => typeof x === "string");
+
 const str = (value: unknown, key: string): string | undefined => {
   const found = field(value, key);
   return typeof found === "string" ? found : undefined;
@@ -1153,13 +1158,74 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       const time = str(r, "timeOfDay") ?? "?";
       const next = str(r, "nextAt");
       const notes = str(r, "notes");
+      const sections = stringList(field(r, "sections"));
+      const extras = listOf(field(r, "extraTimes"))
+        .map((e) => `${str(e, "timeOfDay") ?? "?"} (${stringList(field(e, "sections")).join(", ")})`);
       return [
-        `🌅 Morning brief on, daily at ${time}.`,
+        `🌅 Digest on, daily at ${time}${sections.length > 0 ? `: ${sections.join(", ")}` : ""}.`,
+        extras.length > 0 ? `Also at ${extras.join("; ")}.` : "",
         next ? `Next one: ${next}.` : "",
         notes ? `Notes: ${notes}` : "",
       ]
         .filter(Boolean)
         .join("\n");
+    }
+
+    case "news.brief": {
+      const count = typeof field(r, "count") === "number" ? (field(r, "count") as number) : 0;
+      return count > 0 ? "📰 Above. 👍 or 👎 teaches me what you like." : "📰 Nothing to send right now.";
+    }
+
+    case "interest.add": {
+      const topic = str(r, "topic") ?? "that";
+      if (field(r, "avoid") === true) return `Got it: less ${topic} in your news.`;
+      const until = str(r, "until");
+      return until ? `Got it: more ${topic} until ${until}.` : `Got it: more ${topic} in your news.`;
+    }
+
+    case "interest.list": {
+      const rows = listOf(field(r, "interests"));
+      if (rows.length === 0) return "No topics yet. Tell me what you are into, or what to avoid.";
+      return [
+        "**Your news topics**",
+        ...rows.map((i) => {
+          const until = str(i, "until");
+          const state = field(i, "expired") === true ? " (expired)" : until ? ` (until ${until})` : "";
+          return `- ${str(i, "direction") === "less" ? "less" : "more"}: ${str(i, "topic") ?? "?"}${state}${str(i, "origin") === "inferred" ? " — learned" : ""}`;
+        }),
+      ].join("\n");
+    }
+
+    case "interest.remove": {
+      const removed = stringList(field(r, "removed"));
+      return removed.length > 0 ? `Stopped tracking: ${removed.join(", ")}.` : "I had nothing like that.";
+    }
+
+    case "news.source.add": {
+      const name = str(r, "name") ?? "that source";
+      const note = field(r, "needsSetup") === true ? " It needs its keys set before it returns anything (see docs/ENV.md)." : "";
+      return field(r, "added") === false ? `Already watching ${name}.` : `Added ${name} to your news.${note}`;
+    }
+
+    case "news.source.list": {
+      const rows = listOf(field(r, "sources"));
+      if (rows.length === 0) return "No sources yet.";
+      return [
+        "**Your news sources**",
+        ...rows.map((s) => `- ${str(s, "name") ?? "?"}${field(s, "needsSetup") === true ? " (needs a key)" : ""}${field(s, "enabled") === false ? " (off)" : ""}`),
+      ].join("\n");
+    }
+
+    case "news.source.remove": {
+      const removed = stringList(field(r, "removed"));
+      return removed.length > 0 ? `Stopped reading: ${removed.join(", ")}.` : "I don't watch anything like that.";
+    }
+
+    case "web.read": {
+      const pages = listOf(field(r, "pages"));
+      const readable = pages.filter((p) => field(p, "readable") === true);
+      if (readable.length === 0) return "I couldn't read that page.";
+      return readable.map((p) => `${str(p, "url") ?? ""}\n${(str(p, "content") ?? "").slice(0, 1500)}`).join("\n\n");
     }
 
     case "brief.preview":

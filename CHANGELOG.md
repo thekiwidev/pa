@@ -9,6 +9,28 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — news agent and web tasks (2026-11-22)
+
+- **Newsletter on request.** "Catch me up on tech", "what's new in AI agents",
+  "top 10" or `/news [topic]` sends a ranked briefing from Hacker News,
+  Lobsters, DEV, Stack Overflow, Google News, TLDR and any source you add
+  (plus daily.dev and Reddit when their keys are set). Each story has key
+  points, a line on why it matters to you, and 👍/👎 buttons that teach the
+  ranking.
+- **Interests you control from chat.** "I'm into Rust for two weeks" expires
+  on its own; "no more crypto news" ranks it down; saved links and 👍 add
+  learned interests that fade with a 14-day half-life.
+- **Digest sections and several times a day.** `brief.configure` takes
+  `sections` (email, calendar, news, verse) and `extraTimes`, so "add news to
+  my morning digest" and "also send news at 1pm" work. Still off until you
+  ask; no breaking-news interrupts.
+- **Sources from chat.** "Watch <site>" finds the feed; "read my TLDR emails"
+  routes that newsletter into the news pool and stops it alerting.
+- **`web.read`.** Send a link and ask "what's important on this site"; it may
+  open up to three more pages of the same site, never another domain.
+- Docs: `docs/build/PHASE-25-news-agent.md`. Not yet tried against live
+  sources.
+
 ### Added — read any link (2026-11-22)
 
 - **`link.read` opens any link you send.** Threads, Pinterest, YouTube

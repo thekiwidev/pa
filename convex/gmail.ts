@@ -41,6 +41,7 @@ import {
 import { describeLinksForClassifier } from "./lib/email/links";
 import { sendMessage } from "./channels/telegram";
 import { allowProactive, quietEndMs } from "./notify";
+import { senderMatches } from "./lib/news/sources";
 import { FOLLOWUP_AFTER_MS, FOLLOWUP_LEAD, alertStep, isUnread } from "./lib/email/unread";
 import { notifyFrom } from "./lib/notify/policy";
 import { splitOwnerContext } from "./lib/email/importance";
@@ -1011,6 +1012,11 @@ async function runAlertStep(
   if (!row) return;
   const account = await ctx.runQuery(internal.model.connectedAccounts.get, { accountId: row.accountId });
   if (!account || account.status !== "ACTIVE") return;
+
+  // A newsletter the owner reads through the news agent is content for the
+  // newsletter, never an alert.
+  const newsletters = await ctx.runQuery(internal.model.news.newsletterSenders, { userId: account.userId });
+  if (newsletters.some((pattern) => senderMatches(pattern, row.fromAddress))) return;
 
   const read = opts.checkUnread ? !(await stillUnread(ctx, row)) : false;
   const policy = read

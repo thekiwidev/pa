@@ -324,7 +324,7 @@ async function resolveRedirect(rawUrl: string): Promise<string | null> {
  * page's own host: r.jina.ai fetches it and returns markdown. JINA_API_KEY is
  * optional (a key raises the rate limit); without one the keyless tier is used.
  */
-async function fetchViaJina(rawUrl: string): Promise<FullPost | null> {
+export async function fetchViaJina(rawUrl: string): Promise<FullPost | null> {
   try {
     const target = assertWebUrl(rawUrl).toString();
     const key = process.env.JINA_API_KEY;

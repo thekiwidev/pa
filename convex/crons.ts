@@ -22,6 +22,10 @@ crons.cron("mailbox sync", "*/30 * * * *", internal.gmail.syncAll, {});
 // earliest sane brief time, so it never races a same-day first-time enable.
 crons.cron("ensure brief scheduled", "0 7 * * *", internal.briefs.ensureScheduled, {});
 
+// Phase 25 — the news pool keeps seven days of stories; this deletes the rest
+// and any interest whose time has run out. 03:30 UTC, an hour nobody is reading.
+crons.cron("clean news pool", "30 3 * * *", internal.news.cleanup, {});
+
 /**
  * Renew every mailbox's Gmail push watch, daily.
  *

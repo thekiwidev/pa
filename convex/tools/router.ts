@@ -80,6 +80,11 @@ import { detectPlatform, extractUrls } from "../lib/social/detect";
 import { ingestLink, searchSaved, toView } from "../saved";
 import { sendDevotional, updateSettings as updateScriptureSettings } from "../scripture";
 import { updateNotify } from "../notify";
+import { findFeed } from "../connectors/news/client";
+import { fetchViaJina } from "../connectors/social/client";
+import { sourceConfigured, sourceName, type SourceKind } from "../lib/news/sources";
+import { MAX_WEB_READ_PAGES, sameDomainLinks, webReadVerdict } from "../lib/news/webread";
+import { urlKey } from "../lib/news/normalize";
 import type { NotifyMode, NotifyPatch } from "../lib/notify/policy";
 import { resolveNeed } from "../lib/scripture/needs";
 import { parseNotionLists, resolveListName } from "../lib/notion/lists";
@@ -2199,14 +2204,163 @@ async function dispatch(
         enabled: a.enabled as boolean | undefined,
         timeOfDay: a.timeOfDay as string | undefined,
         notes: a.notes as string | undefined,
+        sections: a.sections as ("email" | "calendar" | "news" | "verse")[] | undefined,
+        extraTimes: a.extraTimes as
+          | { timeOfDay: string; sections: ("email" | "calendar" | "news" | "verse")[] }[]
+          | undefined,
       });
       return {
         enabled: updated.enabled,
         timeOfDay: updated.timeOfDay,
+        sections: updated.sections ?? ["email", "calendar", "verse"],
+        extraTimes: updated.extraTimes ?? [],
         notes: updated.notes,
         nextAt:
           updated.nextAt === undefined ? undefined : formatInstant(updated.nextAt, timezone),
       };
+    }
+
+    case "news.brief": {
+      const result = await ctx.runAction(internal.news.brief, {
+        userId,
+        ...(typeof a.topic === "string" ? { topic: a.topic } : {}),
+        ...(typeof a.count === "number" ? { count: a.count } : {}),
+      });
+      return { ...result, topic: a.topic };
+    }
+
+    case "interest.add": {
+      const now = Date.now();
+      const days = typeof a.days === "number" ? a.days : undefined;
+      const avoid = a.avoid === true;
+      await ctx.runMutation(internal.model.interests.add, {
+        userId,
+        topic: a.topic as string,
+        weight: avoid ? -1 : 1,
+        origin: "explicit",
+        nowMs: now,
+        ...(days ? { expiresAt: now + days * 24 * 60 * 60 * 1000 } : {}),
+      });
+      return {
+        topic: (a.topic as string).trim(),
+        avoid,
+        until: days ? formatInstant(now + days * 24 * 60 * 60 * 1000, timezone) : undefined,
+      };
+    }
+
+    case "interest.list": {
+      const now = Date.now();
+      const rows = await ctx.runQuery(internal.model.interests.listAll, { userId });
+      return {
+        interests: rows.map((r) => ({
+          topic: r.topic,
+          direction: r.weight < 0 ? "less" : "more",
+          origin: r.origin,
+          until: r.expiresAt ? formatInstant(r.expiresAt, timezone) : undefined,
+          expired: r.expiresAt !== undefined && r.expiresAt <= now,
+        })),
+      };
+    }
+
+    case "interest.remove": {
+      const removed = await ctx.runMutation(internal.model.interests.remove, {
+        userId,
+        fragment: a.topic as string,
+      });
+      return { removed };
+    }
+
+    case "news.source.list": {
+      await ctx.runMutation(internal.model.news.seedDefaults, { userId });
+      const rows = await ctx.runQuery(internal.model.news.sources, { userId });
+      return {
+        sources: rows.map((r) => ({
+          name: sourceName({ kind: r.kind as SourceKind, config: r.config }),
+          kind: r.kind,
+          addedBy: r.addedBy,
+          enabled: r.enabled,
+          needsSetup: !sourceConfigured(r.kind as SourceKind, process.env),
+        })),
+      };
+    }
+
+    case "news.source.remove": {
+      const removed = await ctx.runMutation(internal.model.news.removeSource, {
+        userId,
+        fragment: a.name as string,
+      });
+      return { removed };
+    }
+
+    case "news.source.add": {
+      await ctx.runMutation(internal.model.news.seedDefaults, { userId });
+      if (typeof a.sender === "string") {
+        const sender = a.sender.trim().toLowerCase();
+        if (!/^(@[^\s@]+\.[^\s@]+|[^\s@]+@[^\s@]+\.[^\s@]+)$/.test(sender)) {
+          throw new Error('a newsletter sender is an address like news@site.com or a domain like "@site.com"');
+        }
+        const r = await ctx.runMutation(internal.model.news.addSource, {
+          userId,
+          kind: "newsletter",
+          config: { sender, label: sender.replace(/^@/, "") },
+        });
+        return { added: r.created, name: sender, kind: "newsletter" };
+      }
+      if (typeof a.subreddit === "string") {
+        const sub = a.subreddit.replace(/^r\//i, "").replace(/[^A-Za-z0-9_]/g, "");
+        if (!sub) throw new Error("that is not a subreddit name");
+        const r = await ctx.runMutation(internal.model.news.addSource, {
+          userId,
+          kind: "reddit",
+          config: { subreddit: sub, label: `r/${sub}` },
+        });
+        return { added: r.created, name: `r/${sub}`, kind: "reddit", needsSetup: !sourceConfigured("reddit", process.env) };
+      }
+      const proposed = (a.url as string).trim();
+      const owner = await ownerSentUrls(ctx, userId);
+      if (!owner.some((u) => urlKey(u) === urlKey(proposed))) {
+        throw new Error("I only add sites you named yourself — I can't add one that came from an email or a web page.");
+      }
+      const feed = await findFeed(proposed);
+      if (!feed) throw new Error("I couldn't find a feed on that site, so there is nothing to follow");
+      const r = await ctx.runMutation(internal.model.news.addSource, {
+        userId,
+        kind: "rss",
+        config: { url: feed.feedUrl, label: feed.label },
+      });
+      return { added: r.created, name: feed.label, kind: "rss" };
+    }
+
+    case "web.read": {
+      const urls = (a.urls as string[]).map((u) => u.trim()).slice(0, MAX_WEB_READ_PAGES);
+      const owner = await ownerSentUrls(ctx, userId);
+      const verdicts = urls.map((u) => ({ u, v: webReadVerdict(u, owner) }));
+      // The owner chose the site. Anything else (a link found on a page that leaves
+      // that site, a URL out of an email) is refused, not opened.
+      const refused = verdicts.find((x) => x.v === null);
+      if (refused) {
+        throw new Error(
+          "I only open links you sent me yourself, and further pages only on that same website — I can't open " +
+            new URL(refused.u).hostname,
+        );
+      }
+      if (verdicts.filter((x) => x.v === "same-domain").length > 3) {
+        throw new Error("I follow at most three further pages on a site");
+      }
+      const pages = await Promise.all(
+        urls.map(async (u) => {
+          const page = await fetchViaJina(u);
+          const content = page?.caption ?? "";
+          return {
+            url: u,
+            readable: content.length > 0,
+            content: content.slice(0, 12_000),
+            // Offered, never followed automatically: a second web.read call decides.
+            links: sameDomainLinks(content, u),
+          };
+        }),
+      );
+      return { question: a.question, pages };
     }
 
     case "brief.preview": {
@@ -3333,4 +3487,11 @@ function bestWordMatch<T extends { title?: string; summary?: string }>(items: T[
     if (score > 0 && (!best || score > best.score)) best = { item, score };
   }
   return best?.item;
+}
+
+
+/** URLs in the owner's recent inbound messages: the only ones web tools may start from. */
+async function ownerSentUrls(ctx: ActionCtx, userId: Id<"users">): Promise<string[]> {
+  const recent = await ctx.runQuery(internal.model.messages.recentForUser, { userId, limit: 12 });
+  return recent.filter((m) => m.direction === "in").flatMap((m) => extractUrls(m.text ?? ""));
 }

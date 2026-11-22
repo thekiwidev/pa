@@ -580,6 +580,62 @@ export default defineSchema({
     sentAt: v.number(),
   }).index("by_user_sent", ["userId", "sentAt"]),
 
+  // ── Phase 25 — news agent ──────────────────────────────────
+  /** What the newsletter reads. Defaults are seeded; the owner adds more from chat. */
+  newsSources: defineTable({
+    userId: v.id("users"),
+    kind: v.string(), // hn|lobsters|devto|dailydev|reddit|stackexchange|rss|gnews|newsletter
+    config: v.object({
+      url: v.optional(v.string()),
+      label: v.optional(v.string()),
+      query: v.optional(v.string()),
+      subreddit: v.optional(v.string()),
+      sender: v.optional(v.string()),
+    }),
+    enabled: v.boolean(),
+    addedBy: v.string(), // default|owner
+  }).index("by_user", ["userId"]),
+
+  /**
+   * What the owner wants more or less of. Weight is evaluated at read time
+   * (lib/news/rank.ts): explicit ones hold until expiresAt, inferred ones decay
+   * with a 14-day half-life, negative ones push stories down.
+   */
+  interests: defineTable({
+    userId: v.id("users"),
+    topic: v.string(),
+    embedding: v.optional(v.array(v.float64())),
+    weight: v.number(),
+    expiresAt: v.optional(v.number()),
+    origin: v.string(), // explicit|inferred
+    createdAt: v.number(),
+  }).index("by_user_topic", ["userId", "topic"]),
+
+  /** The 7-day pool of candidate stories. Deleted by a daily cron. */
+  newsItems: defineTable({
+    userId: v.id("users"),
+    urlHash: v.string(),
+    url: v.string(),
+    title: v.string(),
+    source: v.string(),
+    publishedAt: v.number(),
+    score: v.number(),
+    snippet: v.string(),
+    fetchedAt: v.number(),
+    sentAt: v.optional(v.number()),
+  })
+    .index("by_user_hash", ["userId", "urlHash"])
+    .index("by_user_fetched", ["userId", "fetchedAt"])
+    .index("by_fetched", ["fetchedAt"]),
+
+  /** 👍 / 👎 on a newsletter item. The interest it teaches lives in `interests`. */
+  newsFeedback: defineTable({
+    userId: v.id("users"),
+    newsItemId: v.id("newsItems"),
+    verdict: v.string(), // up|down
+    createdAt: v.number(),
+  }).index("by_user_created", ["userId", "createdAt"]),
+
   // ── Phase 17 — ONLY past the measured trigger ──────────────
   memories: defineTable({
     userId: v.id("users"),

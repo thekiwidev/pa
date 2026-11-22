@@ -6,6 +6,30 @@ Newest first. Questions that block anything are in the next section. Everything 
 
 None yet.
 
+## Your to-do after Phase 25
+
+- [ ] Optional keys: `DAILYDEV_TOKEN` (may need daily.dev Plus), `STACKEXCHANGE_KEY` (optional), Reddit keys from Phase 24. Names in `docs/ENV.md`. Without them those sources are skipped.
+- [ ] Dev run: say "catch me up on tech". Expect one card of 5 stories in under 60 s. If fewer than 5 sources contribute, `bunx convex run model/news:sources '{"userId":"..."}'` and `bun run logs` show which one failed (warn incidents named `news.<kind>`).
+- [ ] Say "I'm into Rust for a week", then "catch me up": Rust stories should rise. `interest.list` shows the expiry.
+- [ ] Tap 👍 and 👎 on stories and check `interest.list` shows a learned topic.
+- [ ] Say "watch https://<some blog>", then "list my sources".
+- [ ] Say "add news to my morning digest" and "also send news at 1pm". Check the reply names both times. Then `/brief` is unchanged.
+- [ ] Send a link and ask "what's important on this site": `web.read`. Ask it to follow a link to another domain: it must refuse.
+- [ ] To read TLDR/Snapbyte by mail: subscribe with your Gmail, then "read my TLDR emails" (sender `@tldrnewsletter.com`).
+- [ ] Production: not deployed. Phase 25 adds four tables and one cron, all additive.
+
+## Decisions made without you (Phase 25)
+
+| Decision | Why |
+|---|---|
+| Read bodies for the ranked top N only, not 15 | ranking is done before reading; reading extra only costs Jina calls |
+| No embeddings stored on `newsItems` | big rows for a 7-day pool; the top 60 are embedded per run |
+| Owner RSS fetched directly with per-hop `assertWebUrl` | Jina returns markdown, and the owner typed the url |
+| `web.read` accepts up to 4 urls per call | the planner's step limit bounds the loop; the guard checks each url |
+| One newsletter issue is one story | only plain text is stored for mail |
+| Digest `reschedule` computes the next slot itself | flat +24 h cannot express several times a day |
+| Per-kind `news` policy not used for the digest news section | the digest's own `digest` gate already decides whether anything is sent |
+
 ## Your to-do after Phase 24
 
 - [ ] Optional keys (each source is skipped without its key): `bunx convex env set JINA_API_KEY ...` (free key at jina.ai; raises the rate limit), and for Reddit create a "script" app at reddit.com/prefs/apps then set `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`. Names only are in `docs/ENV.md`.

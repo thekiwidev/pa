@@ -63,6 +63,9 @@ export const TASKS = {
   // A web page read through the reader proxy, filed like a post (Phase 24).
   // DRAFT: one call per link the owner sends, prose-quality summary.
   SUMMARIZE_PAGE:      { tier: "DRAFT" },
+  // The newsletter (Phase 25): headlines and page text in, a short readable
+  // briefing out. DRAFT: prose the owner reads, a few calls a day at most.
+  WRITE_NEWSLETTER:    { tier: "DRAFT" },
   // "Is this saved item genuinely useful for what they are doing now?"
   JUDGE_RELEVANCE:     { tier: "CHEAP_STRUCTURED" },
   // Scripture (2026-10-19). Choosing the passage is a judgement about the

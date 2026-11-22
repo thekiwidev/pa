@@ -295,6 +295,22 @@ export async function ingestLink(
 
     const view = await viewOf(ctx, begun.itemId);
     if (!view) throw new Error("saved item vanished");
+    // A saved link is a small vote for its topic in the news ranking. It decays
+    // on its own (inferred interests halve every 14 days) and never overrides a
+    // topic the owner stated in words.
+    if (view.title) {
+      try {
+        await ctx.runMutation(internal.model.interests.add, {
+          userId,
+          topic: view.title.slice(0, 120),
+          weight: 0.5,
+          origin: "inferred",
+          nowMs: Date.now(),
+        });
+      } catch (error) {
+        console.warn(`interest_infer_failed: ${String(error).slice(0, 200)}`);
+      }
+    }
     return { ...view, fresh: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
