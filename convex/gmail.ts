@@ -39,6 +39,7 @@ import {
 } from "./lib/email/classification";
 import { describeLinksForClassifier } from "./lib/email/links";
 import { sendMessage } from "./channels/telegram";
+import { allowProactive } from "./notify";
 
 /** How far back a sync looks. Gmail's `q` syntax. */
 const SYNC_WINDOW = "newer_than:2d";
@@ -140,6 +141,13 @@ async function accessTokenFor(
   const account = await ctx.runQuery(internal.model.connectedAccounts.get, { accountId });
   if (!account) throw new Error("account not found");
 
+  // A valid cached token saves a call to Google and two writes per run.
+  // Two minutes of margin so a token never expires mid-request.
+  const cached = account.cachedAccess;
+  if (cached && cached.expiresAt - TOKEN_MARGIN_MS > Date.now()) {
+    return await open({ ciphertext: cached.ciphertext, iv: cached.iv, authTag: cached.authTag });
+  }
+
   const refreshToken = await open({
     ciphertext: account.encryptedCredentials,
     iv: account.credentialIv,
@@ -147,8 +155,18 @@ async function accessTokenFor(
   });
 
   const tokens = await refreshAccessToken(refreshToken);
+  const sealed = await seal(tokens.accessToken);
+  await ctx.runMutation(internal.model.connectedAccounts.cacheAccess, {
+    accountId,
+    ciphertext: sealed.ciphertext,
+    iv: sealed.iv,
+    authTag: sealed.authTag,
+    expiresAt: Date.now() + tokens.expiresInSeconds * 1000,
+  });
   return tokens.accessToken;
 }
+
+const TOKEN_MARGIN_MS = 2 * 60_000;
 
 /**
  * Apply a label change to one message, in Gmail and in the local cache.
@@ -900,20 +918,6 @@ async function notifyNeedsReauth(
   );
 }
 
-/** 07:00-22:00 WAT is the HIGH-importance immediate-notify window. Outside
- *  it, HIGH mail queues for the morning brief (Phase 05B) instead of paging
- *  the phone overnight. CRITICAL bypasses this entirely -- it always pages. */
-function withinImmediateWindow(nowMs: number, timezone: string): boolean {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone: timezone,
-      hour: "2-digit",
-      hour12: false,
-    }).format(new Date(nowMs)),
-  );
-  return hour >= 7 && hour < 22;
-}
-
 /**
  * Everything that happens to a message the first time it is stored: classify
  * it, then page the phone if it deserves it. The ONE path for both the poll
@@ -961,11 +965,16 @@ async function deliverIfDue(
   if (isOwnMessage(normalized, account.accountEmail)) return;
   if (Date.now() - normalized.receivedAt > ALERT_MAX_AGE_MS) return;
 
-  const immediate =
-    classified.importance === "CRITICAL" ||
-    (classified.importance === "HIGH" && withinImmediateWindow(Date.now(), timezone));
+  const alertable = classified.importance === "CRITICAL" || classified.importance === "HIGH";
+  if (!alertable) return;
 
-  if (!immediate) return;
+  // Quiet hours and the owner's switches live in lib/notify/policy.ts.
+  // CRITICAL pages through quiet hours; HIGH outside them only (a deferred
+  // or dropped alert still appears in the next brief).
+  const decision = await allowProactive(ctx, account.userId, "email_important", {
+    urgent: classified.importance === "CRITICAL",
+  });
+  if (decision !== "send") return;
 
   const user = await ctx.runQuery(internal.model.users.get, { userId: account.userId });
   if (!user) return;

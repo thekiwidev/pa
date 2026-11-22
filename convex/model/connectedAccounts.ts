@@ -54,6 +54,8 @@ export const upsert = internalMutation({
         scopesGranted: args.scopesGranted,
         ...(args.relabel === true ? { label: args.label } : {}),
         status: "ACTIVE",
+        // New grant, possibly new scopes: never reuse the old access token.
+        cachedAccess: undefined,
       });
       return { accountId: match._id, created: false, label: match.label };
     }
@@ -107,6 +109,21 @@ export const get = internalQuery({
   handler: async (ctx, args) => await ctx.db.get("connectedAccounts", args.accountId),
 });
 
+/** Store a freshly minted access token (already sealed by the caller). */
+export const cacheAccess = internalMutation({
+  args: {
+    accountId: v.id("connectedAccounts"),
+    ciphertext: v.bytes(),
+    iv: v.bytes(),
+    authTag: v.bytes(),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { accountId, ...cachedAccess } = args;
+    await ctx.db.patch("connectedAccounts", accountId, { cachedAccess });
+  },
+});
+
 export const markSynced = internalMutation({
   args: {
     accountId: v.id("connectedAccounts"),
@@ -152,6 +169,7 @@ export const markNeedsReauth = internalMutation({
   handler: async (ctx, args) => {
     await ctx.db.patch("connectedAccounts", args.accountId, {
       status: "NEEDS_REAUTH",
+      cachedAccess: undefined,
     });
     await ctx.db.insert("auditLogs", {
       actor: "system",

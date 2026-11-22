@@ -13,6 +13,7 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { sendCard, sendMessage } from "./channels/telegram";
+import { allowProactive } from "./notify";
 import { alreadyHtml, escapeTelegramHtml } from "./lib/telegram/html";
 import { classify, fingerprint, formatAlert, formatDigest, scrubSecrets, type Severity } from "./lib/ops/incident";
 import { renderHealth, type CheckResult } from "./lib/ops/health";
@@ -271,7 +272,14 @@ export const digest = internalAction({
     const warns = rows.filter((r) => r.severity === "warn" && r.countSinceDigest > 0);
     const text = formatDigest(warns.map((r) => ({ source: r.source, message: r.sample, count: r.countSinceDigest })));
     const ownerChat = process.env.TELEGRAM_OWNER_ID;
-    if (text && ownerChat) await sendMessage(ownerChat, text);
+    const owner = ownerChat
+      ? await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: ownerChat })
+      : null;
+    // Warnings are not urgent: they wait quietly when the owner is away.
+    // Dropped warnings are cleared below so they do not pile into a backlog.
+    if (text && ownerChat && owner && (await allowProactive(ctx, owner._id, "ops_digest")) === "send") {
+      await sendMessage(ownerChat, text);
+    }
     await ctx.runMutation(internal.model.ops.resetDigestCounts, { ids: warns.map((r) => r._id) });
   },
 });

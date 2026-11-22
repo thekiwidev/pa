@@ -9,6 +9,18 @@ import { formatInstant, formatWhen } from "./lib/time";
 import { DEDUP_WINDOW_MS } from "./model/notifications";
 import { IMPORTANCE_ICON } from "./lib/email/classification";
 import { renderSummaryHtml, summaryAsPlainText } from "./lib/email/links";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import {
+  NOTIFY_PREF_KEY,
+  applyNotifyPatch,
+  decideSend,
+  describeNotify,
+  notifyFrom,
+  type NotifyKind,
+  type NotifyPatch,
+  type SendDecision,
+} from "./lib/notify/policy";
 
 /**
  * 6/hour, replenishing continuously (a token bucket, not a fixed window) so
@@ -231,3 +243,70 @@ export const sendAlert = internalAction({
     });
   },
 });
+
+/**
+ * The attention gate. Every unprompted sender calls this BEFORE it composes
+ * or sends, so a message the policy would drop costs no model call and no
+ * Gatherer read. One query reads the owner's activity and notify prefs.
+ *
+ * `legacy` carries an owner's explicit older switch (persona check-ins,
+ * scripture settings) when the new per-kind switch is unset, so nothing the
+ * owner turned on before is silently turned off.
+ */
+export async function allowProactive(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  kind: NotifyKind,
+  opts: {
+    /** The older preference key this kind replaces, read in the same query. */
+    legacyKey?: string;
+    /** How to read that key's raw value: true/false = explicit, undefined = never set. */
+    legacy?: (raw: unknown) => boolean | undefined;
+    urgent?: boolean;
+  } = {},
+): Promise<SendDecision> {
+  const { lastInboundAt, notify, legacyRaw } = await ctx.runQuery(internal.model.users.attention, {
+    userId,
+    legacyKey: opts.legacyKey,
+  });
+  const stored = notifyFrom(notify);
+  const legacy = opts.legacy?.(legacyRaw);
+  const prefs =
+    legacy !== undefined && stored.kinds[kind] === undefined
+      ? { ...stored, kinds: { ...stored.kinds, [kind]: legacy } }
+      : stored;
+  return decideSend({
+    kind,
+    prefs,
+    now: Date.now(),
+    lastInboundAt,
+    tz: process.env.USER_TIMEZONE ?? "Africa/Lagos",
+    urgent: opts.urgent,
+  });
+}
+
+/** For stored switches that were plain booleans (persona.checkins). */
+export const legacyChoice = (raw: unknown): boolean | undefined => (typeof raw === "boolean" ? raw : undefined);
+
+/** For stored objects with an `enabled` flag (scripture). */
+export const legacyEnabled = (raw: unknown): boolean | undefined =>
+  typeof raw === "object" && raw !== null && typeof (raw as { enabled?: unknown }).enabled === "boolean"
+    ? (raw as { enabled: boolean }).enabled
+    : undefined;
+
+/**
+ * Apply a settings change (or none) and describe the result. The one writer
+ * of the `notify` preference: /silent, /quiet, /resume, /notify, the
+ * notify.settings tool and the older check-in and verse switches all land here.
+ */
+export async function updateNotify(ctx: ActionCtx, userId: Id<"users">, patch: NotifyPatch = {}): Promise<string> {
+  const now = Date.now();
+  const { lastInboundAt, notify } = await ctx.runQuery(internal.model.users.attention, { userId });
+  let prefs = notifyFrom(notify);
+  if (Object.keys(patch).length > 0) {
+    prefs = applyNotifyPatch(prefs, patch, now);
+    await ctx.runMutation(internal.model.preferences.set, { userId, key: NOTIFY_PREF_KEY, value: prefs });
+  }
+  const tz = process.env.USER_TIMEZONE ?? "Africa/Lagos";
+  return describeNotify(prefs, now, lastInboundAt, (ms) => formatInstant(ms, tz));
+}

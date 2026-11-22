@@ -79,6 +79,8 @@ import {
 import { detectPlatform, extractUrls } from "../lib/social/detect";
 import { ingestLink, searchSaved, toView } from "../saved";
 import { sendDevotional, updateSettings as updateScriptureSettings } from "../scripture";
+import { updateNotify } from "../notify";
+import type { NotifyMode, NotifyPatch } from "../lib/notify/policy";
 import { resolveNeed } from "../lib/scripture/needs";
 import { parseNotionLists, resolveListName } from "../lib/notion/lists";
 import { captureKey } from "../lib/capture/batch";
@@ -2234,6 +2236,8 @@ async function dispatch(
           key: CHECKINS_PREF_KEY,
           value: a.checkins,
         });
+        // Alias: the same switch lives in notify.kinds now.
+        await updateNotify(ctx, userId, { kinds: { checkin: a.checkins } });
       }
       const [storedPersona, storedCheckins] = await Promise.all([
         ctx.runQuery(internal.model.preferences.get, { userId, key: PERSONA_PREF_KEY }),
@@ -2253,6 +2257,22 @@ async function dispatch(
       };
     }
 
+    case "notify.settings": {
+      const kinds = typeof a.kinds === "object" && a.kinds !== null ? (a.kinds as NotifyPatch["kinds"]) : undefined;
+      const untilMs = instant(a.until);
+      const text = await updateNotify(ctx, userId, {
+        ...(typeof a.mode === "string" ? { mode: a.mode as NotifyMode } : {}),
+        ...(typeof a.hours === "number" ? { hours: a.hours } : {}),
+        ...(untilMs !== undefined ? { untilMs } : {}),
+        ...(typeof a.inactivityHours === "number" ? { inactivityHours: a.inactivityHours } : {}),
+        ...(typeof a.quietFrom === "string" ? { quietFrom: a.quietFrom } : {}),
+        ...(typeof a.quietUntil === "string" ? { quietUntil: a.quietUntil } : {}),
+        ...(typeof a.emailGraceMinutes === "number" ? { emailGraceMinutes: a.emailGraceMinutes } : {}),
+        ...(kinds ? { kinds } : {}),
+      });
+      return { text };
+    }
+
     case "scripture.send": {
       const result = await sendDevotional(ctx, userId, {
         trigger: "asked",
@@ -2267,6 +2287,7 @@ async function dispatch(
     }
 
     case "scripture.settings": {
+      if (typeof a.enabled === "boolean") await updateNotify(ctx, userId, { kinds: { scripture: a.enabled } });
       const result = await updateScriptureSettings(ctx, userId, {
         ...(typeof a.enabled === "boolean" ? { enabled: a.enabled } : {}),
         ...(typeof a.translation === "string" ? { translation: a.translation } : {}),

@@ -9,6 +9,29 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Changed — quiet by default: one attention policy (2026-11-22)
+
+- **Silent unless it matters.** Every unprompted message now passes
+  `lib/notify/policy.ts`. Modes `normal | quiet | silent`, set from chat:
+  `/silent [2d]`, `/quiet`, `/resume`, `/notify`, or "stop sending me
+  verses" (new tool `notify.settings`). After 24 h without a message from
+  you the bot goes quiet by itself and restores on your next message;
+  dropped items are never queued, so there is no backlog on return.
+- **Opt-in chatter.** Check-ins, scripture verses, saved-post nudges and the
+  weekend pick are off unless you turn them on (an explicit earlier
+  `/checkins on` or `/scripture on` is honoured). Important email,
+  reminders, meeting nudges and critical alerts stay on.
+- **Removed** the "you have been quiet, are you done?" ping. Silence now
+  means fewer messages. Critical ops incidents re-alert once per 24 h, not
+  hourly. Quiet hours (default 22:00-07:00) are a setting.
+- **Convex cost.** Unchanged email rows are no longer re-written on every
+  poll; Gmail access tokens are cached (sealed) until just before expiry;
+  mailbox polling is a 30-minute safety net (push is primary); meeting
+  nudges tick every 15 min with an exact-time `runAt` for the "ready" one;
+  the brief reads alerted threads with one range query.
+- Docs: `docs/build/PHASE-22-quiet-by-default.md`. Not yet observed over a
+  real 48 h silence on dev.
+
 ### Added — scripture: verses and prayer through the day (2026-10-19)
 
 - **Bible verses that fit what is going on, from your own Bible.** A

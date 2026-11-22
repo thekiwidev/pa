@@ -10,9 +10,10 @@ const crons = cronJobs();
 // poll; this sweep only catches deliveries our own bugs could have dropped.
 crons.interval("reconcile missed reminders", { hours: 1 }, internal.reminders.reconcile, {});
 
-// Phase 3 — mailbox sync. UTC: Lagos is UTC+1, so 05-22 WAT is 04-21 UTC.
-crons.cron("mailbox sync waking", "*/10 4-21 * * *", internal.gmail.syncAll, {});
-crons.cron("mailbox sync overnight", "*/30 22,23,0-3 * * *", internal.gmail.syncAll, {});
+// Phase 3 — mailbox sync. Since Phase 22 this is only the safety net (Gmail
+// push is the primary path), so it runs every 30 minutes around the clock
+// instead of every 10 while awake.
+crons.cron("mailbox sync", "*/30 * * * *", internal.gmail.syncAll, {});
 // Phase 8 adds: daily Gmail watch renewal
 // Phase 05B — morning brief safety net. The brief itself is self-scheduling
 // (convex/briefs.ts's deliver() reschedules itself +24h after every send,
@@ -32,11 +33,13 @@ crons.cron("ensure brief scheduled", "0 7 * * *", internal.briefs.ensureSchedule
  */
 crons.cron("renew gmail watches", "0 5 * * *", internal.gmail.watchAll, {});
 /**
- * Meeting nudges — "standup in 30 min". Every 5 minutes, 06:00-22:59 WAT
+ * Meeting nudges — "standup in 30 min". Every 15 minutes, 06:00-22:59 WAT
  * (05-21 UTC), so nobody is paged overnight about an all-night calendar.
- * Each event is nudged once; see reminders.nudgeUpcoming.
+ * Each event is nudged once; see reminders.nudgeUpcoming. The tick also
+ * schedules the exact-time "ready to join?" nudge with runAt, so the coarser
+ * cadence never makes that one late (it was every 5 minutes before Phase 22).
  */
-crons.cron("meeting nudges", "*/5 5-21 * * *", internal.reminders.nudgeUpcoming, {});
+crons.cron("meeting nudges", "*/15 5-21 * * *", internal.reminders.nudgeUpcoming, {});
 
 /**
  * Ops (2026-10-15). Connection check at 06:30 WAT (05:30 UTC) so a dead

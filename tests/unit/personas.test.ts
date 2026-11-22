@@ -8,7 +8,6 @@ import {
   checkinsEnabled,
   decideCheckin,
   decideWatch,
-  idleThresholdMinutes,
   describePersonas,
   dueCheckin,
   personaOrDefault,
@@ -263,18 +262,16 @@ describe("decideWatch — the Corporate PA between slots", () => {
     enabled: true,
     timezone: TZ,
     events: [],
-    tasks: [],
     endOfTodayMs: endOfToday,
   };
-  const inProgress = { title: "THE-89 Item notes", status: "IN_PROGRESS" };
 
   test("only the PA watches", () => {
     expect(decideWatch({ ...base, persona: PM, nowMs: lagos(11) })).toEqual({ send: false, reason: "no_watch" });
   });
 
   test("only between 08:00 and 19:00", () => {
-    expect(decideWatch({ ...base, nowMs: lagos(7, 30), tasks: [inProgress] }).send).toBe(false);
-    expect(decideWatch({ ...base, nowMs: lagos(19, 30), tasks: [inProgress] })).toEqual({
+    expect(decideWatch({ ...base, nowMs: lagos(7, 30) }).send).toBe(false);
+    expect(decideWatch({ ...base, nowMs: lagos(19, 30) })).toEqual({
       send: false,
       reason: "outside_hours",
     });
@@ -306,35 +303,15 @@ describe("decideWatch — the Corporate PA between slots", () => {
     expect(d.send).toBe(false);
   });
 
-  test("quiet for long enough with work in progress → asks about that task", () => {
-    const d = decideWatch({
-      ...base,
-      nowMs: lagos(14, 30),
-      lastInboundMs: lagos(10, 0),
-      lastCheckinMs: lagos(10, 0),
-      tasks: [inProgress],
-    });
-    expect(d.send).toBe(true);
-    if (d.send) expect(d.slot.purpose).toContain("THE-89 Item notes");
-  });
-
   test("not when the user spoke recently", () => {
     expect(
-      decideWatch({ ...base, nowMs: lagos(14, 30), lastInboundMs: lagos(14, 20), tasks: [inProgress] }),
+      decideWatch({ ...base, nowMs: lagos(14, 30), lastInboundMs: lagos(14, 20) }),
     ).toEqual({ send: false, reason: "user_active" });
   });
 
-  test("not with nothing open", () => {
+  test("silence never triggers a ping: no event means nothing, however long the owner is quiet", () => {
     expect(
       decideWatch({ ...base, nowMs: lagos(16, 0), lastInboundMs: lagos(9, 0), lastCheckinMs: lagos(9, 0) }),
     ).toEqual({ send: false, reason: "nothing" });
-  });
-
-  test("more pending work means a shorter quiet period, never below the floor", () => {
-    const w = PA.watch!;
-    expect(idleThresholdMinutes(w, 0, 0)).toBe(180);
-    expect(idleThresholdMinutes(w, 2, 0)).toBe(140);
-    expect(idleThresholdMinutes(w, 10, 0)).toBe(90);
-    expect(idleThresholdMinutes(w, 0, 1)).toBe(225);
   });
 });

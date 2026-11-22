@@ -53,12 +53,11 @@ export interface Persona {
 }
 
 /**
- * Between the fixed slots, a watching persona also checks in when:
- *   - an event starts in eventLeadMinutes (before the 30-minute meeting
- *     nudge), to make sure the user is ready for it;
- *   - the user has gone quiet for a while with open work. The quiet period
- *     shrinks as in-progress and due-today work piles up, and shifts by up
- *     to `jitterMinutes` each day so it never feels like a timer.
+ * Between the fixed slots, a watching persona also checks in when an event
+ * starts in eventLeadMinutes (before the 30-minute meeting nudge), to make
+ * sure the user is ready for it. There is deliberately no "you have been
+ * quiet, are you done?" ping: silence from the owner means fewer messages,
+ * never more (Phase 22).
  */
 export interface WatchConfig {
   /** Local "HH:MM" window the watch runs in. */
@@ -66,14 +65,6 @@ export interface WatchConfig {
   until: string;
   /** Prep check-in this many minutes before an event (window: lead ±15). */
   eventLeadMinutes: number;
-  /** Quiet minutes before a status ping with no pressure. */
-  idleMinutes: number;
-  /** Never shorter than this, however much is pending. */
-  idleFloorMinutes: number;
-  /** Minutes taken off idleMinutes per in-progress or due-today task. */
-  perTaskMinutes: number;
-  /** Day-seeded random shift added to the quiet period. */
-  jitterMinutes: number;
 }
 
 export const PERSONAS: Record<PersonaId, Persona> = {
@@ -157,10 +148,6 @@ export const PERSONAS: Record<PersonaId, Persona> = {
       from: "08:00",
       until: "19:00",
       eventLeadMinutes: 60,
-      idleMinutes: 180,
-      idleFloorMinutes: 90,
-      perTaskMinutes: 20,
-      jitterMinutes: 45,
     },
   },
   mom: {
@@ -414,28 +401,6 @@ export interface WatchEvent {
   startMs: number;
 }
 
-export interface WatchTask {
-  /** "THE-89 Item notes in the order payload" */
-  title: string;
-  status: string;
-  /** ms-epoch, when the task has a due date. */
-  dueMs?: number;
-}
-
-/**
- * How long the user may stay quiet before a watching persona asks for an
- * update: idleMinutes, minus perTaskMinutes for each in-progress or
- * due-today task, never under the floor, plus the day's jitter.
- */
-export function idleThresholdMinutes(
-  watch: WatchConfig,
-  pressure: number,
-  seed: number,
-): number {
-  const base = Math.max(watch.idleFloorMinutes, watch.idleMinutes - pressure * watch.perTaskMinutes);
-  return Math.round(base + seed * watch.jitterMinutes);
-}
-
 export type WatchDecision =
   | { send: true; key: string; slot: CheckinSlot }
   | { send: false; reason: "no_watch" | "off" | "outside_hours" | "user_active" | "too_soon" | "nothing" };
@@ -453,7 +418,6 @@ export function decideWatch(args: {
   lastInboundMs?: number;
   lastCheckinMs?: number;
   events: WatchEvent[];
-  tasks: WatchTask[];
   endOfTodayMs: number;
 }): WatchDecision {
   const watch = args.persona.watch;
@@ -490,33 +454,7 @@ export function decideWatch(args: {
     };
   }
 
-  // 2. Quiet too long with work open: ask about the specific task.
-  const open = args.tasks.filter((t) => t.status !== "COMPLETED" && t.status !== "CANCELLED");
-  if (open.length === 0) return { send: false, reason: "nothing" };
-  const pressing = open.filter(
-    (t) =>
-      t.status === "IN_PROGRESS" ||
-      t.status === "RESUMED" ||
-      (t.dueMs !== undefined && t.dueMs < args.endOfTodayMs),
-  );
-  const date = new Intl.DateTimeFormat("en-CA", { timeZone: args.timezone }).format(new Date(args.nowMs));
-  const thresholdMs = idleThresholdMinutes(watch, pressing.length, daySeed(date)) * 60_000;
-  // Quiet since the later of: their last message, the last check-in, or
-  // the start of the watch window today.
-  const windowStartMs = args.nowMs - (local - minutesOf(watch.from)) * 60_000;
-  const quietSince = Math.max(args.lastInboundMs ?? 0, args.lastCheckinMs ?? 0, windowStartMs);
-  if (args.nowMs - quietSince < thresholdMs) return { send: false, reason: "nothing" };
-
-  const focus = pressing[0] ?? open[0]!;
-  return {
-    send: true,
-    key: `watch:idle:${date}:${quietSince}`,
-    slot: {
-      id: "idle",
-      time: "",
-      purpose: `No update from them in a while. Ask one thing: whether "${focus.title}" is complete.`,
-    },
-  };
+  return { send: false, reason: "nothing" };
 }
 
 /**

@@ -913,6 +913,50 @@ export const TOOL_SCHEMAS = {
       .optional()
       .describe("true/false to turn the unprompted check-ins on or off"),
   }),
+  "notify.settings": z.object({
+    mode: z
+      .enum(["normal", "quiet", "silent"])
+      .optional()
+      .describe(
+        '"silent" = only important unread email and reminders; "quiet" = also digests they asked for; "normal" = everything switched on ("resume")',
+      ),
+    hours: z
+      .number()
+      .positive()
+      .max(24 * 60)
+      .optional()
+      .describe('with mode quiet/silent: go back to normal after this many hours ("silent for 2 days" = 48)'),
+    until: INSTANT.optional().describe('with mode quiet/silent: go back to normal at this local time, e.g. "till Monday 08:00"'),
+    inactivityHours: z
+      .number()
+      .min(0)
+      .max(24 * 30)
+      .optional()
+      .describe("go quiet by itself after this many hours without a message from them; 0 turns that off (default 24)"),
+    quietFrom: TIME_OF_DAY.optional().describe('start of quiet hours, e.g. "22:00"'),
+    quietUntil: TIME_OF_DAY.optional().describe('end of quiet hours, e.g. "07:00"'),
+    emailGraceMinutes: z
+      .number()
+      .min(0)
+      .max(24 * 60)
+      .optional()
+      .describe("how long an important email may sit unread before it pings them (default 15)"),
+    kinds: z
+      .object({
+        email_important: z.boolean().optional(),
+        email_unread_followup: z.boolean().optional(),
+        digest: z.boolean().optional(),
+        news: z.boolean().optional(),
+        checkin: z.boolean().optional(),
+        scripture: z.boolean().optional(),
+        saved_nudge: z.boolean().optional(),
+        weekend_pick: z.boolean().optional(),
+        meeting_nudge: z.boolean().optional(),
+        ops_digest: z.boolean().optional(),
+      })
+      .optional()
+      .describe("switch single kinds on/off: checkin (check-ins), scripture (verses), saved_nudge, weekend_pick, meeting_nudge, news, digest, email_important"),
+  }),
   "scripture.send": z.object({
     need: z
       .string()
@@ -1541,6 +1585,17 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       'friend", "stop checking in on me". With no arguments it returns ' +
       "the current personality and the list, so it also answers \"who are " +
       'you right now?". The switch takes effect from your next message.',
+    consequential: false,
+    requiresAccountId: false,
+  },
+  "notify.settings": {
+    description:
+      "Show or change when and what you message them without being asked. " +
+      'Use for "go silent", "be quiet for 2 days", "resume", "stop sending ' +
+      'verses", "only ping me for important email", "no check-ins", "turn ' +
+      'saved-post nudges on", "quiet hours 23:00 to 06:00". Reminders ' +
+      "they set and critical system alerts always get through. With no " +
+      "arguments it reports the current settings.",
     consequential: false,
     requiresAccountId: false,
   },

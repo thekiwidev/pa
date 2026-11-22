@@ -13,6 +13,9 @@ export default defineSchema({
     telegramId: v.string(),
     displayName: v.string(),
     timezone: v.string(), // "Africa/Lagos"
+    // Last time the owner wrote or tapped a button (ms epoch). The attention
+    // policy (lib/notify/policy.ts) reads this instead of scanning messages.
+    lastInboundAt: v.optional(v.number()),
   }).index("by_telegram", ["telegramId"]),
 
   auditLogs: defineTable({
@@ -228,6 +231,16 @@ export default defineSchema({
     watchExpiresAt: v.optional(v.number()), // Phase 8
     lastSyncedAt: v.optional(v.number()),
     priorityRules: v.optional(v.any()), // Phase 7
+    // Short-lived access token, sealed like the refresh token, so a sync run
+    // does not hit Google's token endpoint every time (Phase 22).
+    cachedAccess: v.optional(
+      v.object({
+        ciphertext: v.bytes(),
+        iv: v.bytes(),
+        authTag: v.bytes(),
+        expiresAt: v.number(),
+      }),
+    ),
   })
     .index("by_user_provider", ["userId", "provider"])
     .index("by_label", ["label"])
@@ -364,7 +377,9 @@ export default defineSchema({
     channelMessageId: v.optional(v.string()), // to EDIT the card in place
     payload: v.any(),
     sentAt: v.number(),
-  }).index("by_thread_key", ["threadKey"]),
+  })
+    .index("by_thread_key", ["threadKey"])
+    .index("by_user_sent", ["userId", "sentAt"]),
 
   feedback: defineTable({
     userId: v.id("users"),

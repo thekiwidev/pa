@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
 import { sendMessage } from "./channels/telegram";
+import { allowProactive, legacyEnabled } from "./notify";
 import { reportIncident } from "./ops";
 import { formatInstant } from "./lib/time";
 import { normalizeCategory, renderUserContext } from "./lib/userContext";
@@ -37,9 +38,7 @@ import {
   type SentToday,
 } from "./lib/scripture/schedule";
 
-/** checkins.ts's CHECKIN_KIND, repeated rather than imported: checkins.ts
- *  imports briefs.ts, which imports this file. */
-const CHECKIN_KIND = "checkin";
+const scriptureGate = { legacyKey: SCRIPTURE_PREF_KEY, legacy: legacyEnabled } as const;
 
 /** Outbound messages of this kind are verses. */
 export const SCRIPTURE_KIND = "scripture";
@@ -75,17 +74,19 @@ export const tick = internalAction({
       return await sendDevotional(ctx, user._id, { trigger: "interval" });
     }
 
-    const [today, recent] = await Promise.all([
-      sentToday(ctx, user._id, nowMs, timezone),
-      ctx.runQuery(internal.model.messages.recentForUser, { userId: user._id, limit: 50 }),
-    ]);
+    // Opt-in chatter: dropped before any read or model call. An explicit
+    // /scripture on|off from before the attention policy is honoured.
+    if ((await allowProactive(ctx, user._id, "scripture", scriptureGate)) !== "send") {
+      return { sent: false, reason: "policy" };
+    }
+
+    const today = await sentToday(ctx, user._id, nowMs, timezone);
     const decision = decideScripture({
       settings,
       nowMs,
       timezone,
       today,
-      lastInboundMs: recent.filter((m) => m.direction === "in").at(-1)?._creationTime,
-      lastCheckinMs: recent.filter((m) => m.kind === CHECKIN_KIND).at(-1)?._creationTime,
+      lastInboundMs: user.lastInboundAt,
     });
     if (!decision.send) return { sent: false, reason: decision.reason };
 
@@ -126,6 +127,9 @@ export async function scheduleMomentVerse(
 export const sendMoment = internalAction({
   args: { userId: v.id("users"), need: v.string(), cue: v.string() },
   handler: async (ctx, args): Promise<Outcome> => {
+    if ((await allowProactive(ctx, args.userId, "scripture", scriptureGate)) !== "send") {
+      return { sent: false, reason: "policy" };
+    }
     const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
     const settings = await loadSettings(ctx, args.userId);
     const nowMs = Date.now();
@@ -175,6 +179,7 @@ export const sendNow = internalAction({
  */
 export async function sendMorningBeforeBrief(ctx: ActionCtx, userId: Id<"users">): Promise<void> {
   try {
+    if ((await allowProactive(ctx, userId, "scripture", scriptureGate)) !== "send") return;
     const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
     const settings = await loadSettings(ctx, userId);
     if (!settings.enabled) return;

@@ -53,7 +53,12 @@ export const upsert = internalMutation({
     if (existing) {
       // Labels are the one thing that legitimately changes on re-sync — a
       // message you moved out of SPAM, or that got a new label.
-      await ctx.db.patch("emailMessages", existing._id, { labelIds: args.labelIds });
+      // Skipped when unchanged: a poll re-upserts every recent message, and
+      // an unchanged patch is still a billed write plus a reactive-query wake.
+      const same =
+        existing.labelIds.length === args.labelIds.length &&
+        existing.labelIds.every((l, i) => l === args.labelIds[i]);
+      if (!same) await ctx.db.patch("emailMessages", existing._id, { labelIds: args.labelIds });
       return { emailMessageId: existing._id, created: false };
     }
 

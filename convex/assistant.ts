@@ -27,6 +27,8 @@ import {
 } from "./lib/assistant/refs";
 import type { UntrustedBlock } from "./lib/ai/prompt";
 import type { Doc } from "./_generated/dataModel";
+import { updateNotify } from "./notify";
+import { parseHours, type NotifyMode } from "./lib/notify/policy";
 import {
   executeToolCall,
   flushStagedWrites,
@@ -740,6 +742,10 @@ async function handleCommand(
         "/reminders — what's scheduled",
         "/brief — compose today's morning brief now",
         "/persona [name] — show or switch personality (project manager, corporate pa, mom, friend)",
+        "/silent [2d] — only important unread mail and your reminders, optionally for a while",
+        "/quiet [2d] — also the digests you asked for",
+        "/resume — back to normal",
+        "/notify — what I may message you about, and when",
         "/checkins on|off — turn the personality's unprompted check-ins on or off",
         "/verse [need or situation] — a Bible verse and prayer now (e.g. /verse calm, /verse job interview)",
         "/scripture [on|off|KJV|morning 06:30] — verse settings and the Bibles imported",
@@ -762,6 +768,11 @@ async function handleCommand(
       return await briefCommand(ctx, userId);
     case "/persona":
       return await personaCommand(ctx, userId, text);
+    case "/silent":
+    case "/quiet":
+    case "/resume":
+    case "/notify":
+      return await notifyCommand(ctx, userId, text);
     case "/checkins":
       return await checkinsCommand(ctx, userId, text);
     case "/verse":
@@ -806,6 +817,18 @@ async function personaCommand(ctx: ActionCtx, userId: Id<"users">, text: string)
   return describePersonas(persona.id, checkinsOn);
 }
 
+/** "/silent", "/silent 2d", "/quiet 12h", "/resume", "/notify". Deterministic. */
+async function notifyCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
+  const [command, arg] = text.split(/\s+/);
+  const mode = { "/silent": "silent", "/quiet": "quiet", "/resume": "normal" }[command?.toLowerCase() ?? ""] as
+    | NotifyMode
+    | undefined;
+  if (!mode) return await updateNotify(ctx, userId);
+  const hours = parseHours(arg);
+  if (arg && hours === null) return `I could not read "${arg}" as a duration. Try /silent 2d, /silent 12h or /silent 90m.`;
+  return await updateNotify(ctx, userId, { mode, ...(hours !== null ? { hours } : {}) });
+}
+
 async function checkinsCommand(ctx: ActionCtx, userId: Id<"users">, text: string): Promise<string> {
   const arg = text.split(/\s+/)[1]?.toLowerCase();
   if (arg !== "on" && arg !== "off") {
@@ -817,6 +840,7 @@ async function checkinsCommand(ctx: ActionCtx, userId: Id<"users">, text: string
     key: CHECKINS_PREF_KEY,
     value: arg === "on",
   });
+  await updateNotify(ctx, userId, { kinds: { checkin: arg === "on" } });
   return arg === "on" ? "Check-ins on." : "Check-ins off. I'll only message you when something needs you.";
 }
 
@@ -851,6 +875,7 @@ async function scriptureCommand(ctx: ActionCtx, userId: Id<"users">, text: strin
     if (!Number.isFinite(hours) || hours < 1 || hours > 12) return 'Say how often in hours, 1 to 12, e.g. "/scripture every 3h".';
     patch = { gapMinutes: Math.round(hours * 60) };
   } else if (first) patch = { translation: first };
+  if (patch.enabled !== undefined) await updateNotify(ctx, userId, { kinds: { scripture: patch.enabled } });
   const result = await updateScriptureSettings(ctx, userId, patch);
   return result.text;
 }
@@ -1644,6 +1669,7 @@ export const handleCallback = internalAction({
       telegramId: args.telegramId,
       displayName: "owner",
     });
+    await ctx.runMutation(internal.model.users.touch, { userId });
 
     const separator = args.data.indexOf(":");
     const prefix = separator === -1 ? args.data : args.data.slice(0, separator);

@@ -9,6 +9,34 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-11-22 — Attention policy (Phase 22)
+
+- **One gate for everything unprompted**: `allowProactive` in `notify.ts`
+  reading `lib/notify/policy.ts`. Chose a helper function over the planned
+  `deliverProactive` internal action: an action-to-action hop would cost an
+  extra Convex function call per message and the senders already own their
+  channel calls. The policy runs BEFORE composing, so a dropped tick makes no
+  model call.
+- **Silence lowers volume**: auto-quiet after 24 h without an inbound message
+  (`users.lastInboundAt`, set in `messages.record` for every inbound and by
+  button taps). An owner with no `lastInboundAt` yet counts as inactive.
+- **Check-in/verse switches fold into `notify.kinds`**, but an explicit older
+  `persona.checkins` / `scripture.enabled` still wins while `kinds` is unset.
+  Default for both is now off (behaviour change, owner-approved in the plan).
+- **`defer` vs `drop`**: only mail is deferred through quiet hours (moved to
+  the end of quiet hours, Phase 23). Everything else is dropped, never queued.
+- **Scripture no longer spaces itself from check-ins** (the 50-row scan was
+  retired; both are opt-in). Morning verse still goes before the brief, but
+  only when `scripture` is switched on; Phase 25 moves it into a digest section.
+- **Token cache is sealed** like the refresh token (`cachedAccess`), never
+  plaintext, and cleared on reconnect so a new scope grant is never masked.
+- **Meeting nudges at 15 min** would make the 10-minute nudge late or missed
+  (a 10-minute window needs a tick inside it), so the tick schedules an
+  exact-time `runAt` of itself when an event's ready moment falls before the
+  next tick. Repeats are harmless: every nudge is claimed once.
+
+---
+
 ## 2026-10-19 — Scripture: what the files actually look like
 
 - **Bible files disagree on everything but the numbers.** scrollmapper

@@ -2,7 +2,7 @@
 // the owner can act on, without the same error arriving fifty times.
 //
 // The analogy is a smoke alarm with a hush button: it goes off once, says
-// which room, and stays quiet about the same smoke for an hour unless you
+// which room, and stays quiet about the same smoke for a day unless you
 // ask it to keep shouting.
 
 export type Severity = "critical" | "warn";
@@ -14,8 +14,8 @@ export interface IncidentInput {
   severity?: Severity;
 }
 
-/** Re-alert about the same fingerprint at most once per hour. */
-export const REALERT_MS = 60 * 60 * 1000;
+/** Re-alert about the same fingerprint at most once per day (Phase 22; was hourly). */
+export const REALERT_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Anything key-shaped is replaced before text leaves the server. An error

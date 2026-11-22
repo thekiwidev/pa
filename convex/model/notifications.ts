@@ -24,6 +24,21 @@ export const findByThreadKey = internalQuery({
   },
 });
 
+/**
+ * Thread keys alerted since `sinceMs`, in one range read. The brief used to
+ * look each candidate email's thread up separately (up to 50 queries).
+ */
+export const threadKeysSince = internalQuery({
+  args: { userId: v.id("users"), sinceMs: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("notifications")
+      .withIndex("by_user_sent", (q) => q.eq("userId", args.userId).gte("sentAt", args.sinceMs))
+      .take(200);
+    return rows.flatMap((r) => (r.threadKey ? [r.threadKey] : []));
+  },
+});
+
 /** A brand-new card. `channelMessageId` is what `editCard` needs the next
  *  time this thread gets a reply. */
 export const record = internalMutation({

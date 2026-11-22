@@ -62,6 +62,7 @@ import type * as lib_linear_apiKey from "../lib/linear/apiKey.js";
 import type * as lib_meetings_transcript from "../lib/meetings/transcript.js";
 import type * as lib_net_sniff from "../lib/net/sniff.js";
 import type * as lib_net_urlGuard from "../lib/net/urlGuard.js";
+import type * as lib_notify_policy from "../lib/notify/policy.js";
 import type * as lib_notion_blocks from "../lib/notion/blocks.js";
 import type * as lib_notion_links from "../lib/notion/links.js";
 import type * as lib_notion_lists from "../lib/notion/lists.js";
@@ -194,6 +195,7 @@ declare const fullApi: ApiFromModules<{
   "lib/meetings/transcript": typeof lib_meetings_transcript;
   "lib/net/sniff": typeof lib_net_sniff;
   "lib/net/urlGuard": typeof lib_net_urlGuard;
+  "lib/notify/policy": typeof lib_notify_policy;
   "lib/notion/blocks": typeof lib_notion_blocks;
   "lib/notion/links": typeof lib_notion_links;
   "lib/notion/lists": typeof lib_notion_lists;

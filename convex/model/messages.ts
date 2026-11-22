@@ -22,7 +22,11 @@ export const record = internalMutation({
     ref: v.optional(REF),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("messages", args);
+    const id = await ctx.db.insert("messages", args);
+    if (args.direction === "in") {
+      await ctx.db.patch("users", args.userId, { lastInboundAt: Date.now() });
+    }
+    return id;
   },
 });
 

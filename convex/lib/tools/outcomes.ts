@@ -1165,6 +1165,9 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
     case "brief.preview":
       return str(r, "text") ?? "(nothing to show)";
 
+    case "notify.settings":
+      return str(r, "text") ?? "Done.";
+
     case "persona.set": {
       if (field(r, "found") === false) {
         const available = Array.isArray(field(r, "available")) ? (field(r, "available") as string[]) : [];

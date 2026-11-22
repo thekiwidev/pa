@@ -27,6 +27,7 @@ import {
 import { RECALL_THRESHOLD, fuseHits, mayNudge, messageForRecall } from "./lib/saved/rank";
 import { formatInstant } from "./lib/time";
 import { sendCard, sendMessage } from "./channels/telegram";
+import { allowProactive } from "./notify";
 import { alreadyHtml, escapeTelegramHtml } from "./lib/telegram/html";
 import { listAllIssues } from "./connectors/linear/client";
 import { linearApiKey } from "./tools/router";
@@ -369,6 +370,7 @@ export const nudgeRelevant = internalAction({
     if (!owner) return;
     const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: owner });
     if (!user) return;
+    if ((await allowProactive(ctx, user._id, "saved_nudge")) !== "send") return;
     if (!(await ctx.runQuery(internal.model.saved.hasAny, { userId: user._id }))) return;
 
     let started;
@@ -451,9 +453,10 @@ export const weekendPick = internalAction({
     if (process.env.WEEKEND_PICK === "off") return;
     const owner = process.env.TELEGRAM_OWNER_ID;
     if (!owner) return;
+    const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: owner });
+    if (!user || (await allowProactive(ctx, user._id, "weekend_pick")) !== "send") return;
     const text = await weekendPickText();
     if (text) await sendMessage(owner, text);
-    void ctx;
   },
 });
 

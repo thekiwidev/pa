@@ -2,6 +2,7 @@ import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { sendMessage } from "./channels/telegram";
+import { allowProactive } from "./notify";
 import { allCalendarEvents } from "./tools/router";
 import { whenToMs, isAllDay } from "./lib/calendar/events";
 import {
@@ -88,6 +89,9 @@ export const reconcile = internalAction({
  *      said they are not joining.
  * MEETING_NUDGE_MINUTES="0" turns both off.
  */
+/** A little over the 15-minute cron gap, so one tick always sees the event. */
+const READY_LOOKAHEAD_MS = 20 * 60_000;
+
 export const nudgeUpcoming = internalAction({
   args: {},
   handler: async (ctx) => {
@@ -98,6 +102,9 @@ export const nudgeUpcoming = internalAction({
 
     const user = await ctx.runQuery(internal.model.users.getByTelegramId, { telegramId: ownerId });
     if (!user) return;
+    // One cheap read first: no calendar token or API call for a nudge the
+    // policy would drop (quiet mode, quiet hours, switched off).
+    if ((await allowProactive(ctx, user._id, "meeting_nudge")) !== "send") return;
 
     const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
     const nowMs = Date.now();
@@ -118,6 +125,15 @@ export const nudgeUpcoming = internalAction({
     for (const { event, calendarOf } of found.events) {
       const startMs = whenToMs(event.start, timezone);
       if (startMs === null || isAllDay(event.start)) continue;
+      // The cron is coarse (15 min). An event whose "ready" moment falls
+      // before the next tick gets its own exact-time run; a repeat is
+      // harmless because every nudge is claimed once.
+      const untilMs = startMs - nowMs;
+      const leadMs = leadMinutes * 60_000;
+      if (untilMs > leadMs && untilMs <= leadMs + READY_LOOKAHEAD_MS) {
+        await ctx.scheduler.runAt(startMs - leadMs + 5_000, internal.reminders.nudgeUpcoming, {});
+      }
+
       const stage = meetingStage(startMs, nowMs, timezone, leadMinutes);
       if (!stage) continue;
 

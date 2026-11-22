@@ -3,6 +3,7 @@ import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { reportIncident } from "./ops";
 import { sendMorningBeforeBrief } from "./scripture";
+import { allowProactive } from "./notify";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { runTask } from "./ai/registry";
@@ -379,18 +380,16 @@ async function gatherFacts(
       ? []
       : await ctx.runQuery(internal.model.emailMessages.search, { accountIds, limit: 50 });
 
-  // Was a real-time alert already sent for this thread? One lookup per
-  // candidate email — the list is already narrowed to ~50 rows by the query
-  // above, so this stays cheap. Reuses Phase 5's existing notifications
-  // query rather than adding a new one.
-  const alreadyAlertedByThread = new Map<string, boolean>();
-  for (const m of emailsRaw) {
-    if (alreadyAlertedByThread.has(m.threadId)) continue;
-    const existing = await ctx.runQuery(internal.model.notifications.findByThreadKey, {
-      threadKey: m.threadId,
-    });
-    alreadyAlertedByThread.set(m.threadId, existing !== null);
-  }
+  // Was a real-time alert already sent for this thread? One range read over
+  // the alerts sent since the window opened, not one lookup per email.
+  const alerted = new Set(
+    emailsRaw.length === 0
+      ? []
+      : await ctx.runQuery(internal.model.notifications.threadKeysSince, { userId, sinceMs }),
+  );
+  const alreadyAlertedByThread = new Map<string, boolean>(
+    emailsRaw.map((m) => [m.threadId, alerted.has(m.threadId)]),
+  );
 
   const facts: BriefFactsInput = {
     timezone,
@@ -505,37 +504,41 @@ export const deliver = internalAction({
     const user = await ctx.runQuery(internal.model.users.get, { userId: args.userId });
     if (!user) return;
 
-    // The day opens with thanks before tasks: the morning verse first, once.
-    await sendMorningBeforeBrief(ctx, args.userId);
+    // The owner asked for this digest, so quiet mode lets it through; silent
+    // mode does not. A dropped digest still reschedules: the chain must live.
+    if ((await allowProactive(ctx, args.userId, "digest")) === "send") {
+      // The day opens with thanks before tasks: the morning verse first, once.
+      await sendMorningBeforeBrief(ctx, args.userId);
 
-    let text: string;
-    let outboundId: string;
-    try {
-      text = await gatherAndCompose(ctx, args.userId);
-      outboundId = await sendMessage(user.telegramId, text);
-    } catch (error) {
-      // The check-in silently not arriving is the failure the owner would
-      // otherwise only notice at lunch. Report, then rethrow so the
-      // ensureScheduled sweep still repairs the chain.
-      await reportIncident(ctx, { source: "brief.deliver", error, severity: "critical" });
-      throw error;
+      let text: string;
+      let outboundId: string;
+      try {
+        text = await gatherAndCompose(ctx, args.userId);
+        outboundId = await sendMessage(user.telegramId, text);
+      } catch (error) {
+        // The check-in silently not arriving is the failure the owner would
+        // otherwise only notice at lunch. Report, then rethrow so the
+        // ensureScheduled sweep still repairs the chain.
+        await reportIncident(ctx, { source: "brief.deliver", error, severity: "critical" });
+        throw error;
+      }
+
+      await ctx.runMutation(internal.model.messages.record, {
+        userId: args.userId,
+        channel: "telegram",
+        direction: "out",
+        channelMessageId: outboundId,
+        kind: "text",
+        text,
+      });
+
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "scheduler",
+        action: "brief.deliver",
+        args: { chars: text.length },
+        result: "ok",
+      });
     }
-
-    await ctx.runMutation(internal.model.messages.record, {
-      userId: args.userId,
-      channel: "telegram",
-      direction: "out",
-      channelMessageId: outboundId,
-      kind: "text",
-      text,
-    });
-
-    await ctx.runMutation(internal.model.audit.record, {
-      actor: "scheduler",
-      action: "brief.deliver",
-      args: { chars: text.length },
-      result: "ok",
-    });
 
     // Reschedule for +24h — the self-perpetuating chain. Lagos has no DST
     // (see the note in crons.ts), so a flat +24h never drifts against the
