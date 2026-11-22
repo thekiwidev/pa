@@ -1221,6 +1221,14 @@ function renderOne(outcome: ToolOutcome, timezone: string): string {
       return removed.length > 0 ? `Stopped reading: ${removed.join(", ")}.` : "I don't watch anything like that.";
     }
 
+    case "web.search": {
+      const results = listOf(field(r, "results"));
+      if (results.length === 0) return "I found nothing for that search.";
+      return results
+        .map((x) => `- ${str(x, "title") ?? "?"} (${str(x, "url") ?? ""})`)
+        .join("\n");
+    }
+
     case "web.read": {
       const pages = listOf(field(r, "pages"));
       const readable = pages.filter((p) => field(p, "readable") === true);

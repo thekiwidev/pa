@@ -85,3 +85,24 @@ describe("scoreCandidate / rankCandidates", () => {
     expect(top.filter((t) => t.source === "HN").length).toBeLessThanOrEqual(3);
   });
 });
+
+describe("rankCandidates relevance first", () => {
+  test("a story that matches an interest outranks a fresher popular one that does not", () => {
+    const interests = [interest({ topic: "anthropic claude" })];
+    const match = cand("Anthropic launches Claude Duet", { score: 1, publishedAt: NOW - 3 * DAY });
+    const noise = cand("My weekend CSS tricks", { score: 900, publishedAt: NOW });
+    const out = rankCandidates([noise, match], interests, NOW, { limit: 2 });
+    expect(out[0]!.title).toBe(match.title);
+  });
+  test("with no interests the order is unchanged by the relevance rule", () => {
+    const a = cand("older", { score: 5, publishedAt: NOW - 3 * DAY });
+    const b = cand("newer", { score: 5, publishedAt: NOW });
+    expect(rankCandidates([a, b], [], NOW, { limit: 2 })[0]!.title).toBe("newer");
+  });
+  test("a negative interest keeps its story below neutral ones", () => {
+    const interests = [interest({ topic: "crypto", weight: -1 })];
+    const bad = cand("Crypto rallies again", { score: 900, publishedAt: NOW });
+    const ok = cand("Plain neutral story", { score: 1, publishedAt: NOW - DAY });
+    expect(rankCandidates([bad, ok], interests, NOW, { limit: 2 })[0]!.title).toBe(ok.title);
+  });
+});

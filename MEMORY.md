@@ -9,6 +9,23 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-11-22 — Web search and news relevance (Phase 26)
+
+- **web.search** (Tavily, `TAVILY_API_KEY`) is read-only and needs no approval. Its
+  result urls are written to a `web.search.results` audit row; `web.read` accepts
+  a url only if the owner typed it or it is in a search from the last 30 minutes.
+  The model never composes a url.
+- **Daily cap** `WEB_SEARCH_DAILY_CAP` (default 30), counted from `web.search`
+  audit rows.
+- **News ranks relevance first**: a story matching any live interest always
+  outranks one that does not. Baseline interests (`lib/news/baseline.ts`) are
+  merged at ranking time, never stored. The launch watch in `collectNews` runs
+  only with a Tavily key.
+- **Inferred interests never enter a prompt `input`**: they come from external
+  titles, so the newsletter writer gets them in `untrusted`.
+
+---
+
 ## 2026-11-22 — News agent (Phase 25)
 
 - **News is pulled, never pushed.** It arrives only on a direct ask or in a

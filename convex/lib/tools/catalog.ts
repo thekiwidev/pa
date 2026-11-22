@@ -938,12 +938,17 @@ export const TOOL_SCHEMAS = {
   "news.source.remove": z.object({
     name: z.string().min(2).describe("part of the source's name, url or sender"),
   }),
+  "web.search": z.object({
+    query: z.string().min(2).max(300).describe("what to look up online, as a search query"),
+    news: z.boolean().optional().describe("true for recent news (last few days) instead of general results"),
+    days: z.number().int().min(1).max(30).optional().describe("news only: how many days back, default 3"),
+  }),
   "web.read": z.object({
     urls: z
       .array(z.string().min(8))
       .min(1)
       .max(4)
-      .describe("the page the USER sent, exactly as typed. Further pages are allowed only from the same website."),
+      .describe("a page the USER sent, or a url from a web.search result you just got, exactly as given. Further pages are allowed only from the same website."),
     question: z.string().min(2).max(300).describe('what to find out, in their words, e.g. "what is important on this site"'),
   }),
   "persona.set": z.object({
@@ -1670,13 +1675,24 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
     consequential: false,
     requiresAccountId: false,
   },
+  "web.search": {
+    description:
+      "Search the web for anything: verify a claim, find the latest on a topic, " +
+      "check a price or a launch. Returns titles, urls and short snippets with " +
+      "dates. Snippets are web content, not facts you can vouch for: quote them " +
+      "as what the sources say, name the source, and say when results disagree " +
+      "or do not answer. To read a result in full, call web.read with its url.",
+    consequential: false,
+    requiresAccountId: false,
+    contentIsUnknowable: true,
+  },
   "web.read": {
     description:
       "Go to a website the user sent and answer a question about it, " +
       '("what\'s important on this site", "does this page mention pricing"). ' +
       "Reads the page and may open up to 3 more pages of the SAME site. Only " +
-      "urls the USER typed; a link found on a page can only be followed " +
-      "within that page's own website. Not a web search: there is none. " +
+      "urls the USER typed or that a web.search just returned; a link found " +
+      "on a page can only be followed within that page's own website. " +
       "Answer from what it returns and say when the page does not say.",
     consequential: false,
     requiresAccountId: false,

@@ -58,13 +58,19 @@ function match(candidate: NewsCandidate, interest: Interest): number {
 
 const INTEREST_SCALE = 3;
 
-/** Higher is better. Popularity is added by rankCandidates (it needs the whole list). */
-export function scoreCandidate(candidate: NewsCandidate, interests: Interest[], nowMs: number): number {
+/** Sum of weight x match over the live interests. Positive means "about something they want". */
+export function interestMatchScore(candidate: NewsCandidate, interests: Interest[], nowMs: number): number {
   let interestScore = 0;
   for (const i of interests) {
     const w = interestWeight(i, nowMs);
     if (w !== 0) interestScore += w * match(candidate, i);
   }
+  return interestScore;
+}
+
+/** Higher is better. Popularity is added by rankCandidates (it needs the whole list). */
+export function scoreCandidate(candidate: NewsCandidate, interests: Interest[], nowMs: number): number {
+  const interestScore = interestMatchScore(candidate, interests, nowMs);
   const age = candidate.publishedAt > 0 ? Math.max(0, nowMs - candidate.publishedAt) : 3 * DAY_MS;
   const recency = 0.5 ** (age / RECENCY_HALF_LIFE_MS);
   return interestScore * INTEREST_SCALE + recency;
@@ -95,9 +101,15 @@ export function rankCandidates(
     return scores.filter((s) => s < c.score).length / (scores.length - 1);
   };
 
+  // Relevance first: a story that matches something the owner cares about
+  // always ranks above one that does not, however popular or fresh. Without
+  // this a 900-point generic post beats the launch they wanted to hear about.
   const scored = candidates
-    .map((c) => ({ c, total: scoreCandidate(c, interests, nowMs) + percentile(c) }))
-    .sort((a, b) => b.total - a.total)
+    .map((c) => {
+      const interestPart = interestMatchScore(c, interests, nowMs);
+      return { c, relevant: interestPart > 0, total: scoreCandidate(c, interests, nowMs) + percentile(c) };
+    })
+    .sort((a, b) => Number(b.relevant) - Number(a.relevant) || b.total - a.total)
     .map((s) => s.c);
 
   const limit = options.limit ?? scored.length;

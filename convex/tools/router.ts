@@ -85,6 +85,8 @@ import { fetchViaJina } from "../connectors/social/client";
 import { sourceConfigured, sourceName, type SourceKind } from "../lib/news/sources";
 import { MAX_WEB_READ_PAGES, sameDomainLinks, webReadVerdict } from "../lib/news/webread";
 import { urlKey } from "../lib/news/normalize";
+import { tavilySearch } from "../connectors/web/tavily";
+import { dailyCap, recentResultUrls, searchesLeft } from "../lib/web/search";
 import type { NotifyMode, NotifyPatch } from "../lib/notify/policy";
 import { resolveNeed } from "../lib/scripture/needs";
 import { parseNotionLists, resolveListName } from "../lib/notion/lists";
@@ -2331,9 +2333,39 @@ async function dispatch(
       return { added: r.created, name: feed.label, kind: "rss" };
     }
 
+    case "web.search": {
+      const now = Date.now();
+      const cap = dailyCap(process.env);
+      const made = await ctx.runQuery(internal.model.audit.recentSearches, { action: "web.search", limit: cap + 1 });
+      if (searchesLeft(made.map((m) => m.at), now, cap) === 0) {
+        throw new Error(`I've used today's ${cap} web searches. Try again tomorrow.`);
+      }
+      const results = await tavilySearch(a.query as string, {
+        news: a.news === true,
+        ...(typeof a.days === "number" ? { days: a.days } : {}),
+      });
+      // The result urls are what web.read may open next, and only these.
+      await ctx.runMutation(internal.model.audit.record, {
+        actor: "system",
+        action: "web.search.results",
+        args: { urls: results.map((r) => r.url) },
+        result: "ok",
+      });
+      return {
+        query: a.query,
+        results: results.map((r) => ({
+          title: r.title,
+          url: r.url,
+          snippet: r.snippet,
+          published: r.publishedAt ? formatInstant(r.publishedAt, timezone) : undefined,
+        })),
+      };
+    }
+
     case "web.read": {
       const urls = (a.urls as string[]).map((u) => u.trim()).slice(0, MAX_WEB_READ_PAGES);
-      const owner = await ownerSentUrls(ctx, userId);
+      const searched = await ctx.runQuery(internal.model.audit.recentSearches, { action: "web.search.results", limit: 10 });
+      const owner = [...(await ownerSentUrls(ctx, userId)), ...recentResultUrls(searched, Date.now())];
       const verdicts = urls.map((u) => ({ u, v: webReadVerdict(u, owner) }));
       // The owner chose the site. Anything else (a link found on a page that leaves
       // that site, a URL out of an email) is refused, not opened.

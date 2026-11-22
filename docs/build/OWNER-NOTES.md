@@ -6,6 +6,22 @@ Newest first. Questions that block anything are in the next section. Everything 
 
 None yet.
 
+## Your to-do after Phase 26
+
+- [ ] `TAVILY_API_KEY` is set on prod. Optional: `WEB_SEARCH_DAILY_CAP`.
+- [ ] Ask "search for the latest Claude release": expect a few sourced lines.
+- [ ] Ask "is it true that <something recent>": it should name its sources and say if they disagree.
+- [ ] Say "catch me up on tech": expect launches and offers first. If generic blog posts still lead, send me the output.
+- [ ] Ask it to open one of the results in full.
+
+## Decisions made without you (Phase 26)
+
+| Decision | Why |
+|---|---|
+| Baseline interests are code, merged at ranking | you are already seeded; a constant needs no migration |
+| Search result urls stored in the audit log | no new table; keeps the append-only log as the only record |
+| No LLM relevance judge yet | a model call per story costs more than ranking first |
+
 ## Your to-do after Phase 25
 
 - [ ] Optional keys: `DAILYDEV_TOKEN` (may need daily.dev Plus), `STACKEXCHANGE_KEY` (optional), Reddit keys from Phase 24. Names in `docs/ENV.md`. Without them those sources are skipped.

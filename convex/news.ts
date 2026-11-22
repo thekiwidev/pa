@@ -23,6 +23,8 @@ import { fetchViaJina } from "./connectors/social/client";
 import { CALLBACK_PREFIX } from "./notify";
 import { dedupeCandidates, urlHash, type NewsCandidate } from "./lib/news/normalize";
 import { rankCandidates, type Interest } from "./lib/news/rank";
+import { baselineInterests, launchQueries } from "./lib/news/baseline";
+import { tavilySearch } from "./connectors/web/tavily";
 import {
   SOURCE_KINDS,
   senderMatches,
@@ -95,6 +97,33 @@ async function newsletterItems(ctx: ActionCtx, userId: Id<"users">, spec: Source
     }));
 }
 
+const LAUNCH_RESULTS_EACH = 8;
+
+async function launchWatch(ctx: ActionCtx, userId: Id<"users">, nowMs: number): Promise<{ items: NewsCandidate[]; failed: boolean }> {
+  const rows = await ctx.runQuery(internal.model.interests.active, { userId, nowMs });
+  const queries = launchQueries(rows.map(toInterest), nowMs);
+  let failed = false;
+  const batches = await mapLimit(queries, 3, async (query) => {
+    try {
+      const found = await tavilySearch(query, { news: true, days: 3, max: LAUNCH_RESULTS_EACH });
+      // Tavily returns best-first: a falling score keeps that order inside this source.
+      return found.map((r, i): NewsCandidate => ({
+        title: r.title,
+        url: r.url,
+        source: "Web news",
+        score: LAUNCH_RESULTS_EACH - i,
+        publishedAt: r.publishedAt ?? nowMs,
+        snippet: r.snippet,
+      }));
+    } catch (error) {
+      failed = true;
+      await reportIncident(ctx, { source: "news.tavily", error, severity: "warn" });
+      return [] as NewsCandidate[];
+    }
+  });
+  return { items: batches.flat(), failed };
+}
+
 export interface CollectResult {
   /** Sources that were tried, with how many stories each gave. */
   sources: { name: string; count: number; failed: boolean }[];
@@ -124,6 +153,13 @@ export async function collectNews(ctx: ActionCtx, userId: Id<"users">, topic?: s
       return { name, items: [] as NewsCandidate[], failed: true };
     }
   });
+
+  // The launch watch: news searches for model launches, product announcements
+  // and offers, plus the owner's own topics. Skipped without a Tavily key.
+  const watched = process.env.TAVILY_API_KEY ? await launchWatch(ctx, userId, now) : { items: [] as NewsCandidate[], failed: false };
+  if (watched.items.length > 0 || watched.failed) {
+    results.push({ name: "Web news", items: watched.items, failed: watched.failed });
+  }
 
   const sent = new Set(await ctx.runQuery(internal.model.news.sentHashes, { userId, sinceMs: now - POOL_DAYS * DAY_MS }));
   const fresh = dedupeCandidates(results.flatMap((r) => r.items), sent).map((c) => ({
@@ -156,7 +192,10 @@ async function pickStories(
     title: r.title, url: r.url, source: r.source, score: r.score, publishedAt: r.publishedAt, snippet: r.snippet,
   }));
   const interestRows = await ctx.runQuery(internal.model.interests.active, { userId, nowMs: now });
-  const interests = interestRows.map(toInterest);
+  // The owner's own interests, then the standing baseline (launches and offers).
+  // Baseline topics are embedded every run: they are not stored rows.
+  const baseline = baselineInterests(now);
+  const interests = [...interestRows.map(toInterest), ...baseline];
   const asked: Interest[] = topic
     ? [{ topic, weight: 3, origin: "explicit", createdAt: now }]
     : [];
@@ -165,7 +204,12 @@ async function pickStories(
 
   // Embeddings only when something can use them: interests or a topic to compare against.
   const unembedded = interestRows.filter((i) => !i.embedding).slice(0, 30);
-  const texts = [...pre.map((c) => c.title), ...unembedded.map((i) => i.topic), ...(topic ? [topic] : [])];
+  const texts = [
+    ...pre.map((c) => c.title),
+    ...unembedded.map((i) => i.topic),
+    ...baseline.map((b) => b.topic),
+    ...(topic ? [topic] : []),
+  ];
   let ranked = pre;
   if (interests.length + asked.length > 0) {
     const vectors = await embedTexts(texts, "document");
@@ -176,11 +220,12 @@ async function pickStories(
         unembedded.map(async (row, i) => {
           const vec = vectors[pre.length + i];
           if (!vec) return;
-          const live = interests.find((x) => x.topic === row.topic);
+          const live = interests.find((x) => x.topic === row.topic && x.origin === (row.origin === "inferred" ? "inferred" : "explicit"));
           if (live) live.embedding = vec;
           await ctx.runMutation(internal.model.interests.setEmbedding, { id: row._id, embedding: vec });
         }),
       );
+      baseline.forEach((b, i) => { b.embedding = vectors[pre.length + unembedded.length + i]; });
       const topicVec = topic ? vectors[texts.length - 1] : undefined;
       const askedWithVec = asked.map((a) => ({ ...a, embedding: topicVec }));
       ranked = rankCandidates(pre, [...interests, ...askedWithVec], now, { limit: count });
@@ -233,17 +278,23 @@ export async function sendNewsletter(ctx: ActionCtx, userId: Id<"users">, option
   let items: NewsletterItem[];
   try {
     const interestRows = await ctx.runQuery(internal.model.interests.active, { userId, nowMs: Date.now() });
-    const likes = interestRows.filter((i) => i.weight > 0).map((i) => i.topic).slice(0, 12);
+    // Only topics the owner typed go in `input`. Learned ones come from story and
+    // page titles (external text), so they travel in `untrusted` like the stories.
+    const typed = interestRows.filter((i) => i.weight > 0 && i.origin !== "inferred").map((i) => i.topic).slice(0, 12);
+    const learned = interestRows.filter((i) => i.weight > 0 && i.origin === "inferred").map((i) => i.topic).slice(0, 12);
     const result = await runTask("WRITE_NEWSLETTER", {
       system: WRITE_NEWSLETTER_SYSTEM,
       input:
         `Write the newsletter for these ${stories.length} stories, in the order given.` +
-        (likes.length > 0 ? ` The reader's current interests: ${likes.join(", ")}.` : "") +
+        (typed.length > 0 ? ` The reader's current interests: ${typed.join(", ")}.` : "") +
         (options.topic ? ` They asked specifically about: ${options.topic}.` : ""),
-      untrusted: stories.map((s, i) => ({
-        label: `story ${i + 1}`,
-        content: [`url: ${s.url}`, `source: ${s.source}`, `title: ${s.title}`, bodies[i] ? `text:\n${bodies[i]}` : `snippet: ${s.snippet}`].join("\n"),
-      })),
+      untrusted: [
+        ...stories.map((s, i) => ({
+          label: `story ${i + 1}`,
+          content: [`url: ${s.url}`, `source: ${s.source}`, `title: ${s.title}`, bodies[i] ? `text:\n${bodies[i]}` : `snippet: ${s.snippet}`].join("\n"),
+        })),
+        ...(learned.length > 0 ? [{ label: "learned interests", content: learned.join("\n") }] : []),
+      ],
       maxOutputTokens: 2200,
       json: true,
     });

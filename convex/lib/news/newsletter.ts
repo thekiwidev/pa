@@ -20,6 +20,7 @@ Rules:
 - Use only the given urls, copied exactly. Never add a story or a link.
 - 2 or 3 keyPoints per story, each a concrete fact from the text, under 140 characters. If only a headline was available, give one keyPoint and say so in whyItMatters.
 - whyItMatters under 200 characters, plain, no hype. Use the reader's stated interests when they apply.
+- Lead whyItMatters with what is new: a launch, a release, a price or plan change. If a story is only commentary or a tutorial, say so plainly rather than dressing it up.
 - Keep the order given.`;
 
 export interface NewsletterItem {

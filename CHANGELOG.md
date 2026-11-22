@@ -9,6 +9,19 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — web search and sharper news (2026-11-22)
+
+- **Web search.** Ask it to look something up or verify a claim and it searches
+  the web (Tavily), answers from the results with the source named, and can open
+  a result in full. 30 searches a day by default.
+- **News that matters.** Newsletters now put launches first: new models from
+  Anthropic, OpenAI and Google, new products, plan and pricing changes. A launch
+  watch searches for these every time, and a story that matches what you care
+  about always outranks a popular one that does not.
+- **Fixed:** topics learned from story titles were passed to the model as
+  instructions-adjacent text; they now go in as untrusted content.
+- Docs: `docs/build/PHASE-26-web-search.md`. Not yet tried against live Tavily.
+
 ### Added — news agent and web tasks (2026-11-22)
 
 - **Newsletter on request.** "Catch me up on tech", "what's new in AI agents",

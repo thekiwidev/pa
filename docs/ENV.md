@@ -118,6 +118,13 @@ source is skipped, never an error. Names only.
 | `DAILYDEV_TOKEN` | daily.dev feed (may need daily.dev Plus) | daily.dev is skipped |
 | `STACKEXCHANGE_KEY` | Stack Overflow source, 10k requests/day instead of 300 | keyless 300/day |
 
+## Web search (Phase 26)
+
+| Variable | Needed for | Without it |
+|---|---|---|
+| `TAVILY_API_KEY` | `web.search` and the news launch watch | web.search says it is not set up; the launch watch is skipped |
+| `WEB_SEARCH_DAILY_CAP` | optional; searches per 24 hours, default 30 | 30 |
+
 ## Never an environment variable
 
 Per-mailbox OAuth **refresh tokens** (Gmail, Zoho, Outlook). They are encrypted

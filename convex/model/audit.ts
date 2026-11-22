@@ -1,4 +1,4 @@
-import { internalMutation } from "../_generated/server";
+import { internalMutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 
 /**
@@ -33,5 +33,27 @@ export const record = internalMutation({
   },
   handler: async (ctx, args) => {
     return await ctx.db.insert("auditLogs", args);
+  },
+});
+
+/**
+ * Recent web search audit rows: "web.search" (one per call, for the daily cap)
+ * and "web.search.results" (the result urls, written by the tool itself) (the only urls web.read may open that the owner did not
+ * type). A read, so the append-only rule is untouched.
+ */
+export const recentSearches = internalQuery({
+  args: { action: v.union(v.literal("web.search"), v.literal("web.search.results")), limit: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("auditLogs")
+      .withIndex("by_action", (q) => q.eq("action", args.action))
+      .order("desc")
+      .take(Math.min(args.limit, 200));
+    return rows.map((r) => ({
+      at: r._creationTime,
+      urls: Array.isArray((r.args as { urls?: unknown })?.urls)
+        ? ((r.args as { urls: unknown[] }).urls.filter((u): u is string => typeof u === "string"))
+        : [],
+    }));
   },
 });
