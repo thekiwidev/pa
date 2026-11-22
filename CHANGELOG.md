@@ -9,6 +9,26 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Changed — email alerts: your words decide, and only unread mail pings (2026-11-22)
+
+- **Say what matters.** "Alert me about invoices from clients", "never alert
+  me about login notices" (stored as `email_importance` context) now reach
+  the classifier whole and outrank its rubric. List and remove them with
+  "show my context" / "forget that". The "Not important" button now also
+  offers "Never alert for <kind> at all?" for security, promotion and
+  newsletter mail.
+- **Unread only.** An important (HIGH) mail waits 15 minutes
+  (`notify.emailGraceMinutes`); if you read it on your phone first, no
+  alert. CRITICAL still pages at once. One "Important and unread for 48h"
+  reminder per thread, never a second. Mail that arrives already read never
+  alerts.
+- **Routine security and sign-in notices, OTPs, receipts and shipping
+  updates are NORMAL** (digest), not HIGH. Classifier `v4`.
+- **Quiet hours** (default 22:00-07:00) defer mail alerts to the morning
+  instead of losing them; CRITICAL pages through.
+- Docs: `docs/build/PHASE-23-email-importance-unread.md`. Not yet exercised
+  against a live mailbox.
+
 ### Changed — quiet by default: one attention policy (2026-11-22)
 
 - **Silent unless it matters.** Every unprompted message now passes

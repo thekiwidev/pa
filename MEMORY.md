@@ -9,6 +9,27 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-11-22 — Owner-defined importance and the unread chain (Phase 23)
+
+- **Criteria live in `userContext`** (category `email_importance`), not a new
+  table (MEMORY 2026-08-24). They are the owner's own sentences, so they go in
+  the classifier's trusted `input`, uncapped and apart from the 15 owner facts;
+  the email stays `untrusted`.
+- **The "never alert for this kind" sentence is built from the classifier's
+  category enum**, never from the email subject or body: that text is
+  sender-written and this sentence becomes trusted policy.
+- **Unread is checked locally first, then against Gmail** (`format=minimal`).
+  Fails open on any Gmail error except 404, because a missed important mail is
+  worse than one extra alert.
+- **Follow-up is claimed in a mutation** (`notifications.claimFollowup`)
+  before sending: Convex has no unique constraint, so check-then-set inside one
+  mutation is the only race-free once-only.
+- **Mail already read at ingest never alerts, CRITICAL included.** A deviation
+  from the plan's "CRITICAL immediately, as today".
+- **Classifier v4 is not backfilled.** Old rows keep their v3 importance.
+
+---
+
 ## 2026-11-22 — Attention policy (Phase 22)
 
 - **One gate for everything unprompted**: `allowProactive` in `notify.ts`

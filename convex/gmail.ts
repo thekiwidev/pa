@@ -2,7 +2,7 @@ import { internalAction, internalQuery } from "./_generated/server";
 import type { ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { reportIncident } from "./ops";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { seal, open } from "./security/crypto";
 import {
@@ -22,6 +22,7 @@ import {
   listLabels,
   createLabel,
   GmailApiError,
+  getMessageLabels,
 } from "./connectors/gmail/client";
 import { normalizeMessage, type NormalizedEmail } from "./connectors/gmail/normalize";
 import { runTask } from "./ai/registry";
@@ -39,7 +40,10 @@ import {
 } from "./lib/email/classification";
 import { describeLinksForClassifier } from "./lib/email/links";
 import { sendMessage } from "./channels/telegram";
-import { allowProactive } from "./notify";
+import { allowProactive, quietEndMs } from "./notify";
+import { FOLLOWUP_AFTER_MS, FOLLOWUP_LEAD, alertStep, isUnread } from "./lib/email/unread";
+import { notifyFrom } from "./lib/notify/policy";
+import { splitOwnerContext } from "./lib/email/importance";
 
 /** How far back a sync looks. Gmail's `q` syntax. */
 const SYNC_WINDOW = "newer_than:2d";
@@ -567,6 +571,7 @@ async function classifyMessage(
       ctx.runQuery(internal.model.userContext.list, { userId }),
     ]);
 
+    const owner = splitOwnerContext(ownerContext);
     const haystack = `${normalized.subject ?? ""} ${normalized.bodyText ?? ""}`.toLowerCase();
     const projectNames = projects.map((p) => p.name);
     const projectKeywordHit = projectNames.some((name) => haystack.includes(name.toLowerCase()));
@@ -626,7 +631,8 @@ async function classifyMessage(
         dmarc: normalized.authResults?.dmarc,
         senderImportance: person?.importance,
         knownProjects: projectNames,
-        ownerFacts: ownerContext.map((c) => c.text),
+        ownerFacts: owner.facts,
+        ownerCriteria: owner.criteria,
       }),
       // The body reaches the model ONLY here — never merged into `input`.
       // So do the links: their visible text is sender-written.
@@ -958,46 +964,128 @@ async function deliverIfDue(
   normalized: NormalizedEmail,
   classified: ClassificationResult,
 ): Promise<void> {
-  const timezone = process.env.USER_TIMEZONE ?? "Africa/Lagos";
   // A user rule saying "don't alert me about this" outranks importance.
-  // Checked before the window so it holds at every hour of the day.
+  // Checked before anything else so it holds at every hour of the day.
   if (classified.neverAlert) return;
   if (isOwnMessage(normalized, account.accountEmail)) return;
   if (Date.now() - normalized.receivedAt > ALERT_MAX_AGE_MS) return;
+  // Already read (on the phone, in another client): nothing to interrupt.
+  if (!isUnread(normalized.labelIds)) return;
 
-  const alertable = classified.importance === "CRITICAL" || classified.importance === "HIGH";
-  if (!alertable) return;
+  if (classified.importance === "CRITICAL") {
+    // Pages now, through quiet hours, as before. The 48h reminder is armed
+    // by the step itself.
+    await runAlertStep(ctx, emailMessageId, { followup: false, checkUnread: false });
+    return;
+  }
+  if (classified.importance !== "HIGH") return;
 
-  // Quiet hours and the owner's switches live in lib/notify/policy.ts.
-  // CRITICAL pages through quiet hours; HIGH outside them only (a deferred
-  // or dropped alert still appears in the next brief).
-  const decision = await allowProactive(ctx, account.userId, "email_important", {
-    urgent: classified.importance === "CRITICAL",
-  });
-  if (decision !== "send") return;
+  // HIGH waits a grace period so mail the owner reads on their phone first
+  // never pings them a second time; alertIfUnread re-checks Gmail.
+  const { notify } = await ctx.runQuery(internal.model.users.attention, { userId: account.userId });
+  await ctx.scheduler.runAfter(
+    notifyFrom(notify).emailGraceMinutes * 60_000,
+    internal.gmail.alertIfUnread,
+    { emailMessageId, followup: false },
+  );
+}
+
+/**
+ * Fires after the grace period, again after quiet hours when it was
+ * deferred, and once more 48 hours after an alert (followup: true). Each
+ * firing re-checks that the mail is still unread; a read mail ends the chain.
+ */
+export const alertIfUnread = internalAction({
+  args: { emailMessageId: v.id("emailMessages"), followup: v.boolean() },
+  handler: async (ctx, args) => {
+    await runAlertStep(ctx, args.emailMessageId, { followup: args.followup, checkUnread: true });
+  },
+});
+
+async function runAlertStep(
+  ctx: ActionCtx,
+  emailMessageId: Id<"emailMessages">,
+  opts: { followup: boolean; checkUnread: boolean },
+): Promise<void> {
+  const row = await ctx.runQuery(internal.model.emailMessages.getById, { emailMessageId });
+  if (!row) return;
+  const account = await ctx.runQuery(internal.model.connectedAccounts.get, { accountId: row.accountId });
+  if (!account || account.status !== "ACTIVE") return;
+
+  const read = opts.checkUnread ? !(await stillUnread(ctx, row)) : false;
+  const policy = read
+    ? "drop"
+    : await allowProactive(ctx, account.userId, opts.followup ? "email_unread_followup" : "email_important", {
+        urgent: row.importance === "CRITICAL",
+      });
+  const step = alertStep({ read, policy });
+  if (step === "stop") return;
+  if (step === "defer") {
+    await ctx.scheduler.runAt(await quietEndMs(ctx, account.userId), internal.gmail.alertIfUnread, {
+      emailMessageId,
+      followup: opts.followup,
+    });
+    return;
+  }
+
+  // One reminder per thread, claimed before sending so a race cannot double it.
+  if (opts.followup && !(await ctx.runMutation(internal.model.notifications.claimFollowup, { threadKey: row.threadId }))) {
+    return;
+  }
 
   const user = await ctx.runQuery(internal.model.users.get, { userId: account.userId });
   if (!user) return;
+  const classification = (row.classification ?? {}) as { whyItMatters?: string; deadlineMentioned?: string | null };
 
   await ctx.runAction(internal.notify.sendAlert, {
     userId: account.userId,
     // A private Telegram chat's id equals the user's own id -- the same
     // fact notifyNeedsReauth above already relies on.
     chatId: user.telegramId,
-    timezone,
+    timezone: process.env.USER_TIMEZONE ?? "Africa/Lagos",
     emailMessageId,
-    threadKey: normalized.threadId,
+    threadKey: row.threadId,
     accountLabel: account.label,
-    fromAddress: normalized.fromAddress,
-    fromName: normalized.fromName,
-    subject: normalized.subject,
-    isSpam: normalized.labelIds.includes("SPAM"),
-    authResults: normalized.authResults,
-    importance: classified.importance,
-    whyItMatters: classified.whyItMatters,
-    deadlineMentioned: classified.deadlineMentioned ?? undefined,
-    receivedAt: normalized.receivedAt,
+    fromAddress: row.fromAddress,
+    fromName: row.fromName,
+    subject: row.subject,
+    isSpam: row.labelIds.includes("SPAM"),
+    authResults: row.authResults,
+    importance: row.importance ?? "HIGH",
+    whyItMatters: classification.whyItMatters || undefined,
+    deadlineMentioned: classification.deadlineMentioned ?? undefined,
+    receivedAt: row.receivedAt,
+    ...(opts.followup ? { lead: FOLLOWUP_LEAD } : {}),
   });
+
+  // The first alert arms the single 48h reminder.
+  if (!opts.followup) {
+    await ctx.scheduler.runAfter(FOLLOWUP_AFTER_MS, internal.gmail.alertIfUnread, {
+      emailMessageId,
+      followup: true,
+    });
+  }
+}
+
+/**
+ * Is the mail still unread? The local row answers "read" for free; an
+ * "unread" row is confirmed against Gmail, which the owner's phone may have
+ * changed since the last sync. Fails open: when Gmail cannot be asked, an
+ * important mail alerts rather than going missing. A deleted mail is read.
+ */
+async function stillUnread(ctx: ActionCtx, row: Doc<"emailMessages">): Promise<boolean> {
+  if (!isUnread(row.labelIds)) return false;
+  try {
+    const accessToken = await accessTokenFor(ctx, row.accountId);
+    const labelIds = await getMessageLabels(accessToken, row.providerMessageId);
+    if (labelIds.join() !== row.labelIds.join()) {
+      await ctx.runMutation(internal.model.emailMessages.setLabels, { emailMessageId: row._id, labelIds });
+    }
+    return isUnread(labelIds);
+  } catch (error) {
+    if (error instanceof GmailApiError && error.status === 404) return false;
+    return true;
+  }
 }
 
 const SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";

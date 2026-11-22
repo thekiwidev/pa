@@ -86,6 +86,12 @@ export async function getMessage(
   return await gmailFetch(accessToken, `/messages/${id}?format=full`);
 }
 
+/** Labels only (`format=minimal`): the cheap way to ask "is it still unread?". */
+export async function getMessageLabels(accessToken: string, id: string): Promise<string[]> {
+  const msg = await gmailFetch<GmailMessage>(accessToken, `/messages/${id}?format=minimal`);
+  return msg.labelIds ?? [];
+}
+
 export interface OutgoingReply {
   from: string;
   to: string[];

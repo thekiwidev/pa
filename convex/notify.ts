@@ -17,6 +17,7 @@ import {
   decideSend,
   describeNotify,
   notifyFrom,
+  quietHoursEndMs,
   type NotifyKind,
   type NotifyPatch,
   type SendDecision,
@@ -45,6 +46,7 @@ export const CALLBACK_PREFIX = {
   FULL: "full",
   DRAFT: "draft",
   NOT_IMPORTANT: "notimportant",
+  NEVER_CATEGORY: "nevercat",
 } as const;
 
 export interface CardEmail {
@@ -64,6 +66,8 @@ export interface CardEmail {
   deadlineMentioned?: string | null;
   /** When the email arrived (ms epoch), from Gmail's internalDate. */
   receivedAt?: number;
+  /** A first line above the card, e.g. the 48h-unread reminder. Our own text. */
+  lead?: string;
 }
 
 export interface ComposedCard {
@@ -102,7 +106,8 @@ export function composeCard(email: CardEmail, timezone: string, nowMs = Date.now
   if (email.receivedAt !== undefined) head.push(formatWhen(email.receivedAt, nowMs, timezone));
   if (email.isSpam) head.push("⚠️ found in SPAM");
 
-  const lines = [head.join(" · ")];
+  const lines = email.lead ? [`⏰ <b>${escapeTelegramHtml(email.lead)}</b>`] : [];
+  lines.push(head.join(" · "));
   lines.push(
     email.whyItMatters
       ? renderSummaryHtml(email.whyItMatters, {
@@ -167,6 +172,7 @@ export const sendAlert = internalAction({
     whyItMatters: v.optional(v.string()),
     deadlineMentioned: v.optional(v.string()),
     receivedAt: v.optional(v.number()),
+    lead: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const email: CardEmail = {
@@ -181,6 +187,7 @@ export const sendAlert = internalAction({
       whyItMatters: args.whyItMatters,
       deadlineMentioned: args.deadlineMentioned,
       receivedAt: args.receivedAt,
+      lead: args.lead,
     };
     const card = composeCard(email, args.timezone);
 
@@ -283,6 +290,12 @@ export async function allowProactive(
     tz: process.env.USER_TIMEZONE ?? "Africa/Lagos",
     urgent: opts.urgent,
   });
+}
+
+/** When quiet hours next end, for moving a deferred alert instead of losing it. */
+export async function quietEndMs(ctx: ActionCtx, userId: Id<"users">): Promise<number> {
+  const { notify } = await ctx.runQuery(internal.model.users.attention, { userId });
+  return quietHoursEndMs(notifyFrom(notify), Date.now(), process.env.USER_TIMEZONE ?? "Africa/Lagos");
 }
 
 /** For stored switches that were plain booleans (persona.checkins). */

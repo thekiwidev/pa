@@ -377,6 +377,8 @@ export default defineSchema({
     channelMessageId: v.optional(v.string()), // to EDIT the card in place
     payload: v.any(),
     sentAt: v.number(),
+    // Set the moment the one "still unread after 48h" reminder is claimed.
+    followupSentAt: v.optional(v.number()),
   })
     .index("by_thread_key", ["threadKey"])
     .index("by_user_sent", ["userId", "sentAt"]),

@@ -11,6 +11,7 @@ export const CONTEXT_CATEGORIES = [
   "working_style", // hours, timezone habits, how they plan
   "domain", // industry terms, project vocabulary, acronyms
   "relationships", // who matters to them and why
+  "email_importance", // "alert me: ..." / "never alert: ..." (lib/email/importance.ts)
   "other", // the escape hatch — deliberately last
 ] as const;
 

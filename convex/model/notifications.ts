@@ -39,6 +39,25 @@ export const threadKeysSince = internalQuery({
   },
 });
 
+/**
+ * Claim the single 48h reminder for a thread. Check-then-set inside one
+ * mutation, so two racing runs can never both win. False when the thread has
+ * no alert row (the alert was rate-limited) or its reminder was already sent.
+ */
+export const claimFollowup = internalMutation({
+  args: { threadKey: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("notifications")
+      .withIndex("by_thread_key", (q) => q.eq("threadKey", args.threadKey))
+      .order("desc")
+      .first();
+    if (!row || row.followupSentAt !== undefined) return false;
+    await ctx.db.patch("notifications", row._id, { followupSentAt: Date.now() });
+    return true;
+  },
+});
+
 /** A brand-new card. `channelMessageId` is what `editCard` needs the next
  *  time this thread gets a reply. */
 export const record = internalMutation({

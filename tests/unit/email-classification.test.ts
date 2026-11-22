@@ -7,6 +7,7 @@ import {
   applyOverrides,
   applyFloor,
   CLASSIFIER_VERSION,
+  CLASSIFICATION_SYSTEM_PROMPT,
   type Importance,
 } from "../../convex/lib/email/classification";
 
@@ -164,5 +165,37 @@ describe("applyFloor", () => {
 });
 
 test("classifierVersion is stamped so a re-run is comparable", () => {
-  expect(CLASSIFIER_VERSION).toBe("v3");
+  expect(CLASSIFIER_VERSION).toBe("v4");
+});
+
+describe("owner importance criteria (v4)", () => {
+  const facts = { fromAddress: "a@b.com", isInSpam: false, knownProjects: [] as string[] };
+
+  test("every criterion is passed, uncapped, as owner policy in the trusted input", () => {
+    const criteria = Array.from({ length: 30 }, (_, i) => `alert me: thing number ${i}`);
+    const input = buildClassificationInput({ ...facts, ownerCriteria: criteria });
+    for (const c of criteria) expect(input).toContain(c);
+    expect(input).toContain("Owner's alert rules");
+  });
+
+  test("owner facts stay capped at 15 and are separate from criteria", () => {
+    const ownerFacts = Array.from({ length: 30 }, (_, i) => `fact ${i}`);
+    const input = buildClassificationInput({ ...facts, ownerFacts, ownerCriteria: ["never alert: promotions"] });
+    expect(input).toContain("fact 14");
+    expect(input).not.toContain("fact 15");
+    expect(input).toContain("never alert: promotions");
+  });
+
+  test("no criteria means no section", () => {
+    expect(buildClassificationInput(facts)).not.toContain("Owner's alert rules");
+  });
+
+  test("the prompt says owner rules outrank the rubric", () => {
+    expect(CLASSIFICATION_SYSTEM_PROMPT).toContain("outrank");
+  });
+
+  test("routine sign-in and security notices are NORMAL, not HIGH or CRITICAL", () => {
+    expect(CLASSIFICATION_SYSTEM_PROMPT).toMatch(/routine (security|sign-in|login)[^.]*NORMAL/is);
+    expect(CLASSIFICATION_SYSTEM_PROMPT).not.toContain("a new sign-in, a password change");
+  });
 });

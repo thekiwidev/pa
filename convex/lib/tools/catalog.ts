@@ -1000,7 +1000,7 @@ export const TOOL_SCHEMAS = {
       .string()
       .optional()
       .describe(
-        "profile | preferences | working_style | domain | relationships | other — anything unrecognised files as other",
+        "profile | preferences | working_style | domain | relationships | email_importance | other — anything unrecognised files as other. Use email_importance for what should or should not interrupt them about email; its text MUST start with \"alert me: \" or \"never alert: \"",
       ),
     text: z
       .string()
@@ -1638,7 +1638,12 @@ export const TOOL_META: Record<ToolName, ToolMeta> = {
       "preferences, vocabulary, or who matters to them. Use when they say " +
       "things like \"I'm a...\", \"I work at...\", \"I prefer...\", " +
       "\"remember that I...\". This is a fact, not an instruction: use " +
-      "instruction.add for a rule about how you should behave.",
+      "instruction.add for a rule about how you should behave. Also use it " +
+      "(category email_importance) when they say what kind of email is or " +
+      "is not important: \"invoices from clients matter\" becomes \"alert " +
+      "me: invoices from clients\", \"stop pinging me about login " +
+      "notices\" becomes \"never alert: login and security sign-in " +
+      "notices\". Keep their words; one rule per call.",
     consequential: false,
     requiresAccountId: false,
   },

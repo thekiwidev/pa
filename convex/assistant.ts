@@ -12,7 +12,7 @@ import {
 } from "./scripture";
 import { resolveNeed } from "./lib/scripture/needs";
 import { sendMessage, sendCard, downloadFile } from "./channels/telegram";
-import { alreadyHtml } from "./lib/telegram/html";
+import { alreadyHtml, escapeTelegramHtml } from "./lib/telegram/html";
 import { markdownToTelegramHtml } from "./lib/telegram/richtext";
 import { resolveProviderChain } from "./lib/ai/resolve";
 import { modelEnvVar } from "./lib/ai/tiers";
@@ -28,6 +28,7 @@ import {
 import type { UntrustedBlock } from "./lib/ai/prompt";
 import type { Doc } from "./_generated/dataModel";
 import { updateNotify } from "./notify";
+import { EMAIL_IMPORTANCE_CATEGORY, categoryCriterion } from "./lib/email/importance";
 import { parseHours, type NotifyMode } from "./lib/notify/policy";
 import {
   executeToolCall,
@@ -1800,6 +1801,11 @@ export const handleCallback = internalAction({
         case CALLBACK_PREFIX.NOT_IMPORTANT:
           await markNotImportant(ctx, userId, args.chatId, emailMessageId);
           return;
+        case "noop":
+          return;
+        case CALLBACK_PREFIX.NEVER_CATEGORY:
+          await neverAlertForCategory(ctx, userId, args.chatId, emailMessageId);
+          return;
         default:
           await sendMessage(args.chatId, `Unrecognized button: ${args.data}`);
       }
@@ -1932,7 +1938,44 @@ async function markNotImportant(
     pattern: message.fromAddress,
   });
 
-  await sendMessage(chatId, `Got it -- I won't flag ${message.fromAddress} as important again.`);
+  const offer = categoryCriterion((message.classification as { category?: string } | undefined)?.category);
+  if (!offer) {
+    await sendMessage(chatId, `Got it -- I won't flag ${message.fromAddress} as important again.`);
+    return;
+  }
+  // Second step, owner's choice: a whole kind of mail, not just this sender.
+  // The sentence is drafted from the category, never from the email's text.
+  await sendCard(
+    chatId,
+    alreadyHtml(
+      escapeTelegramHtml(
+        `Got it -- I won't flag ${message.fromAddress} as important again.\nNever alert for ${offer.slice("never alert: ".length)} at all?`,
+      ),
+    ),
+    [[{ text: "Yes, never alert", data: `${CALLBACK_PREFIX.NEVER_CATEGORY}:${message._id}` }, { text: "Only this sender", data: "noop" }]],
+  );
+}
+
+async function neverAlertForCategory(
+  ctx: ActionCtx,
+  userId: Id<"users">,
+  chatId: string,
+  emailMessageId: string,
+): Promise<void> {
+  const message = await ctx.runQuery(internal.model.emailMessages.getById, {
+    emailMessageId: emailMessageId as Id<"emailMessages">,
+  });
+  const criterion = categoryCriterion((message?.classification as { category?: string } | undefined)?.category);
+  if (!message || !criterion) {
+    await sendMessage(chatId, "I can't name a kind of mail for that one. Tell me in words what to stop alerting for.");
+    return;
+  }
+  await ctx.runMutation(internal.model.userContext.add, {
+    userId,
+    category: EMAIL_IMPORTANCE_CATEGORY,
+    text: criterion,
+  });
+  await sendMessage(chatId, `Saved: "${criterion}". Say "show my context" to review or remove it.`);
 }
 
 async function sendDraftCommand(ctx: ActionCtx, userId: Id<"users">, draftId: string): Promise<string> {
