@@ -60,6 +60,9 @@ export const TASKS = {
   // A saved post written up as a full Notion note: prose the owner reads, so
   // DRAFT. One call per "add this to my notes", not per message.
   WRITE_POST_NOTE:     { tier: "DRAFT" },
+  // A web page read through the reader proxy, filed like a post (Phase 24).
+  // DRAFT: one call per link the owner sends, prose-quality summary.
+  SUMMARIZE_PAGE:      { tier: "DRAFT" },
   // "Is this saved item genuinely useful for what they are doing now?"
   JUDGE_RELEVANCE:     { tier: "CHEAP_STRUCTURED" },
   // Scripture (2026-10-19). Choosing the passage is a judgement about the

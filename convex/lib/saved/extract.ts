@@ -19,7 +19,7 @@ export const ENTITY_TYPES = [
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export const POST_KINDS = ["list", "tutorial", "tool", "news", "opinion", "other"] as const;
+export const POST_KINDS = ["list", "tutorial", "tool", "news", "opinion", "article", "other"] as const;
 export type PostKind = (typeof POST_KINDS)[number];
 
 export interface ExtractedEntity {

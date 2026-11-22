@@ -19,7 +19,9 @@
 // A paid scraping provider would do better on all five. The seam for one is
 // `PROVIDER` below: adding it is an env var plus a branch, per invariant 6.
 
-import { MAX_REDIRECTS, MAX_RESPONSE_BYTES, assertFetchable } from "../../lib/net/urlGuard";
+import { MAX_REDIRECTS, MAX_RESPONSE_BYTES, assertFetchable, assertWebUrl } from "../../lib/net/urlGuard";
+import { readCapped, readCappedText } from "../../lib/net/stream";
+import { parseJina, parseRedditThread, redditApiPath } from "../../lib/social/more";
 import { parseMetaTags, parseOEmbed, stripTweetHtml } from "../../lib/social/parse";
 import type { DetectedLink } from "../../lib/social/detect";
 import {
@@ -75,15 +77,17 @@ const TIMEOUT_MS = 10_000;
  * that 302s to 169.254.169.254 would otherwise be followed automatically,
  * which is the SSRF hole the allowlist exists to close.
  */
-async function guardedFetch(startUrl: URL): Promise<string> {
+async function guardedFetch(startUrl: URL, extraHeaders: Record<string, string> = {}): Promise<string> {
   let url = startUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const res = await fetch(url.toString(), {
       redirect: "manual",
-      headers: { "User-Agent": UA, Accept: "text/html,application/json;q=0.9" },
+      headers: { "User-Agent": UA, Accept: "text/html,application/json;q=0.9", ...extraHeaders },
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    // A redirect hop must not carry credentials to a new host.
+    if (res.status >= 300 && res.status < 400) extraHeaders = {};
 
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");
@@ -95,9 +99,9 @@ async function guardedFetch(startUrl: URL): Promise<string> {
 
     if (!res.ok) throw new Error(`${url.hostname} returned ${res.status}`);
 
-    const body = await res.text();
-    if (body.length > MAX_RESPONSE_BYTES) return body.slice(0, MAX_RESPONSE_BYTES);
-    return body;
+    // Read the stream and stop at the cap: res.text() would buffer the whole
+    // body before any size check could run.
+    return await readCappedText(res.body, MAX_RESPONSE_BYTES);
   }
 
   throw new Error("that link redirected too many times");
@@ -189,7 +193,17 @@ export async function fetchPost(link: DetectedLink): Promise<FetchedPost> {
 export interface FetchedFullPost extends FullPost {
   platform: string;
   url: string;
-  provider: "fxtwitter" | "apify" | "embed" | "og" | "oembed" | "tiktok-page" | "tikwm";
+  provider:
+    | "fxtwitter"
+    | "apify"
+    | "embed"
+    | "og"
+    | "oembed"
+    | "tiktok-page"
+    | "tikwm"
+    | "jina"
+    | "reddit"
+    | "youtube-oembed";
   /** True when we know slides exist that we could not get. */
   slidesUnavailable: boolean;
   note?: string;
@@ -305,8 +319,132 @@ async function resolveRedirect(rawUrl: string): Promise<string | null> {
   }
 }
 
+/**
+ * Any page, through the reader proxy (Jina Reader). We never contact the
+ * page's own host: r.jina.ai fetches it and returns markdown. JINA_API_KEY is
+ * optional (a key raises the rate limit); without one the keyless tier is used.
+ */
+async function fetchViaJina(rawUrl: string): Promise<FullPost | null> {
+  try {
+    const target = assertWebUrl(rawUrl).toString();
+    const key = process.env.JINA_API_KEY;
+    const body = await guardedFetch(assertFetchable(`https://r.jina.ai/${target}`), {
+      Accept: "application/json",
+      "X-Return-Format": "markdown",
+      ...(key ? { Authorization: `Bearer ${key}` } : {}),
+    });
+    const page = parseJina(body);
+    if (!page) return null;
+    const heading = page.title ? `${page.title}\n\n` : "";
+    // Image URLs are not downloaded for arbitrary sites: images: [] below.
+    return { caption: `${heading}${page.markdown}`, images: [], videos: [] };
+  } catch (error) {
+    console.warn(`jina_failed: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+/** Reddit's OAuth app (script type, free). Absent keys mean "skip", never an error. */
+async function fetchRedditThread(rawUrl: string): Promise<FullPost | null> {
+  const id = process.env.REDDIT_CLIENT_ID;
+  const secret = process.env.REDDIT_CLIENT_SECRET;
+  if (!id || !secret) return null;
+  try {
+    const post = /redd\.it\//.test(rawUrl) ? ((await resolveRedirect(rawUrl)) ?? rawUrl) : rawUrl;
+    const path = redditApiPath(post);
+    if (!path) return null;
+    const ua = "PersonalAssistantBot/1.0 (read-only; personal use)";
+    const tokenRes = await fetch(assertFetchable("https://www.reddit.com/api/v1/access_token").toString(), {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${btoa(`${id}:${secret}`)}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": ua,
+      },
+      body: "grant_type=client_credentials",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!tokenRes.ok) throw new Error(`reddit token ${tokenRes.status}`);
+    const token = ((await tokenRes.json()) as { access_token?: string }).access_token;
+    if (!token) throw new Error("reddit returned no access_token");
+    const body = await guardedFetch(
+      assertFetchable(`https://oauth.reddit.com${path}.json?raw_json=1&limit=20&depth=1`),
+      { Authorization: `Bearer ${token}`, "User-Agent": ua },
+    );
+    return parseRedditThread(body);
+  } catch (error) {
+    console.warn(`reddit_failed: ${String(error).slice(0, 200)}`);
+    return null;
+  }
+}
+
+/** Threads: tokenless oEmbed first, then the page's og: tags. */
+async function fetchThreads(url: string): Promise<FullPost | null> {
+  const oembed = await fetchOEmbed(`https://graph.threads.net/v1.0/oembed?url=${encodeURIComponent(url)}`);
+  const text = oembed?.html ? stripTweetHtml(oembed.html) : (oembed?.title ?? "");
+  if (text) return { caption: text, author: oembed?.authorName, images: [], videos: [] };
+  return null;
+}
+
+/** YouTube: oEmbed for title and channel, the watch page's og:description for the text. */
+async function fetchYoutube(url: string): Promise<FullPost | null> {
+  const oembed = await fetchOEmbed(`https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`);
+  if (!oembed?.title) return null;
+  let description: string | undefined;
+  try {
+    description = parseMetaTags(await guardedFetch(assertFetchable(url))).description;
+  } catch {
+    // The title alone is still worth saving.
+  }
+  return {
+    caption: [oembed.title, description].filter(Boolean).join("\n\n"),
+    author: oembed.authorName,
+    images: [],
+    videos: [],
+  };
+}
+
 export async function fetchFullPost(link: DetectedLink): Promise<FetchedFullPost> {
   const base = { platform: link.platform, url: link.canonicalUrl };
+
+  if (link.platform === "web") {
+    const page = await fetchViaJina(link.canonicalUrl);
+    if (page?.caption) return { ...base, ...page, provider: "jina", slidesUnavailable: false };
+    return {
+      ...base,
+      images: [],
+      videos: [],
+      provider: "jina",
+      slidesUnavailable: false,
+      note: "I couldn't read that page (it may be behind a login, or the reader is busy).",
+    };
+  }
+
+  if (link.platform === "reddit") {
+    const thread = await fetchRedditThread(link.canonicalUrl);
+    if (thread?.caption) return { ...base, ...thread, provider: "reddit", slidesUnavailable: false };
+    // No Reddit keys, or Reddit refused: the reader proxy sees the public page.
+    const page = await fetchViaJina(link.canonicalUrl);
+    if (page?.caption) return { ...base, ...page, provider: "jina", slidesUnavailable: false };
+  }
+
+  if (link.platform === "threads") {
+    const post = await fetchThreads(link.canonicalUrl);
+    if (post) return { ...base, ...post, provider: "oembed", slidesUnavailable: false };
+  }
+
+  if (link.platform === "youtube") {
+    const video = await fetchYoutube(link.canonicalUrl);
+    if (video) {
+      return {
+        ...base,
+        ...video,
+        provider: "youtube-oembed",
+        slidesUnavailable: false,
+        note: "I can read a YouTube video's title and description, not watch it.",
+      };
+    }
+  }
 
   if (link.platform === "x") {
     const id = tweetIdFromUrl(link.canonicalUrl);
@@ -406,8 +544,10 @@ export async function fetchMedia(
         await res.body?.cancel();
         return null;
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (bytes.length > maxBytes) return null;
+      // Stream with the cap: a missing or lying content-length must not let
+      // an oversized file be buffered whole.
+      const { bytes, truncated } = await readCapped(res.body, maxBytes);
+      if (truncated) return null;
       return { bytes, mimeType: res.headers.get("content-type")?.split(";")[0] ?? "application/octet-stream" };
     }
     return null;

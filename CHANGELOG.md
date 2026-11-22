@@ -9,6 +9,23 @@ could not do before. Non-obvious *reasons* go in `MEMORY.md` instead.
 
 ## [Unreleased]
 
+### Added — read any link (2026-11-22)
+
+- **`link.read` opens any link you send.** Threads, Pinterest, YouTube
+  (title and description), Reddit, and any other https page or article, on
+  top of Instagram, TikTok, X, LinkedIn and Facebook. Web pages are read
+  through the Jina Reader proxy (we never contact the site ourselves),
+  summarised (`SUMMARIZE_PAGE`) with key points, saved and searchable like a
+  post. Reddit uses a free OAuth app and falls back to the proxy.
+- **Safer fetching.** The direct-fetch allowlist only gained fixed hosts;
+  your own non-allowlisted link is vetted (https only, no IP, no internal
+  names, no credentials) before it is handed to the proxy. Response bodies
+  are now read as a stream and cut at the size cap instead of being buffered
+  first.
+- Docs: `docs/build/PHASE-24-read-any-link.md`, `docs/ENV.md`
+  (`JINA_API_KEY`, `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`). Not yet tried
+  against the live services.
+
 ### Changed — email alerts: your words decide, and only unread mail pings (2026-11-22)
 
 - **Say what matters.** "Alert me about invoices from clients", "never alert

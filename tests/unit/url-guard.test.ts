@@ -3,6 +3,7 @@ import {
   MAX_REDIRECTS,
   MAX_RESPONSE_BYTES,
   assertFetchable,
+  assertWebUrl,
   isAllowedHost,
 } from "../../convex/lib/net/urlGuard";
 
@@ -20,6 +21,13 @@ describe("assertFetchable — allowed", () => {
     "https://www.linkedin.com/posts/someone_abc-activity-123",
     "https://www.facebook.com/user/posts/123",
     "https://publish.twitter.com/oembed?url=x",
+    // Phase 24: the fixed hosts the new readers talk to.
+    "https://r.jina.ai/https://example.com/post",
+    "https://graph.threads.net/v1.0/oembed?url=x",
+    "https://i.pinimg.com/736x/ab/cd.jpg",
+    "https://oauth.reddit.com/r/rust/comments/abc/.json",
+    "https://www.youtube.com/oembed?url=x",
+    "https://i.ytimg.com/vi/abc/hqdefault.jpg",
   ])("%s", (url) => ok(url));
 });
 
@@ -73,6 +81,32 @@ describe("assertFetchable — SSRF", () => {
     expect(url).toBeInstanceOf(URL);
     expect(url.hostname).toBe("x.com");
   });
+});
+
+describe("assertWebUrl — the user's own link, handed to the reader proxy", () => {
+  const web = (u: string) => expect(() => assertWebUrl(u)).not.toThrow();
+  const refused = (u: string) => expect(() => assertWebUrl(u)).toThrow();
+
+  test("an ordinary https page is fine", () => {
+    web("https://example.com/a/b?x=1");
+    web("https://blog.some-site.co.uk/2026/post");
+  });
+
+  test.each([
+    ["http", "http://example.com/"],
+    ["ipv4 literal", "https://93.184.216.34/"],
+    ["ipv4 shortened", "https://2130706433/"],
+    ["ipv6 literal", "https://[2001:db8::1]/"],
+    ["loopback name", "https://localhost/"],
+    ["subdomain of localhost", "https://app.localhost/"],
+    ["mdns", "https://printer.local/"],
+    ["internal tld", "https://api.internal/"],
+    ["single-label host", "https://intranet/"],
+    ["userinfo", "https://example.com@evil.example.org/"],
+    ["a convex deployment", "https://x.convex.cloud/"],
+    ["file", "file:///etc/passwd"],
+    ["junk", "just some words"],
+  ])("refuses %s", (_l, u) => refused(u));
 });
 
 describe("limits", () => {

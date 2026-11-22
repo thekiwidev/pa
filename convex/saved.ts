@@ -15,6 +15,8 @@ import { embedTexts, canEmbed } from "./ai/embed";
 import { fetchFullPost, fetchMedia } from "./connectors/social/client";
 import { sniffImageMime } from "./lib/net/sniff";
 import { detectPlatform } from "./lib/social/detect";
+import { assertWebUrl } from "./lib/net/urlGuard";
+import { SUMMARIZE_PAGE_SYSTEM, parsePageSummary } from "./lib/social/page";
 import {
   EXTRACT_POST_SYSTEM,
   countGapNote,
@@ -103,7 +105,10 @@ export async function ingestLink(
   userNote?: string,
 ): Promise<SavedItemView & { fresh: boolean }> {
   const link = detectPlatform(rawUrl);
-  if (!link) throw new Error("that isn't a link from a platform I can read");
+  if (!link) throw new Error("that isn't a web link I can open");
+  // A site that is not one of the named platforms goes to the reader proxy;
+  // refuse the obviously internal or non-https ones before saving anything.
+  if (link.platform === "web") assertWebUrl(link.canonicalUrl);
 
   const begun = await ctx.runMutation(internal.model.saved.begin, {
     userId,
@@ -176,9 +181,27 @@ export async function ingestLink(
     }
 
     // 3. File it: one call reads every slide alongside the caption.
-    const fallbackTitle = `Post from ${post.author ?? post.platform}`;
+    const fallbackTitle =
+      link.platform === "web" ? `Page on ${new URL(link.canonicalUrl).hostname}` : `Post from ${post.author ?? post.platform}`;
     let extraction = parseExtraction("", fallbackTitle);
-    if (post.caption || media.length > 0 || videoTranscript) {
+    if (link.platform === "web" && post.caption) {
+      // A web page is filed as an article: title, gist and key points. The
+      // page text is untrusted; the schema cannot express an action.
+      try {
+        const result = await runTask("SUMMARIZE_PAGE", {
+          system: SUMMARIZE_PAGE_SYSTEM,
+          input: `A web page at ${new URL(link.canonicalUrl).hostname}. File it. Reply with the JSON object only.`,
+          untrusted: [{ label: "page", content: post.caption.slice(0, 30_000) }],
+          json: true,
+          maxOutputTokens: 1500,
+        });
+        const page = parsePageSummary(result.text, fallbackTitle);
+        extraction = { ...extraction, title: page.title, summary: page.summary, kind: "article", tags: page.tags };
+      } catch (error) {
+        notes.push("I couldn't summarise the page this time");
+        console.warn(`summarize_page_failed: ${String(error).slice(0, 200)}`);
+      }
+    } else if (post.caption || media.length > 0 || videoTranscript) {
       try {
         const result = await runTask("EXTRACT_POST", {
           system: EXTRACT_POST_SYSTEM,
@@ -219,7 +242,13 @@ export async function ingestLink(
 
     const hasContent = Boolean(post.caption || extraction.slides.length > 0 || videoTranscript);
     const status = !hasContent ? "failed" : post.slidesUnavailable || missed > 0 ? "partial" : "ready";
-    if (!hasContent) notes.push("the post gave me nothing readable — send screenshots and I'll read those");
+    if (!hasContent) {
+      notes.push(
+        link.platform === "web"
+          ? "the page gave me nothing readable — it may need a login; paste the text and I'll file that"
+          : "the post gave me nothing readable — send screenshots and I'll read those",
+      );
+    }
 
     const searchText = buildSearchText({
       title: extraction.title,

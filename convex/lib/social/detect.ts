@@ -1,6 +1,17 @@
 // Pure. Which platform a pasted link belongs to, and its canonical form.
 
-export type Platform = "instagram" | "tiktok" | "x" | "linkedin" | "facebook";
+export type Platform =
+  | "instagram"
+  | "tiktok"
+  | "x"
+  | "linkedin"
+  | "facebook"
+  | "pinterest"
+  | "threads"
+  | "youtube"
+  | "reddit"
+  /** Any other https site: read through the reader proxy (Phase 24). */
+  | "web";
 
 export interface DetectedLink {
   platform: Platform;
@@ -26,6 +37,14 @@ const HOST_PLATFORM: { suffix: string; platform: Platform }[] = [
   { suffix: "linkedin.com", platform: "linkedin" },
   { suffix: "facebook.com", platform: "facebook" },
   { suffix: "fb.watch", platform: "facebook" },
+  { suffix: "pinterest.com", platform: "pinterest" },
+  { suffix: "pin.it", platform: "pinterest" },
+  { suffix: "threads.net", platform: "threads" },
+  { suffix: "threads.com", platform: "threads" },
+  { suffix: "youtube.com", platform: "youtube" },
+  { suffix: "youtu.be", platform: "youtube" },
+  { suffix: "reddit.com", platform: "reddit" },
+  { suffix: "redd.it", platform: "reddit" },
 ];
 
 /** Analytics noise every platform appends to a share link. */
@@ -50,6 +69,11 @@ const TRACKING_PARAMS = [
   "is_from_webapp",
   "sender_device",
   "web_id",
+  "feature",
+  "ref_src",
+  "share_id",
+  "mc_cid",
+  "mc_eid",
 ];
 
 const NEEDS_LOGIN_FOR_CAROUSEL: Platform[] = ["instagram", "facebook", "linkedin"];
@@ -62,9 +86,12 @@ export function detectPlatform(raw: string): DetectedLink | null {
     return null;
   }
 
+  // Only web links are links. javascript:, file:, mailto: and friends are not.
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+
   const host = url.hostname.toLowerCase().replace(/\.$/, "");
   const hit = HOST_PLATFORM.find((h) => host === h.suffix || host.endsWith(`.${h.suffix}`));
-  if (!hit) return null;
+  const platform: Platform = hit?.platform ?? "web";
 
   for (const p of TRACKING_PARAMS) url.searchParams.delete(p);
   // A query string that is now empty should not leave a dangling "?".
@@ -72,9 +99,9 @@ export function detectPlatform(raw: string): DetectedLink | null {
   const canonicalUrl = `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
 
   return {
-    platform: hit.platform,
+    platform,
     canonicalUrl,
-    carouselNeedsLogin: NEEDS_LOGIN_FOR_CAROUSEL.includes(hit.platform),
+    carouselNeedsLogin: NEEDS_LOGIN_FOR_CAROUSEL.includes(platform),
   };
 }
 

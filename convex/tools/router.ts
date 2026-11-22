@@ -1579,7 +1579,7 @@ async function dispatch(
 
       const link = detectPlatform(matched);
       if (!link) {
-        throw new Error("that isn't a link from a platform I can read");
+        throw new Error("that isn't a web link I can open");
       }
 
       // Reads the caption, every slide (OCR) and a short video, and files the

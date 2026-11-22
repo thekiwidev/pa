@@ -106,6 +106,18 @@ runs on CHEAP_STRUCTURED.
 | `SAVED_RECALL` | on | `off` stops pulling saved posts into replies. |
 | `SAVED_NUDGES` | on | `off` stops "you saved something for this" nudges. |
 
+## Reading links and news (Phases 24-25)
+
+A feature is "configured" by the presence of its key. A missing key means that
+source is skipped, never an error. Names only.
+
+| Variable | Needed for | Without it |
+|---|---|---|
+| `JINA_API_KEY` | Jina Reader (any web page, news article bodies). Free key at jina.ai | works keyless at a lower rate limit |
+| `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | Reddit posts and the Reddit news source (create a "script" app at reddit.com/prefs/apps) | Reddit links fall back to the reader proxy; Reddit news is skipped |
+| `DAILYDEV_TOKEN` | daily.dev feed (may need daily.dev Plus) | daily.dev is skipped |
+| `STACKEXCHANGE_KEY` | Stack Overflow source, 10k requests/day instead of 300 | keyless 300/day |
+
 ## Never an environment variable
 
 Per-mailbox OAuth **refresh tokens** (Gmail, Zoho, Outlook). They are encrypted

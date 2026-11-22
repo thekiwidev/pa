@@ -9,6 +9,26 @@ Newest first. Date each entry — vendor behaviour rots.
 
 ---
 
+## 2026-11-22 — Reading any link (Phase 24)
+
+- **Unknown hosts are `web`, and we never fetch them.** The allowlist stays the
+  only thing `assertFetchable` accepts; arbitrary sites go to r.jina.ai as a
+  URL parameter after `assertWebUrl` (https, no userinfo, no IP, no internal
+  names). The residual SSRF risk moves to Jina, which fetches it.
+- **Jina works keyless** at a lower rate; `JINA_API_KEY` only raises it. The
+  plan treated an absent key as "source skipped"; reading a page is the whole
+  feature, so keyless is the better degradation.
+- **`res.text()` / `res.arrayBuffer()` defeat a size cap**: they buffer first.
+  `lib/net/stream.ts#readCapped` reads chunks and cancels at the cap.
+- **YouTube is title and description only.** Plain HTTP cannot download the
+  video, so `TRANSCRIBE_VIDEO` is not used for it.
+- **Web images are not downloaded or stored** (no field for URLs on
+  `savedItems`, and vision would run on arbitrary hosts).
+- **Written from docs, not tested live:** Threads tokenless oEmbed, Jina JSON
+  shape (a plain-text shape is also parsed), Reddit client-credentials read.
+
+---
+
 ## 2026-11-22 — Owner-defined importance and the unread chain (Phase 23)
 
 - **Criteria live in `userContext`** (category `email_importance`), not a new

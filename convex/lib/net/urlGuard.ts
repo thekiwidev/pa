@@ -54,6 +54,21 @@ const ALLOWED_HOSTS = [
   "ibyteimg.com",
   "tikwm.com",
   "api.apify.com",
+  // Added 2026-11-22 (Phase 24). Each is a fixed, named host. Arbitrary
+  // sites are NOT here: they go to the reader proxy, r.jina.ai, which is the
+  // one host we contact on their behalf.
+  "r.jina.ai",
+  "graph.threads.net",
+  "threads.net",
+  "threads.com",
+  "pinterest.com",
+  "pin.it",
+  "pinimg.com",
+  "reddit.com", // www.reddit.com for the token call, oauth.reddit.com for reads
+  "redd.it",
+  "youtube.com",
+  "youtu.be",
+  "ytimg.com",
 ] as const;
 
 /** Enough to follow a share-link shortener to its post; not enough to loop. */
@@ -111,10 +126,42 @@ export function assertFetchable(raw: string): URL {
   }
 
   if (!isAllowedHost(host)) {
-    throw new Error(
-      `I can only open links from Instagram, TikTok, X, LinkedIn or Facebook — that one is ${host}`,
-    );
+    throw new Error(`I won't fetch ${host} directly (it is not one of the hosts I talk to)`);
   }
 
+  return url;
+}
+
+/** Hosts that only exist inside a network. A public site never ends in these. */
+const INTERNAL_SUFFIXES = [".local", ".localhost", ".internal", ".lan", ".home", ".corp", ".intranet", ".convex.cloud", ".convex.site"];
+
+/**
+ * Vet a link the OWNER sent that is NOT on the allowlist, before it is handed
+ * to the reader proxy as a parameter. We never fetch it ourselves: r.jina.ai
+ * does, so this is hygiene (refuse what could only mean an internal target
+ * or a trick), not the SSRF defence. That defence stays the allowlist above,
+ * for everything this process fetches directly.
+ */
+export function assertWebUrl(raw: string): URL {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new Error(`"${raw.slice(0, 80)}" is not a link I can open`);
+  }
+  if (url.protocol !== "https:") {
+    throw new Error(`I only open https links — that one is ${url.protocol.replace(":", "")}`);
+  }
+  if (url.username || url.password) {
+    throw new Error("that link has credentials embedded in it, which I won't follow");
+  }
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (IPV4_LIKE.test(host) || host.startsWith("[") || host.includes(":")) {
+    throw new Error("that link points at a raw IP address, which I won't open");
+  }
+  // A real public site has a dot and a letter-bearing TLD.
+  if (!host.includes(".") || host === "localhost" || INTERNAL_SUFFIXES.some((s) => host.endsWith(s))) {
+    throw new Error(`${host} looks like an internal address, which I won't open`);
+  }
   return url;
 }

@@ -6,6 +6,21 @@ Newest first. Questions that block anything are in the next section. Everything 
 
 None yet.
 
+## Your to-do after Phase 24
+
+- [ ] Optional keys (each source is skipped without its key): `bunx convex env set JINA_API_KEY ...` (free key at jina.ai; raises the rate limit), and for Reddit create a "script" app at reddit.com/prefs/apps then set `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET`. Names only are in `docs/ENV.md`.
+- [ ] Live test on dev: send one link each of Pinterest, Threads, YouTube, Reddit and a blog article. Expect a summary and `saved.recent` to list them. An `http://` link and an IP link must be refused.
+- [ ] Tell me which of Threads, Pinterest, Jina or Reddit misbehaves; those four were not exercised live.
+
+## Decisions made without you (Phase 24)
+
+| Decision | Why |
+|---|---|
+| Jina used keyless when no key | reading pages is the feature; a key only raises the limit |
+| YouTube: title and description only | video cannot be downloaded over plain HTTP |
+| Web images not stored | no URL field on `savedItems`; avoids vision on arbitrary hosts |
+| Key points stored as bullets in the summary | no schema change, still searchable and embedded |
+
 ## Your to-do after Phase 23
 
 - [ ] Dev mailbox test: send yourself an important-sounding mail (e.g. "Invoice due Friday"). Read it on your phone within 15 min: expect no alert. Leave another unread: expect one alert at 15 min and one at 48 h.

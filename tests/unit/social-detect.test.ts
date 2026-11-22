@@ -12,6 +12,16 @@ describe("detectPlatform", () => {
     ["https://twitter.com/user/status/123", "x"],
     ["https://www.linkedin.com/posts/name_slug-activity-123-abc/", "linkedin"],
     ["https://www.facebook.com/user/posts/123", "facebook"],
+    ["https://www.pinterest.com/pin/123456789/", "pinterest"],
+    ["https://pin.it/abc123", "pinterest"],
+    ["https://www.threads.net/@user/post/Cabc123", "threads"],
+    ["https://www.threads.com/@user/post/Cabc123", "threads"],
+    ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "youtube"],
+    ["https://youtu.be/dQw4w9WgXcQ", "youtube"],
+    ["https://www.reddit.com/r/rust/comments/abc123/some_title/", "reddit"],
+    ["https://redd.it/abc123", "reddit"],
+    ["https://example.com/blog/post", "web"],
+    ["https://news.ycombinator.com/item?id=1", "web"],
   ])("%s is %s", (url, platform) => {
     expect(detectPlatform(url)?.platform).toBe(platform as never);
   });
@@ -29,8 +39,29 @@ describe("detectPlatform", () => {
     expect(d?.canonicalUrl).toContain("story_fbid=1");
   });
 
-  test("a non-social URL is not detected", () => {
-    expect(detectPlatform("https://example.com/post/1")).toBeNull();
+  test("any other http(s) site is a web page", () => {
+    expect(detectPlatform("https://example.com/post/1")?.platform).toBe("web");
+  });
+
+  test("a web page keeps the query that identifies it and drops tracking", () => {
+    const d = detectPlatform("https://example.com/p?id=7&utm_source=x&fbclid=y#section");
+    expect(d?.canonicalUrl).toBe("https://example.com/p?id=7");
+  });
+
+  test("a youtube watch id survives canonicalisation", () => {
+    expect(detectPlatform("https://www.youtube.com/watch?v=abc&si=track")?.canonicalUrl).toBe(
+      "https://www.youtube.com/watch?v=abc",
+    );
+  });
+
+  test("a lookalike of a platform is a web page, never that platform", () => {
+    expect(detectPlatform("https://youtube.com.evil.net/watch?v=1")?.platform).toBe("web");
+  });
+
+  test("non-web schemes are not links", () => {
+    expect(detectPlatform("javascript:alert(1)")).toBeNull();
+    expect(detectPlatform("file:///etc/passwd")).toBeNull();
+    expect(detectPlatform("mailto:a@b.com")).toBeNull();
   });
 
   test("a malformed URL is not detected rather than throwing", () => {
